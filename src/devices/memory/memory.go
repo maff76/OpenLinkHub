@@ -340,44 +340,56 @@ func (d *Device) Stop() {
 	logger.Log(logger.Fields{"serial": d.Serial, "product": d.Product}).Info("Device stopped")
 }
 
-// getHwMonTemperatureFile will get hwmon
-func (d *Device) getHwMonTemperatureFile(baseId int, driver string) string {
-	basePath := filepath.Join(basePath, driver)
+// getHwMonTemperatureFiles returns all SPD5118 hwmon temperature files on the configured I2C bus.
+func (d *Device) getHwMonTemperatureFiles(driver string) []string {
+	driverPath := filepath.Join(basePath, driver)
 
-	entries, err := os.ReadDir(basePath)
+	entries, err := os.ReadDir(driverPath)
 	if err != nil {
-		return ""
+		logger.Log(logger.Fields{"driver": driver, "error": err}).Warn("Unable to read hwmon driver directory")
+		return nil
 	}
+
+	busPrefix := fmt.Sprintf("%d-", d.getI2cSensor())
+	type hwmonSensor struct {
+		device string
+		path   string
+	}
+	sensors := make([]hwmonSensor, 0)
 
 	for _, entry := range entries {
-		devicePath := filepath.Join(basePath, entry.Name())
-		namePath := filepath.Join(devicePath, "name")
-
-		data, err := os.ReadFile(namePath)
-		if err != nil {
+		if !strings.HasPrefix(entry.Name(), busPrefix) {
 			continue
 		}
 
-		name := strings.TrimSpace(string(data))
-		if name != driver {
-			continue
-		}
-
-		if !strings.Contains(entry.Name(), strconv.Itoa(baseId)) {
-			continue
-		}
-
-		hwmonRoot := filepath.Join(devicePath, "hwmon")
-		hwmonFolders, _ := filepath.Glob(filepath.Join(hwmonRoot, "hwmon*"))
-
+		devicePath := filepath.Join(driverPath, entry.Name())
+		hwmonFolders, _ := filepath.Glob(filepath.Join(devicePath, "hwmon", "hwmon*"))
 		for _, hwmonFolder := range hwmonFolders {
 			temps, _ := filepath.Glob(filepath.Join(hwmonFolder, "temp*_input"))
-			if len(temps) > 0 {
-				return temps[0]
+			if len(temps) == 0 {
+				continue
 			}
+			sort.Strings(temps)
+			sensors = append(sensors, hwmonSensor{device: entry.Name(), path: temps[0]})
+			break
 		}
 	}
-	return ""
+
+	// Device names contain the I2C address (for example 0-0050, 0-0051),
+	// so sorting by device name preserves physical SPD address order.
+	sort.Slice(sensors, func(i, j int) bool {
+		return sensors[i].device < sensors[j].device
+	})
+
+	files := make([]string, 0, len(sensors))
+	for _, sensor := range sensors {
+		files = append(files, sensor.path)
+		if d.Debug {
+			logger.Log(logger.Fields{"device": sensor.device, "path": sensor.path}).Info("Found memory hwmon temperature sensor")
+		}
+	}
+
+	return files
 }
 
 // loadRgb will load RGB file if found, or create the default.
@@ -599,11 +611,18 @@ func (d *Device) getTemperature(filePath string) (float32, error) {
 func (d *Device) getDevices() int {
 	var devices = make(map[int]*Devices)
 	var modules []RAMModule
-	baseDevice := 51
+	var hwmonTemperatureFiles []string
+	hwmonIndex := 0
 
 	// DDR5
 	if d.RuntimeMemoryType == 5 {
 		modules = NewMemoryModules()
+		if config.GetConfig().RamTempViaHwmon {
+			hwmonTemperatureFiles = d.getHwMonTemperatureFiles("spd5118")
+			if d.Debug {
+				logger.Log(logger.Fields{"count": len(hwmonTemperatureFiles), "paths": hwmonTemperatureFiles}).Info("Detected DDR5 hwmon temperature sensors")
+			}
+		}
 	}
 
 	for i := 0; i < maximumRegisters; i++ {
@@ -748,17 +767,21 @@ func (d *Device) getDevices() int {
 					if config.GetConfig().RamTempViaHwmon {
 						if !d.getEnhancementKit(colorAddresses[i]) {
 							if d.RuntimeMemoryType == 5 {
-								hwmonTemperatureFile := d.getHwMonTemperatureFile(baseDevice, "spd5118")
-								if len(hwmonTemperatureFile) > 0 {
+								if hwmonIndex < len(hwmonTemperatureFiles) {
+									hwmonTemperatureFile := hwmonTemperatureFiles[hwmonIndex]
 									device.HwmonPath = hwmonTemperatureFile
 									hwmonTemp, err := d.getTemperature(hwmonTemperatureFile)
 									if err == nil {
 										device.Temperature = hwmonTemp
 										device.TemperatureString = dashboard.GetDashboard().TemperatureToString(hwmonTemp)
 										device.HasTemps = true
+									} else {
+										logger.Log(logger.Fields{"channel": i, "path": hwmonTemperatureFile, "error": err}).Warn("Unable to read memory hwmon temperature")
 									}
+									hwmonIndex++
+								} else {
+									logger.Log(logger.Fields{"channel": i}).Warn("No hwmon temperature sensor available for memory device")
 								}
-								baseDevice += i + 1
 							} else {
 								device.HwmonPath = fmt.Sprintf(
 									"/sys/bus/i2c/drivers/jc42/%d-%s/hwmon",
