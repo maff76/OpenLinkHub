@@ -3968,6 +3968,16 @@ func (d *Device) getDevices() int {
 
 		// Get device definition
 		deviceMeta := d.getSupportedDevice(deviceTypeModel[2], deviceTypeModel[3])
+		if deviceMeta != nil {
+			logger.Log(logger.Fields{
+				"serial":          d.Serial,
+				"channel":         i,
+				"type":            deviceTypeModel[2],
+				"model":           deviceTypeModel[3],
+				"name":            deviceMeta.Name,
+				"timewarpCapable": deviceMeta.Timewarp,
+			}).Info("LINK device metadata match")
+		}
 		if deviceMeta == nil {
 			logger.Log(logger.Fields{"serial": d.Serial, "type": deviceTypeModel[2], "model": deviceTypeModel[3]}).Warn("getDevices() - Device not found in metadata")
 			if deviceIdLen > 0 {
