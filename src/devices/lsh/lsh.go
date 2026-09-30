@@ -3698,15 +3698,16 @@ func (d *Device) getDeviceData() {
 			if status == 0x00 {
 				if _, ok := d.Devices[i]; ok {
 					rpm := int16(binary.LittleEndian.Uint16(currentSensor[1:3]))
-					if rpm > 1 {
+					// A valid 0 RPM reading is meaningful for devices using a
+					// Zero RPM cooling profile. Keep filtering the anomalous
+					// 1 RPM value, but allow 0 so stopped fans do not retain
+					// their last non-zero RPM reading.
+					if rpm == 0 || rpm > 1 {
 						d.Devices[i].Rpm = rpm
 					}
 
 					if d.Devices[i].IsVrmCooler {
 						d.updateVrmCoolerRpm(rpm)
-					}
-					if d.Devices[i].IsPSU && rpm == 0 {
-						d.Devices[i].Rpm = 0
 					}
 				}
 			}
