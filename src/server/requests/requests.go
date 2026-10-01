@@ -5028,6 +5028,28 @@ func ProcessSetKeyboardControlDialColors(r *http.Request) *Payload {
 	return &Payload{Message: language.GetValue("txtUnableToSetKeyboardControlDialColors"), Code: http.StatusOK, Status: 0}
 }
 
+// ProcessSetManualFanControl updates the existing manual fan speed configuration flag.
+// The setting is persisted immediately, but a service restart is required for all
+// device monitoring loops to fully switch between automatic and manual operation.
+func ProcessSetManualFanControl(r *http.Request) *Payload {
+	req := &Payload{}
+	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
+		logger.Log(map[string]interface{}{"error": err}).Error("Unable to decode JSON")
+		return &Payload{
+			Message: language.GetValue("txtUnableToValidateRequest"),
+			Code:    http.StatusOK,
+			Status:  0,
+		}
+	}
+
+	config.UpdateManual(req.Enabled)
+	return &Payload{
+		Message: "Manual fan control setting updated. Restart OpenLinkHub to apply the change.",
+		Code:    http.StatusOK,
+		Status:  1,
+	}
+}
+
 // ProcessSetSupportedDevices will enable / disable of supported devices
 func ProcessSetSupportedDevices(r *http.Request) *Payload {
 	req := &Payload{}
