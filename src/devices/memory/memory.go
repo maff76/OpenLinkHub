@@ -44,26 +44,54 @@ type TemperatureProbe struct {
 }
 
 type Devices struct {
-	ChannelId          int     `json:"channelId"`
-	DeviceId           int     `json:"deviceId"`
-	Sku                string  `json:"sku"`
-	Size               uint8   `json:"size"`
-	MemoryType         int     `json:"memoryType"`
-	Amount             int     `json:"amount"`
-	Speed              int     `json:"speed"`
-	Latency            int     `json:"latency"`
-	LedChannels        uint8   `json:"ledChannels"`
-	ColorRegister      uint8   `json:"colorRegister"`
-	Name               string  `json:"name"`
-	Temperature        float32 `json:"temperature"`
-	TemperatureString  string  `json:"temperatureString"`
-	Label              string  `json:"label"`
-	RGB                string  `json:"rgb"`
-	HwmonPath          string  `json:"hwmonPath"`
-	HasTemps           bool    `json:"-"`
-	HasSpeed           bool
-	ContainsPump       bool
-	IsTemperatureProbe bool
+	ChannelId            int     `json:"channelId"`
+	DeviceId             int     `json:"deviceId"`
+	Sku                  string  `json:"sku"`
+	Size                 uint8   `json:"size"`
+	MemoryType           int     `json:"memoryType"`
+	Amount               int     `json:"amount"`
+	Speed                int     `json:"speed"`
+	Latency              int     `json:"latency"`
+	LedChannels          uint8   `json:"ledChannels"`
+	ColorRegister        uint8   `json:"colorRegister"`
+	Name                 string  `json:"name"`
+	Temperature          float32 `json:"temperature"`
+	TemperatureString    string  `json:"temperatureString"`
+	Label                string  `json:"label"`
+	RGB                  string  `json:"rgb"`
+	HwmonPath            string  `json:"hwmonPath"`
+	I2CAddress           string  `json:"i2cAddress"`
+	Locator              string  `json:"locator"`
+	BankLocator          string  `json:"bankLocator"`
+	Capacity             string  `json:"capacity"`
+	TotalWidth           string  `json:"totalWidth"`
+	DataWidth            string  `json:"dataWidth"`
+	FormFactor           string  `json:"formFactor"`
+	DMIType              string  `json:"dmiType"`
+	TypeDetail           string  `json:"typeDetail"`
+	Manufacturer         string  `json:"manufacturer"`
+	SerialNumber         string  `json:"serialNumber"`
+	PartNumber           string  `json:"partNumber"`
+	AssetTag             string  `json:"assetTag"`
+	Rank                 int     `json:"rank"`
+	ReportedSpeed        int     `json:"reportedSpeed"`
+	ConfiguredSpeed      int     `json:"configuredSpeed"`
+	MinimumVoltage       float64 `json:"minimumVoltage"`
+	MaximumVoltage       float64 `json:"maximumVoltage"`
+	ConfiguredVoltage    float64 `json:"configuredVoltage"`
+	MemoryTechnology     string  `json:"memoryTechnology"`
+	OperatingMode        string  `json:"operatingMode"`
+	FirmwareVersion      string  `json:"firmwareVersion"`
+	ModuleManufacturerID string  `json:"moduleManufacturerId"`
+	ModuleProductID      string  `json:"moduleProductId"`
+	VolatileSize         string  `json:"volatileSize"`
+	NonVolatileSize      string  `json:"nonVolatileSize"`
+	CacheSize            string  `json:"cacheSize"`
+	LogicalSize          string  `json:"logicalSize"`
+	HasTemps             bool    `json:"-"`
+	HasSpeed             bool
+	ContainsPump         bool
+	IsTemperatureProbe   bool
 }
 
 // DeviceProfile struct contains all device profile
@@ -613,6 +641,12 @@ func (d *Device) getDevices() int {
 	var modules []RAMModule
 	var hwmonTemperatureFiles []string
 	hwmonIndex := 0
+	dmiDevices := getDIMIMemoryDevices()
+	dmiIndex := 0
+	moduleIndex := 0
+	if d.Debug {
+		logger.Log(logger.Fields{"count": len(dmiDevices)}).Info("Detected populated SMBIOS memory devices")
+	}
 
 	// DDR5
 	if d.RuntimeMemoryType == 5 {
@@ -653,17 +687,19 @@ func (d *Device) getDevices() int {
 		}
 
 		memorySku := ""
-		if modules == nil || len(modules) == 0 {
-			logger.Log(logger.Fields{"register": colorAddresses[i]}).Warn("No decoded memory SKU available")
-		} else {
-			// If modules are available, use decoded memory SKU from SPD data.
-			memorySku = strings.TrimSpace(modules[0].SKU)
-			if len(memorySku) < 1 {
-				logger.Log(logger.Fields{"register": colorAddresses[i]}).Warn("Decoded memory SKU is empty")
+		if moduleIndex < len(modules) {
+			// Use the SKU decoded from the SPD belonging to this DIMM.
+			memorySku = strings.TrimSpace(modules[moduleIndex].SKU)
+		}
+		if len(memorySku) < 1 && dmiIndex < len(dmiDevices) {
+			// SMBIOS part number is a useful per-DIMM fallback when EEPROM decoding is unavailable.
+			memorySku = strings.TrimSpace(dmiDevices[dmiIndex].PartNumber)
+			if len(memorySku) > 0 && d.Debug {
+				logger.Log(logger.Fields{"register": colorAddresses[i], "sku": memorySku}).Info("Using SMBIOS memory part number fallback")
 			}
 		}
 
-		// Fallback to configured memory SKU for setups where decoded SKU is unavailable.
+		// Final fallback to the globally configured memory SKU.
 		if len(memorySku) < 1 {
 			memorySku = strings.TrimSpace(config.GetConfig().MemorySku)
 			if len(memorySku) > 0 {
@@ -751,6 +787,46 @@ func (d *Device) getDevices() int {
 						Label:             label,
 						RGB:               rgbProfile,
 					}
+					if moduleIndex < len(modules) {
+						device.I2CAddress = modules[moduleIndex].SPDAddress
+					}
+
+					// Enrich the discovered DIMM with SMBIOS Type 17 metadata.
+					// DMI ordering is used only for metadata association; it never controls discovery.
+					if dmiIndex < len(dmiDevices) && !d.getEnhancementKit(colorAddresses[i]) {
+						dmi := dmiDevices[dmiIndex]
+						device.Locator = dmi.Locator
+						device.BankLocator = dmi.BankLocator
+						device.Capacity = dmi.Size
+						device.TotalWidth = dmi.TotalWidth
+						device.DataWidth = dmi.DataWidth
+						device.FormFactor = dmi.FormFactor
+						device.DMIType = dmi.Type
+						device.TypeDetail = dmi.TypeDetail
+						device.Manufacturer = dmi.Manufacturer
+						device.SerialNumber = dmi.SerialNumber
+						device.PartNumber = dmi.PartNumber
+						device.AssetTag = dmi.AssetTag
+						device.Rank = dmi.Rank
+						device.ReportedSpeed = dmi.Speed
+						device.ConfiguredSpeed = dmi.ConfiguredMemorySpeed
+						device.MinimumVoltage = dmi.MinimumVoltage
+						device.MaximumVoltage = dmi.MaximumVoltage
+						device.ConfiguredVoltage = dmi.ConfiguredVoltage
+						device.MemoryTechnology = dmi.MemoryTechnology
+						device.OperatingMode = dmi.OperatingMode
+						device.FirmwareVersion = dmi.FirmwareVersion
+						device.ModuleManufacturerID = dmi.ModuleManufacturerID
+						device.ModuleProductID = dmi.ModuleProductID
+						device.VolatileSize = dmi.VolatileSize
+						device.NonVolatileSize = dmi.NonVolatileSize
+						device.CacheSize = dmi.CacheSize
+						device.LogicalSize = dmi.LogicalSize
+						dmiIndex++
+					}
+					if moduleIndex < len(modules) && !d.getEnhancementKit(colorAddresses[i]) {
+						moduleIndex++
+					}
 
 					if len(d.SkuLine) < 1 {
 						d.SkuLine = metadata.Name
@@ -770,6 +846,9 @@ func (d *Device) getDevices() int {
 								if hwmonIndex < len(hwmonTemperatureFiles) {
 									hwmonTemperatureFile := hwmonTemperatureFiles[hwmonIndex]
 									device.HwmonPath = hwmonTemperatureFile
+									if address := i2cAddressFromPath(hwmonTemperatureFile); len(address) > 0 {
+										device.I2CAddress = address
+									}
 									hwmonTemp, err := d.getTemperature(hwmonTemperatureFile)
 									if err == nil {
 										device.Temperature = hwmonTemp
