@@ -126,7 +126,7 @@
                         <div class="col-md-3">
                             <div class="memory-card">
                                 <div class="memory-header">
-                                    <span class="memory-title">{{ $root.Lang "txtMemoryModule" }}</span>
+                                    <span class="memory-title">{{ if and $device.Label (ne $device.Label "Set Label") }}{{ $device.Label }}{{ else }}{{ $root.Lang "txtMemoryModule" }}{{ end }}</span>
                                     <span class="memory-type">DDR{{ $device.MemoryType }}</span>
                                 </div>
 
@@ -161,16 +161,15 @@
                                     {{ if $device.Capacity }}<div class="settings-row"><span class="settings-label text-ellipsis">Capacity</span><span class="settings-label">{{ $device.Capacity }}</span></div>{{ end }}
                                     {{ if $device.Manufacturer }}<div class="settings-row"><span class="settings-label text-ellipsis">Manufacturer</span><span class="settings-label">{{ $device.Manufacturer }}</span></div>{{ end }}
                                     {{ if $device.PartNumber }}<div class="settings-row"><span class="settings-label text-ellipsis">Part Number</span><span class="settings-label">{{ $device.PartNumber }}</span></div>{{ end }}
-                                    {{ if $device.DMIType }}<div class="settings-row"><span class="settings-label text-ellipsis">Memory Type</span><span class="settings-label">{{ $device.DMIType }}{{ if $device.TypeDetail }} · {{ $device.TypeDetail }}{{ end }}</span></div>{{ end }}
+                                    {{ if $device.DMIType }}<div class="settings-row"><span class="settings-label text-ellipsis">Memory Type</span><span class="settings-label">{{ $device.DMIType }}</span></div>{{ end }}
                                     {{ if $device.FormFactor }}<div class="settings-row"><span class="settings-label text-ellipsis">Form Factor</span><span class="settings-label">{{ $device.FormFactor }}</span></div>{{ end }}
                                     {{ if gt $device.ReportedSpeed 0 }}<div class="settings-row"><span class="settings-label text-ellipsis">Reported Speed</span><span class="settings-label">{{ $device.ReportedSpeed }} MT/s</span></div>{{ end }}
                                     {{ if gt $device.ConfiguredSpeed 0 }}<div class="settings-row"><span class="settings-label text-ellipsis">Configured Speed</span><span class="settings-label">{{ $device.ConfiguredSpeed }} MT/s</span></div>{{ end }}
                                     {{ if gt $device.Rank 0 }}<div class="settings-row"><span class="settings-label text-ellipsis">Rank</span><span class="settings-label">{{ $device.Rank }}</span></div>{{ end }}
                                     {{ if gt $device.ConfiguredVoltage 0.0 }}<div class="settings-row"><span class="settings-label text-ellipsis">Voltage</span><span class="settings-label">{{ printf "%.2f" $device.ConfiguredVoltage }} V{{ if gt $device.MinimumVoltage 0.0 }} ({{ printf "%.2f" $device.MinimumVoltage }}–{{ printf "%.2f" $device.MaximumVoltage }} V){{ end }}</span></div>{{ end }}
                                     {{ if $device.I2CAddress }}<div class="settings-row"><span class="settings-label text-ellipsis">SPD Address</span><span class="settings-label">{{ $device.I2CAddress }}</span></div>{{ end }}
-                                    {{ if $device.HwmonPath }}<div class="settings-row"><span class="settings-label text-ellipsis">Temperature Source</span><span class="settings-label text-ellipsis" title="{{ $device.HwmonPath }}">SPD5118 hwmon</span></div>{{ end }}
+                                    {{ if $device.HwmonPath }}<div class="settings-row"><span class="settings-label text-ellipsis">Temperature Source</span><span class="settings-label">SPD5118 (hwmon)</span></div>{{ end }}
                                     {{ if and $device.SerialNumber (ne $device.SerialNumber "00000000") }}<div class="settings-row"><span class="settings-label text-ellipsis">Serial Number</span><span class="settings-label">{{ $device.SerialNumber }}</span></div>{{ end }}
-                                    {{ if $device.BankLocator }}<div class="settings-row"><span class="settings-label text-ellipsis">Bank</span><span class="settings-label">{{ $device.BankLocator }}</span></div>{{ end }}
 
                                     {{ if gt $device.Temperature 0.00 }}
                                     <div class="settings-row">
