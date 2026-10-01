@@ -197,32 +197,36 @@ func getSupportedDevices(w http.ResponseWriter, _ *http.Request) {
 	resp.Send(w)
 }
 
-// getManualFanControl returns the existing manual fan speed configuration flag.
-func getManualFanControl(w http.ResponseWriter, _ *http.Request) {
-	resp := &Response{
-		Code:   http.StatusOK,
-		Status: 1,
-		Data: map[string]interface{}{
-			"manual":          config.GetConfig().Manual,
-			"restartRequired": true,
-		},
+// manualFanControl exposes and updates the existing manual fan speed configuration flag.
+// A single ServeMux route handles both methods because handleFunc registers paths,
+// not method-qualified patterns.
+func manualFanControl(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		resp := &Response{
+			Code:   http.StatusOK,
+			Status: 1,
+			Data: map[string]interface{}{
+				"manual":          config.GetConfig().Manual,
+				"restartRequired": true,
+			},
+		}
+		resp.Send(w)
+	case http.MethodPost:
+		request := requests.ProcessSetManualFanControl(r)
+		resp := &Response{
+			Code:    request.Code,
+			Status:  request.Status,
+			Message: request.Message,
+			Data: map[string]interface{}{
+				"manual":          config.GetConfig().Manual,
+				"restartRequired": true,
+			},
+		}
+		resp.Send(w)
+	default:
+		http.Error(w, language.GetValue("txtMethodNotAllowed"), http.StatusMethodNotAllowed)
 	}
-	resp.Send(w)
-}
-
-// setManualFanControl persists the existing manual fan speed configuration flag.
-func setManualFanControl(w http.ResponseWriter, r *http.Request) {
-	request := requests.ProcessSetManualFanControl(r)
-	resp := &Response{
-		Code:    request.Code,
-		Status:  request.Status,
-		Message: request.Message,
-		Data: map[string]interface{}{
-			"manual":          config.GetConfig().Manual,
-			"restartRequired": true,
-		},
-	}
-	resp.Send(w)
 }
 
 // setSupportedDevices handles enable / disable of supported devices
@@ -2667,7 +2671,7 @@ func setRoutes() http.Handler {
 	handleFunc(r, "/api/systray", http.MethodGet, getSystrayData)
 	handleFunc(r, "/api/keyboard/dial/getColors/", http.MethodGet, getControlDialColors)
 	handleFunc(r, "/api/getSupportedDevices", http.MethodGet, getSupportedDevices)
-	handleFunc(r, "/api/config/manual", http.MethodGet, getManualFanControl)
+	r.HandleFunc("/api/config/manual", manualFanControl)
 	handleFunc(r, "/api/backup", http.MethodGet, backup.PerformBackup)
 	handleFunc(r, "/api/position/", http.MethodGet, getPositionData)
 	handleFunc(r, "/api/headset/getEqualizers/", http.MethodGet, getEqualizers)
@@ -2763,7 +2767,6 @@ func setRoutes() http.Handler {
 	handleFunc(r, "/api/macro/updateSettings", http.MethodPost, updateMacroSettings)
 	handleFunc(r, "/api/keyboard/dial/setColors", http.MethodPost, setKeyboardControlDialColors)
 	handleFunc(r, "/api/setSupportedDevices", http.MethodPost, setSupportedDevices)
-	handleFunc(r, "/api/config/manual", http.MethodPost, setManualFanControl)
 	handleFunc(r, "/api/restore", http.MethodPost, backup.PerformRestore)
 	handleFunc(r, "/api/lcd/upload", http.MethodPost, lcd.PerformImageUpload)
 	handleFunc(r, "/api/headset/anc", http.MethodPost, changeActiveNoiseCancellation)
