@@ -27,6 +27,8 @@ import (
 	"OpenLinkHub/src/systeminfo"
 	"OpenLinkHub/src/temperatures"
 	"OpenLinkHub/src/version"
+	"os"
+	"syscall"
 )
 
 // Start will start new controller session
@@ -52,7 +54,15 @@ func Start() {
 	monitor.Init()      // Monitor
 	language.Init()     // Language
 	scheduler.Init()    // Scheduler
-	server.Init()       // REST & WebUI
+	server.SetRestartHandler(func() error {
+		Stop()
+		executable, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		return syscall.Exec(executable, os.Args, os.Environ())
+	})
+	server.Init() // REST & WebUI
 }
 
 // Stop will stop device control
