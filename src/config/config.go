@@ -162,22 +162,30 @@ func UpdateManual(enabled bool) uint8 {
 // EditableSettings contains user-facing configuration options that can be safely
 // persisted from the Control Panel. These settings are applied after a service restart.
 type EditableSettings struct {
-	GraphProfiles             bool `json:"graphProfiles"`
-	Metrics                   bool `json:"metrics"`
-	RamTempViaHwmon           bool `json:"ramTempViaHwmon"`
-	EnableGamepad             bool `json:"enableGamepad"`
-	EnableMotherboard         bool `json:"enableMotherboard"`
-	MotherboardBiosOnExit     bool `json:"motherboardBiosOnExit"`
-	EnableOpenRGBTargetServer bool `json:"enableOpenRGBTargetServer"`
-	OpenRGBPort               int  `json:"openRGBPort"`
-	ResumeDelay               int  `json:"resumeDelay"`
-	TemperatureOffset         int  `json:"temperatureOffset"`
-	CheckDevicePermission     bool `json:"checkDevicePermission"`
+	Debug                     bool      `json:"debug"`
+	LogLevel                  string    `json:"logLevel"`
+	MemorySku                 string    `json:"memorySku"`
+	MemoryRegisterOverride    ByteArray `json:"memoryRegisterOverride"`
+	GraphProfiles             bool      `json:"graphProfiles"`
+	Metrics                   bool      `json:"metrics"`
+	RamTempViaHwmon           bool      `json:"ramTempViaHwmon"`
+	EnableGamepad             bool      `json:"enableGamepad"`
+	EnableMotherboard         bool      `json:"enableMotherboard"`
+	MotherboardBiosOnExit     bool      `json:"motherboardBiosOnExit"`
+	EnableOpenRGBTargetServer bool      `json:"enableOpenRGBTargetServer"`
+	OpenRGBPort               int       `json:"openRGBPort"`
+	ResumeDelay               int       `json:"resumeDelay"`
+	TemperatureOffset         int       `json:"temperatureOffset"`
+	CheckDevicePermission     bool      `json:"checkDevicePermission"`
 }
 
 // GetEditableSettings returns the configuration subset exposed by the Control Panel.
 func GetEditableSettings() EditableSettings {
 	return EditableSettings{
+		Debug:                     configuration.Debug,
+		LogLevel:                  configuration.LogLevel,
+		MemorySku:                 configuration.MemorySku,
+		MemoryRegisterOverride:    append(ByteArray(nil), configuration.MemoryRegisterOverride...),
 		GraphProfiles:             configuration.GraphProfiles,
 		Metrics:                   configuration.Metrics,
 		RamTempViaHwmon:           configuration.RamTempViaHwmon,
@@ -194,6 +202,13 @@ func GetEditableSettings() EditableSettings {
 
 // UpdateEditableSettings validates and persists the Control Panel configuration.
 func UpdateEditableSettings(settings EditableSettings) error {
+	validLogLevels := map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
+	if !validLogLevels[settings.LogLevel] {
+		return fmt.Errorf("log level must be debug, info, warn, or error")
+	}
+	if len(settings.MemoryRegisterOverride) > 32 {
+		return fmt.Errorf("memory register override cannot contain more than 32 addresses")
+	}
 	if settings.OpenRGBPort < 1 || settings.OpenRGBPort > 65535 {
 		return fmt.Errorf("OpenRGB port must be between 1 and 65535")
 	}
@@ -204,6 +219,10 @@ func UpdateEditableSettings(settings EditableSettings) error {
 		return fmt.Errorf("temperature offset must be between -50 and 50 degrees")
 	}
 
+	configuration.Debug = settings.Debug
+	configuration.LogLevel = settings.LogLevel
+	configuration.MemorySku = settings.MemorySku
+	configuration.MemoryRegisterOverride = append(ByteArray(nil), settings.MemoryRegisterOverride...)
 	configuration.GraphProfiles = settings.GraphProfiles
 	configuration.Metrics = settings.Metrics
 	configuration.RamTempViaHwmon = settings.RamTempViaHwmon
