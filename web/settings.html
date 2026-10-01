@@ -330,6 +330,35 @@
                 <div class="col-md-6">
                     <div class="card system-card text-center mb-4">
                         <div class="card-header">
+                            OpenLinkHub Configuration
+                        </div>
+                        <div class="card-body">
+                            <div class="settings-list">
+                                <div class="settings-row"><span class="settings-label text-ellipsis">Temperature Graph Profiles</span><label class="system-toggle compact"><input type="checkbox" id="cfgGraphProfiles"><span class="toggle-track"></span></label></div>
+                                <div class="settings-row"><span class="settings-label text-ellipsis">Prometheus Metrics</span><label class="system-toggle compact"><input type="checkbox" id="cfgMetrics"><span class="toggle-track"></span></label></div>
+                                <div class="settings-row"><span class="settings-label text-ellipsis">RAM Temperature via hwmon</span><label class="system-toggle compact"><input type="checkbox" id="cfgRamTempViaHwmon"><span class="toggle-track"></span></label></div>
+                                <div class="settings-row"><span class="settings-label text-ellipsis">Gamepad Support</span><label class="system-toggle compact"><input type="checkbox" id="cfgEnableGamepad"><span class="toggle-track"></span></label></div>
+                                <div class="settings-row"><span class="settings-label text-ellipsis">Motherboard Support</span><label class="system-toggle compact"><input type="checkbox" id="cfgEnableMotherboard"><span class="toggle-track"></span></label></div>
+                                <div class="settings-row"><span class="settings-label text-ellipsis">Motherboard BIOS Mode on Exit</span><label class="system-toggle compact"><input type="checkbox" id="cfgMotherboardBiosOnExit"><span class="toggle-track"></span></label></div>
+                                <div class="settings-row"><span class="settings-label text-ellipsis">OpenRGB Target Server</span><label class="system-toggle compact"><input type="checkbox" id="cfgEnableOpenRGB"><span class="toggle-track"></span></label></div>
+                                <div class="settings-row"><span class="settings-label text-ellipsis">OpenRGB Port</span><label class="system-input text-input compact"><input type="number" id="cfgOpenRGBPort" min="1" max="65535"></label></div>
+                                <div class="settings-row"><span class="settings-label text-ellipsis">Resume Delay (ms)</span><label class="system-input text-input compact"><input type="number" id="cfgResumeDelay" min="0" max="120000"></label></div>
+                                <div class="settings-row"><span class="settings-label text-ellipsis">Temperature Offset (°C)</span><label class="system-input text-input compact"><input type="number" id="cfgTemperatureOffset" min="-50" max="50"></label></div>
+                                <div class="settings-row"><span class="settings-label text-ellipsis">Check Device Permissions</span><label class="system-toggle compact"><input type="checkbox" id="cfgCheckDevicePermission"><span class="toggle-track"></span></label></div>
+                                <div class="settings-row">
+                                    <span class="settings-label text-ellipsis warning">{{ .Lang "txtServiceRestartRequired" }}</span>
+                                    <div class="settings-actions">
+                                        <button class="system-button" id="btnSaveEditableConfig" type="button">{{ .Lang "txtSave" }}</button>
+                                        <button class="system-button" id="btnRestartOpenLinkHub" type="button">Restart OpenLinkHub</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="card system-card text-center mb-4">
+                        <div class="card-header">
                             Fan Control
                         </div>
                         <div class="card-body">
