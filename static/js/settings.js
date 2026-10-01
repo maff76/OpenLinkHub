@@ -211,6 +211,10 @@ $(document).ready(function () {
     });
 
     function applyEditableConfig(settings) {
+        $('#cfgDebug').prop('checked', settings.debug === true);
+        $('#cfgLogLevel').val(settings.logLevel || 'info');
+        $('#cfgMemorySku').val(settings.memorySku || '');
+        $('#cfgMemoryRegisterOverride').val((settings.memoryRegisterOverride || []).map(function(value) { return '0x' + Number(value).toString(16).toUpperCase().padStart(2, '0'); }).join(', '));
         $('#cfgGraphProfiles').prop('checked', settings.graphProfiles === true);
         $('#cfgMetrics').prop('checked', settings.metrics === true);
         $('#cfgRamTempViaHwmon').prop('checked', settings.ramTempViaHwmon === true);
@@ -237,7 +241,25 @@ $(document).ready(function () {
     });
 
     $('#btnSaveEditableConfig').on('click', function() {
+        const memoryRegisterText = $('#cfgMemoryRegisterOverride').val().trim();
+        let memoryRegisterOverride = [];
+        if (memoryRegisterText.length > 0) {
+            const parts = memoryRegisterText.split(/[\s,]+/).filter(Boolean);
+            for (const part of parts) {
+                const value = /^0x/i.test(part) ? parseInt(part, 16) : parseInt(part, 10);
+                if (!Number.isInteger(value) || value < 0 || value > 255) {
+                    toast.warning('Memory register override values must be 0x00-0xFF or 0-255');
+                    return;
+                }
+                memoryRegisterOverride.push(value);
+            }
+        }
+
         const settings = {
+            debug: $('#cfgDebug').is(':checked'),
+            logLevel: $('#cfgLogLevel').val(),
+            memorySku: $('#cfgMemorySku').val().trim(),
+            memoryRegisterOverride: memoryRegisterOverride,
             graphProfiles: $('#cfgGraphProfiles').is(':checked'),
             metrics: $('#cfgMetrics').is(':checked'),
             ramTempViaHwmon: $('#cfgRamTempViaHwmon').is(':checked'),
