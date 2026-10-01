@@ -2,6 +2,44 @@
 <html lang="en">
 {{ template "head" . }}
 <script src="../static/js/cluster.js"></script>
+<style>
+    /* Compact, independently flowing settings cards.
+       Columns increase with available width without stretching individual cards. */
+    .settings-masonry {
+        column-count: 1;
+        column-gap: 1.5rem;
+        width: 100%;
+    }
+
+    /* Existing Bootstrap/stack wrappers should not create their own layout rows. */
+    .settings-masonry > .col-12,
+    .settings-masonry > .col-xl-6,
+    .settings-masonry .stack-gap-4 {
+        display: contents;
+    }
+
+    .settings-masonry .system-card {
+        display: inline-block;
+        width: 100%;
+        margin: 0 0 1.5rem 0 !important;
+        break-inside: avoid;
+        -webkit-column-break-inside: avoid;
+        page-break-inside: avoid;
+        vertical-align: top;
+    }
+
+    @media (min-width: 1200px) {
+        .settings-masonry {
+            column-count: 2;
+        }
+    }
+
+    @media (min-width: 2200px) {
+        .settings-masonry {
+            column-count: 3;
+        }
+    }
+</style>
 <body>
 
 <div class="container-fluid">
@@ -24,8 +62,8 @@
             {{ end }}
 
             <!-- Settings -->
-            <div class="row g-4 mb-4 align-items-start">
-                <div class="col-md-3">
+            <div class="settings-masonry mb-4">
+                <div class="col-12 col-xl-6">
                     <div class="stack-gap-4">
                         <!-- Dashboard Settings -->
                         <div class="card system-card text-center">
@@ -195,7 +233,7 @@
                         </div>
                     </div>
                 </div>
-                <div class="col-md-3">
+                <div class="col-12 col-xl-6">
                     <div class="stack-gap-4">
                         <!-- RGB Scheduler -->
                         <div class="card system-card text-center">
@@ -327,16 +365,20 @@
                         </div>
                     </div>
                 </div>
-                <div class="col-md-6">
+                <div class="col-12 col-xl-6">
                     <div class="card system-card text-center mb-4">
                         <div class="card-header">
                             OpenLinkHub Configuration
                         </div>
                         <div class="card-body">
                             <div class="settings-list">
+                                <div class="settings-row"><span class="settings-label text-ellipsis">Debug Logging</span><label class="system-toggle compact"><input type="checkbox" id="cfgDebug"><span class="toggle-track"></span></label></div>
+                                <div class="settings-row"><span class="settings-label text-ellipsis">Log Level</span><label><select id="cfgLogLevel" class="form-select system-select auto-width compact"><option value="debug">Debug</option><option value="info">Info</option><option value="warn">Warn</option><option value="error">Error</option></select></label></div>
                                 <div class="settings-row"><span class="settings-label text-ellipsis">Temperature Graph Profiles</span><label class="system-toggle compact"><input type="checkbox" id="cfgGraphProfiles"><span class="toggle-track"></span></label></div>
                                 <div class="settings-row"><span class="settings-label text-ellipsis">Prometheus Metrics</span><label class="system-toggle compact"><input type="checkbox" id="cfgMetrics"><span class="toggle-track"></span></label></div>
                                 <div class="settings-row"><span class="settings-label text-ellipsis">RAM Temperature via hwmon</span><label class="system-toggle compact"><input type="checkbox" id="cfgRamTempViaHwmon"><span class="toggle-track"></span></label></div>
+                                <div class="settings-row"><span class="settings-label text-ellipsis">Memory SKU Fallback</span><label class="system-input text-input compact"><input type="text" id="cfgMemorySku" placeholder="Optional" autocomplete="off"></label></div>
+                                <div class="settings-row"><span class="settings-label text-ellipsis">Memory Register Override</span><label class="system-input text-input compact"><input type="text" id="cfgMemoryRegisterOverride" placeholder="0x18, 0x19, 0x1A, 0x1B" autocomplete="off"></label></div>
                                 <div class="settings-row"><span class="settings-label text-ellipsis">Gamepad Support</span><label class="system-toggle compact"><input type="checkbox" id="cfgEnableGamepad"><span class="toggle-track"></span></label></div>
                                 <div class="settings-row"><span class="settings-label text-ellipsis">Motherboard Support</span><label class="system-toggle compact"><input type="checkbox" id="cfgEnableMotherboard"><span class="toggle-track"></span></label></div>
                                 <div class="settings-row"><span class="settings-label text-ellipsis">Motherboard BIOS Mode on Exit</span><label class="system-toggle compact"><input type="checkbox" id="cfgMotherboardBiosOnExit"><span class="toggle-track"></span></label></div>
@@ -356,7 +398,7 @@
                         </div>
                     </div>
                 </div>
-                <div class="col-md-6">
+                <div class="col-12 col-xl-6">
                     <div class="card system-card text-center mb-4">
                         <div class="card-header">
                             Fan Control
