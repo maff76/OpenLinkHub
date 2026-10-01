@@ -110,6 +110,14 @@ func GetConfig() Configuration {
 	return configuration
 }
 
+// UpdateManual updates the manual fan speed setting and persists it to config.json.
+// A service restart is required for device monitoring loops to fully apply the new mode.
+func UpdateManual(enabled bool) uint8 {
+	configuration.Manual = enabled
+	saveConfigSettings(configuration)
+	return 1
+}
+
 // UpdateSupportedDevices will update the Exclude slice based on the enabled flag for each product ID
 func UpdateSupportedDevices(productIds map[uint16]bool) uint8 {
 	for productId, enabled := range productIds {
