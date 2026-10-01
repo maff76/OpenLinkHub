@@ -171,6 +171,45 @@ $(document).ready(function () {
         });
     });
 
+    // Existing OpenLinkHub manual fan control configuration.
+    // Changing this setting requires a service restart because device monitoring
+    // loops select automatic/manual behaviour during initialization.
+    $.ajax({
+        url: '/api/config/manual',
+        dataType: 'JSON',
+        success: function(response) {
+            if (response.status === 1 && response.data) {
+                $('#manualFanControl').prop('checked', response.data.manual === true);
+            } else {
+                toast.warning(response.message);
+            }
+        }
+    });
+
+    $('#btnSaveManualFanControl').on('click', function() {
+        const pf = {
+            enabled: $('#manualFanControl').is(':checked')
+        };
+
+        $.ajax({
+            url: '/api/config/manual',
+            type: 'POST',
+            data: JSON.stringify(pf),
+            contentType: 'application/json',
+            cache: false,
+            success: function(response) {
+                if (response.status === 1) {
+                    toast.success(response.message);
+                } else {
+                    toast.warning(response.message);
+                }
+            },
+            error: function() {
+                toast.warning('Unable to update manual fan control setting');
+            }
+        });
+    });
+
     $.ajax({
         url: '/api/getSupportedDevices',
         dataType: 'JSON',
