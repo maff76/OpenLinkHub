@@ -6,46 +6,87 @@ package config
 
 import (
 	"OpenLinkHub/src/common"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/user"
 	"slices"
 	"strings"
 )
 
+// ByteArray is a byte slice that is stored in config.json as a readable
+// array of numbers instead of encoding/json's default base64 string.
+// UnmarshalJSON accepts both formats so existing configurations remain compatible.
+type ByteArray []byte
+
+func (b ByteArray) MarshalJSON() ([]byte, error) {
+	values := make([]uint16, len(b))
+	for i, value := range b {
+		values[i] = uint16(value)
+	}
+	return json.Marshal(values)
+}
+
+func (b *ByteArray) UnmarshalJSON(data []byte) error {
+	var values []uint16
+	if err := json.Unmarshal(data, &values); err == nil {
+		result := make(ByteArray, len(values))
+		for i, value := range values {
+			if value > 255 {
+				return fmt.Errorf("byte array value %d is outside the valid range 0-255", value)
+			}
+			result[i] = byte(value)
+		}
+		*b = result
+		return nil
+	}
+
+	var encoded string
+	if err := json.Unmarshal(data, &encoded); err != nil {
+		return fmt.Errorf("byte array must be a numeric array or base64 string: %w", err)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return fmt.Errorf("invalid base64 byte array: %w", err)
+	}
+	*b = ByteArray(decoded)
+	return nil
+}
+
 type Configuration struct {
-	Debug                     bool     `json:"debug"`
-	ListenPort                int      `json:"listenPort"`
-	ListenAddress             string   `json:"listenAddress"`
-	CPUSensorChip             string   `json:"cpuSensorChip"`
-	Manual                    bool     `json:"manual"`
-	Frontend                  bool     `json:"frontend"`
-	Metrics                   bool     `json:"metrics"`
-	Memory                    bool     `json:"memory"`
-	MemorySmBus               string   `json:"memorySmBus"`
-	MemoryType                int      `json:"memoryType"`
-	Exclude                   []uint16 `json:"exclude"`
-	MemorySku                 string   `json:"memorySku"`
-	ConfigPath                string   `json:",omitempty"`
-	ResumeDelay               int      `json:"resumeDelay"`
-	LogFile                   string   `json:"logFile"`
-	LogLevel                  string   `json:"logLevel"`
-	EnhancementKits           []byte   `json:"enhancementKits"`
-	TemperatureOffset         int      `json:"temperatureOffset"`
-	AMDGpuIndex               int      `json:"amdGpuIndex"`
-	AMDSmiPath                string   `json:"amdsmiPath"`
-	CheckDevicePermission     bool     `json:"checkDevicePermission"`
-	GraphProfiles             bool     `json:"graphProfiles"`
-	CpuTempFile               string   `json:"cpuTempFile"`
-	RamTempViaHwmon           bool     `json:"ramTempViaHwmon"`
-	NvidiaGpuIndex            []int    `json:"nvidiaGpuIndex"`
-	DefaultNvidiaGPU          int      `json:"defaultNvidiaGPU"`
-	OpenRGBPort               int      `json:"openRGBPort"`
-	EnableOpenRGBTargetServer bool     `json:"enableOpenRGBTargetServer"`
-	EnableGamepad             bool     `json:"enableGamepad"`
-	EnableMotherboard         bool     `json:"enableMotherboard"`
-	MotherboardBiosOnExit     bool     `json:"motherboardBiosOnExit"`
-	MemoryRegisterOverride    []byte   `json:"memoryRegisterOverride"`
+	Debug                     bool      `json:"debug"`
+	ListenPort                int       `json:"listenPort"`
+	ListenAddress             string    `json:"listenAddress"`
+	CPUSensorChip             string    `json:"cpuSensorChip"`
+	Manual                    bool      `json:"manual"`
+	Frontend                  bool      `json:"frontend"`
+	Metrics                   bool      `json:"metrics"`
+	Memory                    bool      `json:"memory"`
+	MemorySmBus               string    `json:"memorySmBus"`
+	MemoryType                int       `json:"memoryType"`
+	Exclude                   []uint16  `json:"exclude"`
+	MemorySku                 string    `json:"memorySku"`
+	ConfigPath                string    `json:",omitempty"`
+	ResumeDelay               int       `json:"resumeDelay"`
+	LogFile                   string    `json:"logFile"`
+	LogLevel                  string    `json:"logLevel"`
+	EnhancementKits           ByteArray `json:"enhancementKits"`
+	TemperatureOffset         int       `json:"temperatureOffset"`
+	AMDGpuIndex               int       `json:"amdGpuIndex"`
+	AMDSmiPath                string    `json:"amdsmiPath"`
+	CheckDevicePermission     bool      `json:"checkDevicePermission"`
+	GraphProfiles             bool      `json:"graphProfiles"`
+	CpuTempFile               string    `json:"cpuTempFile"`
+	RamTempViaHwmon           bool      `json:"ramTempViaHwmon"`
+	NvidiaGpuIndex            []int     `json:"nvidiaGpuIndex"`
+	DefaultNvidiaGPU          int       `json:"defaultNvidiaGPU"`
+	OpenRGBPort               int       `json:"openRGBPort"`
+	EnableOpenRGBTargetServer bool      `json:"enableOpenRGBTargetServer"`
+	EnableGamepad             bool      `json:"enableGamepad"`
+	EnableMotherboard         bool      `json:"enableMotherboard"`
+	MotherboardBiosOnExit     bool      `json:"motherboardBiosOnExit"`
+	MemoryRegisterOverride    ByteArray `json:"memoryRegisterOverride"`
 }
 
 var (
@@ -159,7 +200,7 @@ func upgradeFile(cfg string) {
 			ResumeDelay:               15000,
 			LogLevel:                  "info",
 			LogFile:                   "",
-			EnhancementKits:           make([]byte, 0),
+			EnhancementKits:           make(ByteArray, 0),
 			TemperatureOffset:         0,
 			AMDGpuIndex:               0,
 			AMDSmiPath:                "",
@@ -174,7 +215,7 @@ func upgradeFile(cfg string) {
 			EnableGamepad:             true,
 			EnableMotherboard:         false,
 			MotherboardBiosOnExit:     false,
-			MemoryRegisterOverride:    make([]byte, 0),
+			MemoryRegisterOverride:    make(ByteArray, 0),
 		}
 		saveConfigSettings(value)
 	} else {
