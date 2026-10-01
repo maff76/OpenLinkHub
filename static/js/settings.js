@@ -210,6 +210,103 @@ $(document).ready(function () {
         });
     });
 
+    function applyEditableConfig(settings) {
+        $('#cfgGraphProfiles').prop('checked', settings.graphProfiles === true);
+        $('#cfgMetrics').prop('checked', settings.metrics === true);
+        $('#cfgRamTempViaHwmon').prop('checked', settings.ramTempViaHwmon === true);
+        $('#cfgEnableGamepad').prop('checked', settings.enableGamepad === true);
+        $('#cfgEnableMotherboard').prop('checked', settings.enableMotherboard === true);
+        $('#cfgMotherboardBiosOnExit').prop('checked', settings.motherboardBiosOnExit === true);
+        $('#cfgEnableOpenRGB').prop('checked', settings.enableOpenRGBTargetServer === true);
+        $('#cfgOpenRGBPort').val(settings.openRGBPort);
+        $('#cfgResumeDelay').val(settings.resumeDelay);
+        $('#cfgTemperatureOffset').val(settings.temperatureOffset);
+        $('#cfgCheckDevicePermission').prop('checked', settings.checkDevicePermission === true);
+    }
+
+    $.ajax({
+        url: '/api/config/editable',
+        dataType: 'JSON',
+        success: function(response) {
+            if (response.status === 1 && response.data && response.data.settings) {
+                applyEditableConfig(response.data.settings);
+            } else {
+                toast.warning(response.message || 'Unable to load OpenLinkHub configuration');
+            }
+        }
+    });
+
+    $('#btnSaveEditableConfig').on('click', function() {
+        const settings = {
+            graphProfiles: $('#cfgGraphProfiles').is(':checked'),
+            metrics: $('#cfgMetrics').is(':checked'),
+            ramTempViaHwmon: $('#cfgRamTempViaHwmon').is(':checked'),
+            enableGamepad: $('#cfgEnableGamepad').is(':checked'),
+            enableMotherboard: $('#cfgEnableMotherboard').is(':checked'),
+            motherboardBiosOnExit: $('#cfgMotherboardBiosOnExit').is(':checked'),
+            enableOpenRGBTargetServer: $('#cfgEnableOpenRGB').is(':checked'),
+            openRGBPort: parseInt($('#cfgOpenRGBPort').val(), 10),
+            resumeDelay: parseInt($('#cfgResumeDelay').val(), 10),
+            temperatureOffset: parseInt($('#cfgTemperatureOffset').val(), 10),
+            checkDevicePermission: $('#cfgCheckDevicePermission').is(':checked')
+        };
+
+        $.ajax({
+            url: '/api/config/editable',
+            type: 'POST',
+            data: JSON.stringify(settings),
+            contentType: 'application/json',
+            cache: false,
+            success: function(response) {
+                if (response.status === 1) {
+                    toast.success(response.message);
+                    if (response.data && response.data.settings) {
+                        applyEditableConfig(response.data.settings);
+                    }
+                } else {
+                    toast.warning(response.message);
+                }
+            },
+            error: function(xhr) {
+                const message = xhr.responseJSON && xhr.responseJSON.message ? xhr.responseJSON.message : 'Unable to save OpenLinkHub configuration';
+                toast.warning(message);
+            }
+        });
+    });
+
+    $('#btnRestartOpenLinkHub').on('click', function() {
+        if (!window.confirm('Restart OpenLinkHub now? Device control will briefly disconnect.')) {
+            return;
+        }
+        const button = $(this);
+        button.prop('disabled', true);
+        $.ajax({
+            url: '/api/restart',
+            type: 'POST',
+            cache: false,
+            success: function(response) {
+                if (response.status !== 1) {
+                    button.prop('disabled', false);
+                    toast.warning(response.message);
+                    return;
+                }
+                toast.success(response.message);
+                setTimeout(function waitForOpenLinkHub() {
+                    $.ajax({
+                        url: '/api/',
+                        cache: false,
+                        success: function() { window.location.reload(); },
+                        error: function() { setTimeout(waitForOpenLinkHub, 1000); }
+                    });
+                }, 1000);
+            },
+            error: function() {
+                button.prop('disabled', false);
+                toast.warning('Unable to restart OpenLinkHub');
+            }
+        });
+    });
+
     $.ajax({
         url: '/api/getSupportedDevices',
         dataType: 'JSON',
