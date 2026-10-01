@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -23,6 +24,7 @@ const (
 type RAMModule struct {
 	// Hardware metadata
 	EEPROMPath string // Path to the EEPROM within hwmon device directory
+	SPDAddress string // I2C SPD address, e.g. 0x50
 	SKU        string // SKU is the part number or identifier for the RAM module
 
 }
@@ -40,10 +42,29 @@ func parseSKUInfo(m *RAMModule, spd []byte) {
 
 }
 
+func i2cAddressFromPath(path string) string {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err == nil {
+		path = resolved
+	}
+	for _, part := range strings.Split(filepath.Clean(path), string(os.PathSeparator)) {
+		bits := strings.Split(part, "-")
+		if len(bits) != 2 || len(bits[1]) != 4 {
+			continue
+		}
+		value, err := strconv.ParseUint(bits[1], 16, 8)
+		if err == nil {
+			return fmt.Sprintf("0x%02X", value)
+		}
+	}
+	return ""
+}
+
 // parseSPDModule Parse the SPD data from the EEPROM file.
 func parseSPDModule(path string, spd []byte) RAMModule {
 	var m RAMModule
 	m.EEPROMPath = path
+	m.SPDAddress = i2cAddressFromPath(path)
 	parseSKUInfo(&m, spd)
 	return m
 }
