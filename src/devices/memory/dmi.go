@@ -13,6 +13,8 @@ type DIMIMemoryDevice struct {
 	Locator               string
 	BankLocator           string
 	Size                  string
+	TotalWidth            string
+	DataWidth             string
 	FormFactor            string
 	Type                  string
 	TypeDetail            string
@@ -20,11 +22,21 @@ type DIMIMemoryDevice struct {
 	Manufacturer          string
 	SerialNumber          string
 	PartNumber            string
+	AssetTag              string
 	Rank                  int
 	ConfiguredMemorySpeed int
 	MinimumVoltage        float64
 	MaximumVoltage        float64
 	ConfiguredVoltage     float64
+	MemoryTechnology      string
+	OperatingMode         string
+	FirmwareVersion       string
+	ModuleManufacturerID  string
+	ModuleProductID       string
+	VolatileSize          string
+	NonVolatileSize       string
+	CacheSize             string
+	LogicalSize           string
 }
 
 func parseDMIInt(value string) int {
@@ -87,6 +99,10 @@ func getDIMIMemoryDevices() []DIMIMemoryDevice {
 		switch key {
 		case "Size":
 			current.Size = value
+		case "Total Width":
+			current.TotalWidth = value
+		case "Data Width":
+			current.DataWidth = value
 		case "Form Factor":
 			current.FormFactor = value
 		case "Locator":
@@ -105,6 +121,8 @@ func getDIMIMemoryDevices() []DIMIMemoryDevice {
 			current.SerialNumber = value
 		case "Part Number":
 			current.PartNumber = strings.TrimSpace(value)
+		case "Asset Tag":
+			current.AssetTag = value
 		case "Rank":
 			current.Rank = parseDMIInt(value)
 		case "Configured Memory Speed":
@@ -115,6 +133,24 @@ func getDIMIMemoryDevices() []DIMIMemoryDevice {
 			current.MaximumVoltage = parseDMIVoltage(value)
 		case "Configured Voltage":
 			current.ConfiguredVoltage = parseDMIVoltage(value)
+		case "Memory Technology":
+			current.MemoryTechnology = value
+		case "Memory Operating Mode Capability":
+			current.OperatingMode = value
+		case "Firmware Version":
+			current.FirmwareVersion = value
+		case "Module Manufacturer ID":
+			current.ModuleManufacturerID = value
+		case "Module Product ID":
+			current.ModuleProductID = value
+		case "Volatile Size":
+			current.VolatileSize = value
+		case "Non-Volatile Size":
+			current.NonVolatileSize = value
+		case "Cache Size":
+			current.CacheSize = value
+		case "Logical Size":
+			current.LogicalSize = value
 		}
 	}
 	flush()
