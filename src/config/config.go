@@ -159,6 +159,66 @@ func UpdateManual(enabled bool) uint8 {
 	return 1
 }
 
+// EditableSettings contains user-facing configuration options that can be safely
+// persisted from the Control Panel. These settings are applied after a service restart.
+type EditableSettings struct {
+	GraphProfiles             bool `json:"graphProfiles"`
+	Metrics                   bool `json:"metrics"`
+	RamTempViaHwmon           bool `json:"ramTempViaHwmon"`
+	EnableGamepad             bool `json:"enableGamepad"`
+	EnableMotherboard         bool `json:"enableMotherboard"`
+	MotherboardBiosOnExit     bool `json:"motherboardBiosOnExit"`
+	EnableOpenRGBTargetServer bool `json:"enableOpenRGBTargetServer"`
+	OpenRGBPort               int  `json:"openRGBPort"`
+	ResumeDelay               int  `json:"resumeDelay"`
+	TemperatureOffset         int  `json:"temperatureOffset"`
+	CheckDevicePermission     bool `json:"checkDevicePermission"`
+}
+
+// GetEditableSettings returns the configuration subset exposed by the Control Panel.
+func GetEditableSettings() EditableSettings {
+	return EditableSettings{
+		GraphProfiles:             configuration.GraphProfiles,
+		Metrics:                   configuration.Metrics,
+		RamTempViaHwmon:           configuration.RamTempViaHwmon,
+		EnableGamepad:             configuration.EnableGamepad,
+		EnableMotherboard:         configuration.EnableMotherboard,
+		MotherboardBiosOnExit:     configuration.MotherboardBiosOnExit,
+		EnableOpenRGBTargetServer: configuration.EnableOpenRGBTargetServer,
+		OpenRGBPort:               configuration.OpenRGBPort,
+		ResumeDelay:               configuration.ResumeDelay,
+		TemperatureOffset:         configuration.TemperatureOffset,
+		CheckDevicePermission:     configuration.CheckDevicePermission,
+	}
+}
+
+// UpdateEditableSettings validates and persists the Control Panel configuration.
+func UpdateEditableSettings(settings EditableSettings) error {
+	if settings.OpenRGBPort < 1 || settings.OpenRGBPort > 65535 {
+		return fmt.Errorf("OpenRGB port must be between 1 and 65535")
+	}
+	if settings.ResumeDelay < 0 || settings.ResumeDelay > 120000 {
+		return fmt.Errorf("resume delay must be between 0 and 120000 milliseconds")
+	}
+	if settings.TemperatureOffset < -50 || settings.TemperatureOffset > 50 {
+		return fmt.Errorf("temperature offset must be between -50 and 50 degrees")
+	}
+
+	configuration.GraphProfiles = settings.GraphProfiles
+	configuration.Metrics = settings.Metrics
+	configuration.RamTempViaHwmon = settings.RamTempViaHwmon
+	configuration.EnableGamepad = settings.EnableGamepad
+	configuration.EnableMotherboard = settings.EnableMotherboard
+	configuration.MotherboardBiosOnExit = settings.MotherboardBiosOnExit
+	configuration.EnableOpenRGBTargetServer = settings.EnableOpenRGBTargetServer
+	configuration.OpenRGBPort = settings.OpenRGBPort
+	configuration.ResumeDelay = settings.ResumeDelay
+	configuration.TemperatureOffset = settings.TemperatureOffset
+	configuration.CheckDevicePermission = settings.CheckDevicePermission
+	saveConfigSettings(configuration)
+	return nil
+}
+
 // UpdateSupportedDevices will update the Exclude slice based on the enabled flag for each product ID
 func UpdateSupportedDevices(productIds map[uint16]bool) uint8 {
 	for productId, enabled := range productIds {
