@@ -328,6 +328,27 @@
                     </div>
                 </div>
                 <div class="col-md-6">
+                    <div class="card system-card text-center mb-4">
+                        <div class="card-header">
+                            Fan Control
+                        </div>
+                        <div class="card-body">
+                            <div class="settings-list">
+                                <div class="settings-row">
+                                    <span class="settings-label text-ellipsis">Manual Fan Control</span>
+                                    <label class="system-toggle compact">
+                                        <input type="checkbox" id="manualFanControl">
+                                        <span class="toggle-track"></span>
+                                    </label>
+                                </div>
+                                <div class="settings-row">
+                                    <span class="settings-label text-ellipsis warning">{{ .Lang "txtServiceRestartRequired" }}</span>
+                                    <button class="system-button" id="btnSaveManualFanControl" type="button">{{ .Lang "txtSave" }}</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="card system-card text-center">
                         <div class="card-header">
                             {{ .Lang "txtSupportedDevices" }}
