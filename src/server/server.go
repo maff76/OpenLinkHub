@@ -174,6 +174,16 @@ func getStorageTemperature(w http.ResponseWriter, _ *http.Request) {
 	resp.Send(w)
 }
 
+// getHwMonTemperatures returns current external hwmon temperature sensors.
+func getHwMonTemperatures(w http.ResponseWriter, _ *http.Request) {
+	resp := &Response{
+		Code:   http.StatusOK,
+		Status: 1,
+		Data:   temperatures.GetExternalHwMonSensors(),
+	}
+	resp.Send(w)
+}
+
 // getBatteryStats will return battery stats
 func getBatteryStats(w http.ResponseWriter, _ *http.Request) {
 	resp := &Response{
@@ -2227,6 +2237,7 @@ func uiDeviceOverview(w http.ResponseWriter, r *http.Request) {
 	web.Lcd = lcd.GetLcdDevices()
 	web.LCDImages = lcd.GetLcdImages()
 	web.Temperatures = temperatures.GetTemperatureProfiles()
+	web.HwMonSensors = temperatures.GetExternalHwMonSensors()
 	web.Rgb = rgb.GetRGB().Profiles
 	web.BuildInfo = version.GetBuildInfo()
 	web.SystemInfo = systeminfo.GetInfo()
@@ -2538,6 +2549,7 @@ func uiSettings(w http.ResponseWriter, _ *http.Request) {
 	web.Scheduler = scheduler.GetScheduler()
 	web.BuildInfo = version.GetBuildInfo()
 	web.SystemInfo = systeminfo.GetInfo()
+	web.HwMonSensors = temperatures.GetExternalHwMonSensors()
 	web.Dashboard = dashboard.GetDashboard()
 	web.Languages = language.GetLanguages()
 	web.LanguageCode = dashboard.GetDashboard().LanguageCode
@@ -2698,6 +2710,7 @@ func setRoutes() http.Handler {
 	handleFunc(r, "/api/gpuTemp/clean", http.MethodGet, getGpuTemperatureClean)
 	handleFunc(r, "/api/gpuLoad", http.MethodGet, getGpuLoad)
 	handleFunc(r, "/api/storageTemp", http.MethodGet, getStorageTemperature)
+	handleFunc(r, "/api/hwmonTemps", http.MethodGet, getHwMonTemperatures)
 	handleFunc(r, "/api/batteryStats", http.MethodGet, getBatteryStats)
 	handleFunc(r, "/api/devices/", http.MethodGet, getDevices)
 	handleFunc(r, "/api/color/", http.MethodGet, getColor)

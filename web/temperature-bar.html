@@ -1,40 +1,117 @@
 {{ define "temperature-bar" }}
 {{ $root := . }}
 {{ $dash := .Dashboard }}
-<!-- Temps -->
-<div class="row g-4 mb-4">
-    <!-- CPU -->
-    <div class="col-md-2">
-        <div class="card p-3">
-            <div class="card-title text-ellipsis">{{ $root.Lang "txtCpuTemperature" }}</div>
-            <div id="cpu_temp" class="stat text-warning text-ellipsis">{{ .CpuTemp }}</div>
-            <small class="text-ellipsis">{{ .SystemInfo.CPU.Model }}</small>
+<style>
+    .system-temperatures-panel {
+        margin-bottom: 1.5rem;
+        padding: 1rem;
+    }
+    .system-temperatures-title {
+        margin-bottom: .8rem;
+        font-size: .82rem;
+        letter-spacing: .04em;
+        text-transform: uppercase;
+        opacity: .8;
+    }
+    .temperature-group + .temperature-group {
+        margin-top: 1rem;
+    }
+    .temperature-group-title {
+        margin: 0 0 .45rem .15rem;
+        font-size: .72rem;
+        letter-spacing: .05em;
+        text-transform: uppercase;
+        opacity: .62;
+    }
+    .temperature-compact-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: .55rem;
+    }
+    .temperature-compact-item {
+        min-width: 0;
+        padding: .65rem .8rem;
+        border: 1px solid rgba(255,255,255,.07);
+        border-radius: .65rem;
+        background: rgba(255,255,255,.018);
+    }
+    .temperature-compact-value {
+        font-size: 1.15rem;
+        font-weight: 600;
+        line-height: 1.25;
+    }
+    .temperature-compact-name,
+    .temperature-compact-detail {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .temperature-compact-name {
+        margin-top: .2rem;
+        font-size: .78rem;
+    }
+    .temperature-compact-detail {
+        margin-top: .08rem;
+        font-size: .67rem;
+        opacity: .55;
+    }
+    @media (min-width: 2200px) {
+        .temperature-compact-grid { grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); }
+    }
+</style>
+
+<div class="card system-temperatures-panel">
+    <div class="system-temperatures-title">System Temperatures</div>
+
+    <div class="temperature-group">
+        <div class="temperature-group-title">Processor &amp; Graphics</div>
+        <div class="temperature-compact-grid">
+            <div class="temperature-compact-item">
+                <div id="cpu_temp" class="temperature-compact-value text-warning">{{ .CpuTemp }}</div>
+                <div class="temperature-compact-name">CPU</div>
+                <div class="temperature-compact-detail">{{ .SystemInfo.CPU.Model }}</div>
+            </div>
+            {{ if .SystemInfo.GPU }}
+            {{ range .SystemInfo.GPU }}
+            <div class="temperature-compact-item">
+                <div id="gpu_temp_{{ .Index }}" class="temperature-compact-value text-warning">{{ $dash.TemperatureToString .Temperature }}</div>
+                <div class="temperature-compact-name">GPU</div>
+                <div class="temperature-compact-detail">{{ .Model }}</div>
+            </div>
+            {{ end }}
+            {{ end }}
         </div>
     </div>
 
-    <!-- GPUs -->
-    {{ if .SystemInfo.GPU }}
-    {{ range .SystemInfo.GPU }}
-    <div class="col-md-2">
-        <div class="card p-3">
-            <div class="card-title text-ellipsis">{{ $root.Lang "txtGpuTemperature" }}</div>
-            <div id="gpu_temp_{{ .Index }}" class="stat text-warning text-ellipsis">{{ $dash.TemperatureToString .Temperature }}</div>
-            <small class="text-ellipsis">{{ .Model }}</small>
+    {{ if .HwMonSensors }}
+    <div class="temperature-group">
+        <div class="temperature-group-title">Motherboard / System</div>
+        <div class="temperature-compact-grid">
+            {{ range .HwMonSensors }}
+            {{ if not (or (eq .SensorName "coretemp") (eq .SensorName "k10temp") (eq .SensorName "zenpower") (eq .SensorName "nvme") (eq .SensorName "drivetemp") (eq .SensorName "spd5118")) }}
+            <div class="temperature-compact-item">
+                <div id="hwmon_temp-{{ .HwmonName }}-{{ .InputName }}" class="temperature-compact-value text-warning">{{ printf "%.1f °C" .TempC }}</div>
+                <div class="temperature-compact-name" title="{{ .Label }}">{{ .Label }}</div>
+                <div class="temperature-compact-detail" title="{{ .SensorName }}">{{ .SensorName }}</div>
+            </div>
+            {{ end }}
+            {{ end }}
         </div>
     </div>
-    {{ end }}
     {{ end }}
 
     {{ if .SystemInfo.Storage }}
-    {{ range .SystemInfo.Storage }}
-    <div class="col-md-2">
-        <div class="card p-3">
-            <div class="card-title text-ellipsis">{{ $root.Lang "txtStorageTemperature" }}</div>
-            <div id="storage_temp-{{ .Key }}" class="stat text-warning text-ellipsis">{{ $dash.TemperatureToString .Temperature }}</div>
-            <small class="text-ellipsis">{{ .Model }}</small>
+    <div class="temperature-group">
+        <div class="temperature-group-title">Storage</div>
+        <div class="temperature-compact-grid">
+            {{ range .SystemInfo.Storage }}
+            <div class="temperature-compact-item">
+                <div id="storage_temp-{{ .Key }}" class="temperature-compact-value text-warning">{{ $dash.TemperatureToString .Temperature }}</div>
+                <div class="temperature-compact-name" title="{{ .Model }}">{{ .Model }}</div>
+            </div>
+            {{ end }}
         </div>
     </div>
-    {{ end }}
     {{ end }}
 </div>
 {{ end }}

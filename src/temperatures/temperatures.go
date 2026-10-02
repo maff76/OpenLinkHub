@@ -90,6 +90,8 @@ type MemoryTemperatures struct {
 }
 
 type HwMonSensor struct {
+	ID         string
+	Category   string
 	HwmonName  string
 	SensorName string
 	InputName  string
@@ -1032,6 +1034,82 @@ func Interpolate(points []Point, inputTemp float32) float32 {
 }
 
 // GetExternalHwMonSensors will parse and return all external hwmon sensors available in the system.
+// hwMonCategory provides a stable, generic grouping for API consumers such as Home Assistant.
+// Keep this based on kernel driver names rather than hwmonX indexes, which can change after reboot.
+func hwMonCategory(sensorName string) string {
+	name := strings.ToLower(sensorName)
+	switch {
+	case name == "coretemp" || name == "k10temp" || name == "zenpower":
+		return "cpu"
+	case name == "nvme" || name == "drivetemp":
+		return "storage"
+	case name == "spd5118":
+		return "memory"
+	case strings.Contains(name, "amdgpu") || strings.Contains(name, "nvidia"):
+		return "gpu"
+	default:
+		return "motherboard"
+	}
+}
+
+// hwMonHardwareKey extracts a stable hardware identifier from the resolved sysfs path.
+// It prefers PCI BDF (0000:00:1f.4) and I2C device (0-0050) components and never uses hwmonX.
+func hwMonHardwareKey(hwmonPath, sensorName string) string {
+	resolved, err := filepath.EvalSymlinks(hwmonPath)
+	if err != nil {
+		resolved = hwmonPath
+	}
+	parts := strings.Split(filepath.Clean(resolved), string(os.PathSeparator))
+	for i := len(parts) - 1; i >= 0; i-- {
+		part := parts[i]
+		if strings.HasPrefix(part, "hwmon") {
+			continue
+		}
+		// PCI BDF, e.g. 0000:00:1f.4.
+		if strings.Count(part, ":") == 2 && strings.Contains(part, ".") {
+			return part
+		}
+		// I2C device, e.g. 0-0050.
+		if dash := strings.IndexByte(part, '-'); dash > 0 && dash < len(part)-1 {
+			left, right := part[:dash], part[dash+1:]
+			if _, errLeft := strconv.Atoi(left); errLeft == nil {
+				if _, errRight := strconv.ParseUint(right, 16, 32); errRight == nil {
+					return part
+				}
+			}
+		}
+	}
+	return sensorName
+}
+
+func hwMonIDPart(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var b strings.Builder
+	lastUnderscore := false
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			lastUnderscore = false
+		} else if !lastUnderscore && b.Len() > 0 {
+			b.WriteByte('_')
+			lastUnderscore = true
+		}
+	}
+	return strings.Trim(b.String(), "_")
+}
+
+func hwMonStableID(sensorName, hardwareKey, label, inputName string) string {
+	channel := label
+	if strings.TrimSpace(channel) == "" {
+		channel = strings.TrimSuffix(inputName, "_input")
+	}
+	return strings.Join([]string{
+		hwMonIDPart(sensorName),
+		hwMonIDPart(hardwareKey),
+		hwMonIDPart(channel),
+	}, "_")
+}
+
 func GetExternalHwMonSensors() interface{} {
 	basePath := "/sys/class/hwmon/"
 	hwmonEntries, err := os.ReadDir(basePath)
@@ -1064,6 +1142,9 @@ func GetExternalHwMonSensors() interface{} {
 		if sensorName == "corsairpsu" || sensorName == "corsair_psu" || sensorName == "corsair-psu" {
 			continue
 		}
+
+		hardwareKey := hwMonHardwareKey(hwmonPath, sensorName)
+		category := hwMonCategory(sensorName)
 
 		files, err := os.ReadDir(hwmonPath)
 		if err != nil {
@@ -1099,6 +1180,8 @@ func GetExternalHwMonSensors() interface{} {
 
 				sensors = append(sensors,
 					HwMonSensor{
+						ID:         hwMonStableID(sensorName, hardwareKey, label, fileName),
+						Category:   category,
 						HwmonName:  hwmonDirName,
 						SensorName: sensorName,
 						InputName:  fileName,
