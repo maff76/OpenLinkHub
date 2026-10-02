@@ -109,14 +109,12 @@ $(document).ready(function () {
             primary += `
                 <div class="dashboard-reading temperature">
                     <span class="dashboard-reading-value" id="temp-${serial}-${device.channelId}">${device.temperatureString}</span>
-                    <span class="dashboard-reading-label">${i18n.t('txtTemperature')}</span>
                 </div>`;
         }
         if (hasSpeed) {
             primary += `
                 <div class="dashboard-reading speed">
                     <span class="dashboard-reading-value" id="speed-${serial}-${device.channelId}">${device.rpm} RPM</span>
-                    <span class="dashboard-reading-label">${i18n.t('txtSpeed')}</span>
                 </div>`;
         }
 
@@ -125,7 +123,15 @@ $(document).ready(function () {
             status += renderStatusPill("Speed profile", device.profile, "speed-profile");
         }
         if (hasRgb) {
-            status += renderStatusPill("RGB", device.rgb, "rgb-profile");
+            // Time Warp is a per-channel override. The stored RGB profile can still be
+            // "static" while Time Warp is actively driving the LEDs, so prefer the
+            // effective state on the dashboard.
+            const timewarpMap = parent.DeviceProfile?.Timewarp || parent.DeviceProfile?.timewarp || {};
+            const timewarp = timewarpMap[device.channelId] || timewarpMap[String(device.channelId)];
+            const effectiveRgb = timewarp?.Enabled === true || timewarp?.enabled === true
+                ? "Time Warp"
+                : device.rgb;
+            status += renderStatusPill("RGB", effectiveRgb, "rgb-profile");
         }
 
         // Keep less common telemetry visible without turning the overview into a control page.
@@ -202,6 +208,7 @@ $(document).ready(function () {
         }
 
         let channels = "";
+        let channelCount = 0;
         $.each(parent.devices, function (_, device) {
             const hasSpeed = device.HasSpeed === true || device.hasSpeed === true;
             const hasTemps = device.HasTemps === true || device.hasTemps === true || Number(device.temperature) > 0;
@@ -209,19 +216,21 @@ $(document).ready(function () {
                 return;
             }
             channels += renderCompactChannel(parent, device);
+            channelCount++;
         });
 
         if (!channels) {
             return "";
         }
 
+        const countClass = channelCount >= 1 && channelCount <= 12 ? ` channels-${channelCount}` : "";
         return `
             <section class="dashboard-device-section">
                 <div class="dashboard-device-heading">
                     <span>${sectionTitle}</span>
-                    <span class="dashboard-device-count">${parent.devices.length} channels</span>
+                    <span class="dashboard-device-count">${channelCount} ${channelCount === 1 ? "channel" : "channels"}</span>
                 </div>
-                <div class="dashboard-channel-grid">${channels}</div>
+                <div class="dashboard-channel-grid${countClass}">${channels}</div>
             </section>
         `;
     }
