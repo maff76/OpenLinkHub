@@ -113,7 +113,71 @@
     .dashboard-status.speed-profile .dashboard-status-value { color: #8edda4; }
     .dashboard-status.rgb-profile .dashboard-status-value { color: #aabaff; }
     .dashboard-single-device { padding: 15px 16px; }
-    #system-cards-add { margin-bottom: 24px; }
+    #system-cards-add {
+        width: 100%;
+        margin: 2px 0 24px;
+    }
+    .dashboard-device-manager {
+        width: 100%;
+        border: 1px solid rgba(255,255,255,.08);
+        border-radius: 14px;
+        background: linear-gradient(180deg, rgba(255,255,255,.035), rgba(255,255,255,.015));
+        overflow: hidden;
+    }
+    .dashboard-device-manager summary {
+        min-height: 46px;
+        padding: 0 16px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        cursor: pointer;
+        list-style: none;
+        color: rgba(225,233,241,.88);
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: .045em;
+        text-transform: uppercase;
+        user-select: none;
+    }
+    .dashboard-device-manager summary::-webkit-details-marker { display: none; }
+    .dashboard-device-manager summary::before {
+        content: "+";
+        width: 24px;
+        height: 24px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 24px;
+        border: 1px solid rgba(255,255,255,.12);
+        border-radius: 50%;
+        color: rgba(225,233,241,.9);
+        font-size: 18px;
+        font-weight: 300;
+        line-height: 1;
+    }
+    .dashboard-device-manager[open] summary {
+        border-bottom: 1px solid rgba(255,255,255,.07);
+    }
+    .dashboard-device-manager[open] summary::before {
+        content: "−";
+    }
+    .dashboard-device-manager-body {
+        display: grid;
+        grid-template-columns: minmax(240px, 1fr) auto auto;
+        gap: 10px;
+        align-items: center;
+        padding: 12px 16px;
+    }
+    .dashboard-device-manager .system-select {
+        width: 100%;
+        min-width: 0;
+        margin: 0;
+    }
+    .dashboard-device-manager .system-button {
+        min-width: 92px;
+        margin: 0;
+        white-space: nowrap;
+    }
     @media (max-width: 1100px) {
         .dashboard-channel-grid > .dashboard-channel { grid-column: span 6 !important; }
         .dashboard-channel-grid > .dashboard-channel:last-child:nth-child(odd) { grid-column: span 12 !important; }
@@ -121,6 +185,9 @@
     @media (max-width: 560px) {
         .dashboard-channel-grid > .dashboard-channel { grid-column: span 12 !important; }
         .dashboard-channel { border-right: 0; }
+        .dashboard-device-manager-body { grid-template-columns: 1fr 1fr; }
+        .dashboard-device-manager .system-select { grid-column: 1 / -1; }
+        .dashboard-device-manager .system-button { width: 100%; }
     }
 </style>
 
@@ -146,46 +213,31 @@
                 <!-- Device placeholder -->
                 <div id="system-cards" class="device-placeholder"></div>
 
-                <!-- Add new device -->
-                <div id="system-cards-add" class="col-md-2">
-                    <div class="card system-card text-center">
-                        <div class="card-body">
-                            <div class="add-device-widget">
-                                <div class="add-device-icon">
-                                    <i class="bi bi-plus-lg"></i>
-                                </div>
-                                <div class="add-device-title">
-                                    {{ $root.Lang "txtAddDeviceToDashboard" }}
-                                </div>
-                                <label class="add-device-select">
-                                    <select class="system-select" id="dashboardDeviceSelect">
-                                        <option selected disabled>{{ $root.Lang "txtSelectDevice" }}</option>
-                                        {{ range .Devices }}
-                                        {{ if eq .Hidden true }}
-                                        {{ continue }}
-                                        {{ end }}
+                <!-- Dashboard device manager -->
+                <div id="system-cards-add">
+                    <details class="dashboard-device-manager">
+                        <summary>{{ $root.Lang "txtAddDeviceToDashboard" }}</summary>
+                        <div class="dashboard-device-manager-body">
+                            <select class="system-select" id="dashboardDeviceSelect">
+                                <option selected disabled>{{ $root.Lang "txtSelectDevice" }}</option>
+                                {{ range .Devices }}
+                                {{ if eq .Hidden true }}
+                                {{ continue }}
+                                {{ end }}
 
-                                        {{ if .GetDevice }}
-                                        <option value="{{ .Serial }}">{{ .Product }}</option>
-                                        {{ end }}
-                                        {{ end }}
-                                    </select>
-                                </label>
-                                <label class="full-width">
-                                    <div class="settings-list">
-                                        <div class="settings-row">
-                                            <button class="system-button btn-accent add-device-btn addDeviceToDashboard" id="addDeviceToDashboard">
-                                                {{ $root.Lang "txtSave" }}
-                                            </button>
-                                            <button class="system-button danger add-device-btn deleteDeviceFromDashboard" id="deleteDeviceFromDashboard">
-                                                {{ $root.Lang "txtDelete" }}
-                                            </button>
-                                        </div>
-                                    </div>
-                                </label>
-                            </div>
+                                {{ if .GetDevice }}
+                                <option value="{{ .Serial }}">{{ .Product }}</option>
+                                {{ end }}
+                                {{ end }}
+                            </select>
+                            <button class="system-button btn-accent add-device-btn addDeviceToDashboard" id="addDeviceToDashboard">
+                                {{ $root.Lang "txtSave" }}
+                            </button>
+                            <button class="system-button danger add-device-btn deleteDeviceFromDashboard" id="deleteDeviceFromDashboard">
+                                {{ $root.Lang "txtDelete" }}
+                            </button>
                         </div>
-                    </div>
+                    </details>
                 </div>
             </div>
         </main>
