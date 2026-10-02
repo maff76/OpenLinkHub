@@ -3,6 +3,122 @@
 {{ template "head" . }}
 <body>
 
+<style>
+    .device-placeholder { width: 100%; }
+    .dashboard-device-section {
+        width: 100%;
+        margin: 0 0 22px;
+        border: 1px solid rgba(255,255,255,.08);
+        border-radius: 14px;
+        background: linear-gradient(180deg, rgba(255,255,255,.035), rgba(255,255,255,.015));
+        overflow: hidden;
+    }
+    .dashboard-device-heading {
+        min-height: 46px;
+        padding: 0 16px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        border-bottom: 1px solid rgba(255,255,255,.07);
+        color: rgba(225,233,241,.88);
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: .045em;
+        text-transform: uppercase;
+    }
+    .dashboard-device-count {
+        color: rgba(184,195,207,.48);
+        font-size: 10px;
+        font-weight: 500;
+        white-space: nowrap;
+    }
+    .dashboard-channel-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(205px, 1fr));
+        padding: 0 14px 14px;
+    }
+    .dashboard-channel {
+        min-width: 0;
+        padding: 14px 14px 12px;
+        border-right: 1px solid rgba(255,255,255,.065);
+        border-bottom: 1px solid rgba(255,255,255,.065);
+    }
+    .dashboard-channel-name {
+        margin-bottom: 11px;
+        color: rgba(224,232,240,.88);
+        font-size: 12px;
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .dashboard-channel-readings {
+        display: flex;
+        align-items: flex-start;
+        gap: 22px;
+        min-height: 43px;
+    }
+    .dashboard-reading {
+        display: flex;
+        flex-direction: column;
+        min-width: 70px;
+    }
+    .dashboard-reading-value {
+        color: rgba(242,246,250,.96);
+        font-family: monospace;
+        font-size: 14px;
+        font-weight: 600;
+        line-height: 1.25;
+    }
+    .dashboard-reading.temperature .dashboard-reading-value { color: #f3c52f; }
+    .dashboard-reading.speed .dashboard-reading-value { color: #6fd58b; }
+    .dashboard-reading-label {
+        margin-top: 3px;
+        color: rgba(174,187,199,.50);
+        font-size: 9px;
+        letter-spacing: .055em;
+        text-transform: uppercase;
+    }
+    .dashboard-channel-status {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 9px;
+    }
+    .dashboard-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        max-width: 100%;
+        padding: 3px 7px;
+        border: 1px solid rgba(255,255,255,.075);
+        border-radius: 999px;
+        background: rgba(255,255,255,.025);
+        font-size: 9px;
+        line-height: 1.25;
+    }
+    .dashboard-status-label { color: rgba(174,187,199,.50); text-transform: uppercase; }
+    .dashboard-status-value { color: rgba(223,231,239,.82); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .dashboard-status.speed-profile { border-color: rgba(111,213,139,.18); }
+    .dashboard-status.rgb-profile { border-color: rgba(127,151,255,.22); }
+    .dashboard-status.speed-profile .dashboard-status-value { color: #8edda4; }
+    .dashboard-status.rgb-profile .dashboard-status-value { color: #aabaff; }
+    .dashboard-single-device { padding: 15px 16px; }
+    #system-cards-add { margin-bottom: 24px; }
+    @media (min-width: 1800px) {
+        .dashboard-channel-grid { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+    }
+    @media (max-width: 900px) {
+        .dashboard-channel-grid { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+    }
+    @media (max-width: 560px) {
+        .dashboard-channel-grid { grid-template-columns: 1fr; }
+        .dashboard-channel { border-right: 0; }
+    }
+</style>
+
+
 <div class="container-fluid">
     {{ $root := . }}
     {{ $deviceList := $root.Devices }}

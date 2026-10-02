@@ -14,49 +14,132 @@
         opacity: .8;
     }
     .temperature-group + .temperature-group {
-        margin-top: 1rem;
+        margin-top: .85rem;
+    }
+    .temperature-group {
+        --temperature-accent: rgba(255, 193, 7, .9);
+        --temperature-accent-soft: rgba(255, 193, 7, .12);
+    }
+    .temperature-group-motherboard {
+        --temperature-accent: rgba(75, 192, 192, .95);
+        --temperature-accent-soft: rgba(75, 192, 192, .10);
+    }
+    .temperature-group-storage {
+        --temperature-accent: rgba(92, 184, 92, .95);
+        --temperature-accent-soft: rgba(92, 184, 92, .10);
     }
     .temperature-group-title {
-        margin: 0 0 .45rem .15rem;
+        display: flex;
+        align-items: center;
+        gap: .5rem;
+        margin: 0 0 .38rem .1rem;
+        color: rgba(235, 240, 246, .72);
         font-size: .72rem;
-        letter-spacing: .05em;
+        font-weight: 600;
+        letter-spacing: .055em;
         text-transform: uppercase;
-        opacity: .62;
+    }
+    .temperature-group-title::before {
+        content: "";
+        width: .22rem;
+        height: .85rem;
+        border-radius: 999px;
+        background: var(--temperature-accent);
+        box-shadow: 0 0 .65rem var(--temperature-accent-soft);
     }
     .temperature-compact-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-        gap: .55rem;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        overflow: hidden;
+        border: 1px solid rgba(255,255,255,.065);
+        border-radius: .72rem;
+        background: linear-gradient(180deg, rgba(255,255,255,.025), rgba(255,255,255,.012));
     }
     .temperature-compact-item {
+        position: relative;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-areas:
+            "name value"
+            "detail value";
+        align-items: center;
+        column-gap: .8rem;
         min-width: 0;
-        padding: .65rem .8rem;
-        border: 1px solid rgba(255,255,255,.07);
-        border-radius: .65rem;
-        background: rgba(255,255,255,.018);
+        min-height: 3.25rem;
+        padding: .52rem .78rem;
+    }
+    .temperature-processor-grid {
+        grid-template-columns: repeat(auto-fit, minmax(260px, 360px));
+        justify-content: start;
+    }
+    .temperature-processor-grid .temperature-compact-item {
+        min-height: 3.5rem;
+    }
+    .temperature-storage-item {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        justify-content: center;
+        gap: .22rem;
+        min-height: 3.65rem;
+    }
+    .temperature-storage-item .temperature-compact-value {
+        order: 1;
+        font-size: 1.08rem;
+    }
+    .temperature-storage-item .temperature-compact-name {
+        order: 2;
+        width: 100%;
+        overflow: visible;
+        text-overflow: clip;
+        white-space: normal;
+        line-height: 1.2;
+    }
+    .temperature-compact-item:not(:last-child)::after {
+        content: "";
+        position: absolute;
+        right: 0;
+        top: 22%;
+        bottom: 22%;
+        width: 1px;
+        background: rgba(255,255,255,.065);
     }
     .temperature-compact-value {
-        font-size: 1.15rem;
-        font-weight: 600;
-        line-height: 1.25;
+        grid-area: value;
+        color: var(--temperature-accent) !important;
+        font-size: 1rem;
+        font-weight: 650;
+        line-height: 1.15;
+        white-space: nowrap;
     }
     .temperature-compact-name,
     .temperature-compact-detail {
+        min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
     }
     .temperature-compact-name {
-        margin-top: .2rem;
-        font-size: .78rem;
+        grid-area: name;
+        margin: 0;
+        color: rgba(238, 242, 247, .9);
+        font-size: .77rem;
+        font-weight: 500;
+        line-height: 1.25;
     }
     .temperature-compact-detail {
-        margin-top: .08rem;
-        font-size: .67rem;
-        opacity: .55;
+        grid-area: detail;
+        margin-top: .12rem;
+        color: rgba(190, 199, 210, .55);
+        font-size: .64rem;
+        line-height: 1.2;
     }
     @media (min-width: 2200px) {
-        .temperature-compact-grid { grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); }
+        .temperature-compact-grid { grid-template-columns: repeat(auto-fit, minmax(195px, 1fr)); }
+    }
+    @media (max-width: 900px) {
+        .temperature-compact-grid { grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); }
+        .temperature-compact-item { padding: .5rem .65rem; }
     }
 </style>
 
@@ -65,7 +148,7 @@
 
     <div class="temperature-group">
         <div class="temperature-group-title">Processor &amp; Graphics</div>
-        <div class="temperature-compact-grid">
+        <div class="temperature-compact-grid temperature-processor-grid">
             <div class="temperature-compact-item">
                 <div id="cpu_temp" class="temperature-compact-value text-warning">{{ .CpuTemp }}</div>
                 <div class="temperature-compact-name">CPU</div>
@@ -84,7 +167,7 @@
     </div>
 
     {{ if .HwMonSensors }}
-    <div class="temperature-group">
+    <div class="temperature-group temperature-group-motherboard">
         <div class="temperature-group-title">Motherboard / System</div>
         <div class="temperature-compact-grid">
             {{ range .HwMonSensors }}
@@ -101,11 +184,11 @@
     {{ end }}
 
     {{ if .SystemInfo.Storage }}
-    <div class="temperature-group">
+    <div class="temperature-group temperature-group-storage">
         <div class="temperature-group-title">Storage</div>
         <div class="temperature-compact-grid">
             {{ range .SystemInfo.Storage }}
-            <div class="temperature-compact-item">
+            <div class="temperature-compact-item temperature-storage-item">
                 <div id="storage_temp-{{ .Key }}" class="temperature-compact-value text-warning">{{ $dash.TemperatureToString .Temperature }}</div>
                 <div class="temperature-compact-name" title="{{ .Model }}">{{ .Model }}</div>
             </div>

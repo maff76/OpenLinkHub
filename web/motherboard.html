@@ -1,6 +1,62 @@
 <!DOCTYPE html>
 <html lang="en">
 {{ template "head" . }}
+
+<style>
+/* Responsive device layout: keep controls readable without changing device behaviour. */
+.olh-device-layout {
+    display: grid;
+    grid-template-columns: minmax(250px, 300px) minmax(0, 1fr);
+    gap: 1.25rem;
+    margin-left: 0;
+    margin-right: 0;
+}
+.olh-device-layout > .olh-device-summary,
+.olh-device-layout > .olh-device-channels {
+    width: auto;
+    max-width: none;
+    padding-left: 0;
+    padding-right: 0;
+}
+.olh-channel-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1.25rem;
+    margin-left: 0;
+    margin-right: 0;
+}
+.olh-channel-grid > [class*="col-"] {
+    width: auto;
+    max-width: none;
+    padding: 0;
+}
+.olh-channel-grid .card { height: 100%; }
+.olh-channel-grid .card-header .header-left,
+.olh-channel-grid .card-header .header-right {
+    min-width: 0;
+}
+.olh-channel-grid .card-header .header-left {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.olh-channel-grid .settings-row { gap: .75rem; }
+.olh-channel-grid .settings-label { min-width: 0; }
+.olh-channel-grid .system-select.auto-width {
+    max-width: 100%;
+}
+@media (min-width: 2100px) {
+    .olh-channel-grid { grid-template-columns: repeat(auto-fit, minmax(235px, 1fr)); }
+}
+@media (max-width: 1050px) {
+    .olh-device-layout { grid-template-columns: 1fr; }
+    .olh-device-summary { max-width: 420px !important; }
+}
+@media (max-width: 640px) {
+    .olh-channel-grid { grid-template-columns: 1fr; }
+    .olh-device-summary { max-width: none !important; }
+}
+</style>
 <body>
 
 <div class="container-fluid">
@@ -24,8 +80,8 @@
             {{ end }}
 
             <!-- Motherboard -->
-            <div class="row g-4 mb-4 align-items-start">
-                <div class="col-md-2">
+            <div class="row g-4 mb-4 align-items-start olh-device-layout">
+                <div class="col-md-2 olh-device-summary">
                     <div class="card system-card text-center">
                         <div class="card-header">
                             {{ .Device.Product }}
@@ -89,9 +145,9 @@
                         </div>
                     </div>
                 </div>
-                <div class="col-md-10">
+                <div class="col-md-10 olh-device-channels">
                     <!-- PWM Channels -->
-                    <div class="row g-4 mb-4 align-items-start">
+                    <div class="row g-4 mb-4 align-items-start olh-channel-grid">
                         {{ range $device := $devices }}
                         <div class="col-md-2">
                             <div class="card system-card text-center" data-info="{{ $device.ChannelId }}">
