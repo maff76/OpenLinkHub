@@ -34,6 +34,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Response contains data what is sent back to a client
@@ -55,6 +56,13 @@ type Header struct {
 
 var headers []Header
 var server = &http.Server{}
+var restartHandler func() error
+
+// SetRestartHandler registers the controller-owned restart callback. Keeping
+// shutdown/exec in controller avoids a server -> controller import cycle.
+func SetRestartHandler(handler func() error) {
+	restartHandler = handler
+}
 
 // Send will process response and send it back to a client
 func (r *Response) Send(w http.ResponseWriter) {
@@ -96,6 +104,34 @@ func getSystemInfo(w http.ResponseWriter, _ *http.Request) {
 		Data:   systeminfo.GetInfo(),
 	}
 	resp.Send(w)
+}
+
+// restartOpenLinkHub acknowledges the request before restarting so the WebUI
+// can begin polling for the service to return.
+func restartOpenLinkHub(w http.ResponseWriter, _ *http.Request) {
+	if restartHandler == nil {
+		resp := &Response{
+			Code:    http.StatusServiceUnavailable,
+			Status:  0,
+			Message: "OpenLinkHub restart handler is not available",
+		}
+		resp.Send(w)
+		return
+	}
+
+	resp := &Response{
+		Code:    http.StatusOK,
+		Status:  1,
+		Message: "OpenLinkHub is restarting",
+	}
+	resp.Send(w)
+
+	go func() {
+		time.Sleep(250 * time.Millisecond)
+		if err := restartHandler(); err != nil {
+			logger.Log(logger.Fields{"error": err}).Error("Unable to restart OpenLinkHub")
+		}
+	}()
 }
 
 // getCpuTemperature will return current cpu temperature in string format
@@ -2660,6 +2696,7 @@ func setRoutes() http.Handler {
 	handleFunc(r, "/api/media/", http.MethodGet, mediaPlaybackControl)
 
 	// POST
+	handleFunc(r, "/api/restart", http.MethodPost, restartOpenLinkHub)
 	handleFunc(r, "/api/temperatures/new", http.MethodPost, newTemperatureProfile)
 	handleFunc(r, "/api/temperatures/setLiquidTemperatureSource", http.MethodPost, setLiquidTemperatureSource)
 	handleFunc(r, "/api/speed", http.MethodPost, setDeviceSpeed)
