@@ -106,6 +106,16 @@ func getSystemInfo(w http.ResponseWriter, _ *http.Request) {
 	resp.Send(w)
 }
 
+// getHwmonTemperatures returns host hwmon temperature sensors with stable IDs.
+func getHwmonTemperatures(w http.ResponseWriter, _ *http.Request) {
+	resp := &Response{
+		Code:   http.StatusOK,
+		Status: 1,
+		Data:   temperatures.GetExternalHwMonSensors(),
+	}
+	resp.Send(w)
+}
+
 // restartOpenLinkHub acknowledges the request before restarting so the WebUI
 // can begin polling for the service to return.
 func restartOpenLinkHub(w http.ResponseWriter, _ *http.Request) {
@@ -2747,6 +2757,7 @@ func setRoutes() http.Handler {
 	// GET
 	handleFunc(r, "/api/", http.MethodGet, homePage)
 	handleFunc(r, "/api/systemInfo", http.MethodGet, getSystemInfo)
+	handleFunc(r, "/api/hwmonTemps", http.MethodGet, getHwmonTemperatures)
 	r.HandleFunc("/api/config/manual", configManual)
 	r.HandleFunc("/api/config/editable", configEditable)
 	handleFunc(r, "/api/cpuTemp", http.MethodGet, getCpuTemperature)
