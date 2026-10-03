@@ -1052,14 +1052,56 @@ func hwMonCategory(sensorName string) string {
 	}
 }
 
-// hwMonHardwareKey extracts a stable hardware identifier from the resolved sysfs path.
-// It prefers PCI BDF (0000:00:1f.4) and I2C device (0-0050) components and never uses hwmonX.
+// hwMonHardwareKey extracts a stable hardware identifier from sysfs.
+// It never uses hwmonX because those indexes can change after reboot.
+//
+// drivetemp needs special handling: multiple SATA disks sit behind the same PCI
+// controller, so the controller BDF is not unique. Prefer the kernel-cached
+// SCSI/ATA WWID when available, then the SCSI H:C:T:L address as a fallback.
+// Reading these sysfs attributes does not invoke smartctl or issue a SMART query.
 func hwMonHardwareKey(hwmonPath, sensorName string) string {
+	if strings.EqualFold(sensorName, "drivetemp") {
+		wwidPaths := []string{
+			filepath.Join(hwmonPath, "device", "wwid"),
+			filepath.Join(hwmonPath, "device", "device", "wwid"),
+		}
+		for _, wwidPath := range wwidPaths {
+			if data, err := os.ReadFile(wwidPath); err == nil {
+				if wwid := strings.TrimSpace(string(data)); wwid != "" {
+					return wwid
+				}
+			}
+		}
+	}
+
 	resolved, err := filepath.EvalSymlinks(hwmonPath)
 	if err != nil {
 		resolved = hwmonPath
 	}
 	parts := strings.Split(filepath.Clean(resolved), string(os.PathSeparator))
+
+	// For drivetemp, prefer the SCSI address (H:C:T:L) over the shared SATA
+	// controller BDF when no WWID was exposed.
+	if strings.EqualFold(sensorName, "drivetemp") {
+		for i := len(parts) - 1; i >= 0; i-- {
+			part := parts[i]
+			fields := strings.Split(part, ":")
+			if len(fields) != 4 {
+				continue
+			}
+			valid := true
+			for _, field := range fields {
+				if _, err := strconv.Atoi(field); err != nil {
+					valid = false
+					break
+				}
+			}
+			if valid {
+				return "scsi-" + part
+			}
+		}
+	}
+
 	for i := len(parts) - 1; i >= 0; i-- {
 		part := parts[i]
 		if strings.HasPrefix(part, "hwmon") {
