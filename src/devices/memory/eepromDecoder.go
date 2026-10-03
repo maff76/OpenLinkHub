@@ -71,7 +71,7 @@ func parseSPDModule(path string, spd []byte) RAMModule {
 }
 
 // findEEPROMs traverse the hwmon directory structure to find EEPROMs
-func findEEPROMs() ([]string, error) {
+func findEEPROMs(i2cBus int) ([]string, error) {
 	var paths []string
 
 	entries, err := os.ReadDir(hwmonRoot)
@@ -87,7 +87,21 @@ func findEEPROMs() ([]string, error) {
 		}
 		if strings.TrimSpace(string(nameBytes)) == "spd5118" {
 			eepromPath := filepath.Join(hwmonRoot, entry.Name(), "device", "eeprom")
-			paths = append(paths, eepromPath)
+			resolvedPath, err := filepath.EvalSymlinks(eepromPath)
+			if err != nil {
+				continue
+			}
+			busPrefix := fmt.Sprintf("%d-", i2cBus)
+			onBus := false
+			for _, part := range strings.Split(filepath.Clean(resolvedPath), string(os.PathSeparator)) {
+				if strings.HasPrefix(part, busPrefix) {
+					onBus = true
+					break
+				}
+			}
+			if onBus {
+				paths = append(paths, eepromPath)
+			}
 		}
 	}
 
@@ -113,8 +127,8 @@ func decodeEEPROMs(paths []string) []RAMModule {
 }
 
 // NewMemoryModules finds and decodes all memory modules in the system.
-func NewMemoryModules() []RAMModule {
-	paths, err := findEEPROMs()
+func NewMemoryModules(i2cBus int) []RAMModule {
+	paths, err := findEEPROMs(i2cBus)
 	if err != nil {
 		// If no EEPROMs are found, return an empty slice and the error
 		return nil

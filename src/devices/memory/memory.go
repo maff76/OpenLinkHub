@@ -683,7 +683,7 @@ func (d *Device) getDevices() int {
 
 	// DDR5
 	if d.RuntimeMemoryType == 5 {
-		modules = NewMemoryModules()
+		modules = NewMemoryModules(d.getI2cSensor())
 		if config.GetConfig().RamTempViaHwmon {
 			hwmonTemperatureFiles = d.getHwMonTemperatureFiles("spd5118")
 			if d.Debug {
