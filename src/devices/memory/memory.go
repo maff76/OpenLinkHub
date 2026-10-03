@@ -659,7 +659,15 @@ func (d *Device) getDevices() int {
 		}
 	}
 
-	for i := 0; i < maximumRegisters; i++ {
+	registerCount := maximumRegisters
+	if d.RuntimeMemoryType == 5 && config.GetConfig().RamTempViaHwmon && len(modules) > 0 {
+		// SPD5118 is authoritative for populated DDR5 DIMMs when hwmon monitoring is enabled.
+		// Limit discovery to the decoded modules instead of probing unused Corsair RGB
+		// controller addresses, while still probing each populated DIMM for RGB support.
+		registerCount = min(len(modules), maximumRegisters)
+	}
+
+	for i := 0; i < registerCount; i++ {
 		if d.Debug {
 			logger.Log(logger.Fields{"address": colorAddresses[i]}).Info("Probing address")
 		}
@@ -673,8 +681,12 @@ func (d *Device) getDevices() int {
 		if err != nil {
 			if !slices.Contains(config.GetConfig().EnhancementKits, colorAddresses[i]) {
 				if !slices.Contains(config.GetConfig().MemoryRegisterOverride, colorAddresses[i]) {
-					logger.Log(logger.Fields{"register": colorAddresses[i], "err": err}).Info("No such register found. Skipping...")
-					continue
+					if d.RuntimeMemoryType == 5 && config.GetConfig().RamTempViaHwmon && moduleIndex < len(modules) {
+						logger.Log(logger.Fields{"register": colorAddresses[i]}).Info("No RGB controller found, continuing for hwmon temperature monitoring")
+					} else {
+						logger.Log(logger.Fields{"register": colorAddresses[i], "err": err}).Info("No such register found. Skipping...")
+						continue
+					}
 				}
 			} else {
 				logger.Log(logger.Fields{"register": colorAddresses[i]}).Info("Found Light Enhancement Kit in configuration")

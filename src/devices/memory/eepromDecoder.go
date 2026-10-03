@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -118,7 +119,24 @@ func NewMemoryModules() []RAMModule {
 		// If no EEPROMs are found, return an empty slice and the error
 		return nil
 	}
-	return decodeEEPROMs(paths)
+
+	modules := decodeEEPROMs(paths)
+	// hwmon numbers are assigned dynamically and must not define DIMM order.
+	// Keep DDR5 modules in physical SPD/I2C address order (0x50, 0x51, ...)
+	// so memory.go associates metadata and temperatures deterministically.
+	sort.SliceStable(modules, func(i, j int) bool {
+		if modules[i].SPDAddress == modules[j].SPDAddress {
+			return modules[i].EEPROMPath < modules[j].EEPROMPath
+		}
+		if modules[i].SPDAddress == "" {
+			return false
+		}
+		if modules[j].SPDAddress == "" {
+			return true
+		}
+		return modules[i].SPDAddress < modules[j].SPDAddress
+	})
+	return modules
 }
 
 /*
