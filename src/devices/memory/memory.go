@@ -635,15 +635,48 @@ func (d *Device) getTemperature(filePath string) (float32, error) {
 
 }
 
+// memorySlotFromAddress maps a DDR5 SPD/I2C address (0x50..0x57) to a
+// physical memory slot index.
+func memorySlotFromAddress(address string) (int, bool) {
+	value, err := strconv.ParseUint(strings.TrimPrefix(strings.ToLower(strings.TrimSpace(address)), "0x"), 16, 8)
+	if err != nil || value < 0x50 || value > 0x57 {
+		return 0, false
+	}
+	return int(value - 0x50), true
+}
+
+// memorySlotFromConfiguredAddress accepts both the physical SPD address
+// (0x50..0x57) and the Corsair DDR5 RGB-controller address (0x18..0x1f).
+func memorySlotFromConfiguredAddress(address byte) (int, bool) {
+	if address >= 0x50 && address <= 0x57 {
+		return int(address - 0x50), true
+	}
+	if address >= 0x18 && address <= 0x1f {
+		return int(address - 0x18), true
+	}
+	return 0, false
+}
+
+func configuredMemorySlotContains(addresses config.ByteArray, slot int) bool {
+	// Preserve legacy direct register configuration for both DDR4 and DDR5.
+	if slot >= 0 && slot < len(colorAddresses) && slices.Contains(addresses, colorAddresses[slot]) {
+		return true
+	}
+	for _, address := range addresses {
+		if configuredSlot, ok := memorySlotFromConfiguredAddress(address); ok && configuredSlot == slot {
+			return true
+		}
+	}
+	return false
+}
+
 // getDevices will get a list of DIMMs
 func (d *Device) getDevices() int {
 	var devices = make(map[int]*Devices)
 	var modules []RAMModule
 	var hwmonTemperatureFiles []string
-	hwmonIndex := 0
 	dmiDevices := getDIMIMemoryDevices()
 	dmiIndex := 0
-	moduleIndex := 0
 	if d.Debug {
 		logger.Log(logger.Fields{"count": len(dmiDevices)}).Info("Detected populated SMBIOS memory devices")
 	}
@@ -659,29 +692,67 @@ func (d *Device) getDevices() int {
 		}
 	}
 
-	registerCount := maximumRegisters
-	if d.RuntimeMemoryType == 5 && config.GetConfig().RamTempViaHwmon && len(modules) > 0 {
-		// SPD5118 is authoritative for populated DDR5 DIMMs when hwmon monitoring is enabled.
-		// Limit discovery to the decoded modules instead of probing unused Corsair RGB
-		// controller addresses, while still probing each populated DIMM for RGB support.
-		registerCount = min(len(modules), maximumRegisters)
+	// DDR5 + SPD5118 discovery is slot-address driven. A decoded SPD address
+	// identifies the physical slot (0x50..0x57), which maps to the Corsair RGB
+	// controller register at the same slot offset (0x18..0x1f). This preserves
+	// sparse population such as 0x50 + 0x52 instead of assuming the first N slots.
+	moduleBySlot := make(map[int]RAMModule)
+	hwmonBySlot := make(map[int]string)
+	discoverySlots := make(map[int]bool)
+	if d.RuntimeMemoryType == 5 && config.GetConfig().RamTempViaHwmon {
+		for _, module := range modules {
+			if slot, ok := memorySlotFromAddress(module.SPDAddress); ok {
+				moduleBySlot[slot] = module
+			}
+		}
+	}
+	// Only switch away from legacy probing when at least one decoded module has
+	// a usable physical SPD address. If address decoding ever fails, retain the
+	// established full-register scan rather than accidentally hiding memory.
+	addressDrivenDDR5 := d.RuntimeMemoryType == 5 && config.GetConfig().RamTempViaHwmon && len(moduleBySlot) > 0
+	if addressDrivenDDR5 {
+		for slot := range moduleBySlot {
+			discoverySlots[slot] = true
+		}
+		for _, path := range hwmonTemperatureFiles {
+			if slot, ok := memorySlotFromAddress(i2cAddressFromPath(path)); ok {
+				hwmonBySlot[slot] = path
+			}
+		}
+		// Keep explicit configuration additive. Accept either the physical SPD
+		// address (0x50..0x57, as documented for enhancement kits) or the
+		// corresponding RGB controller address (0x18..0x1f).
+		for _, address := range config.GetConfig().EnhancementKits {
+			if slot, ok := memorySlotFromConfiguredAddress(address); ok {
+				discoverySlots[slot] = true
+				d.setEnhancementKit(colorAddresses[slot])
+			}
+		}
+		for _, address := range config.GetConfig().MemoryRegisterOverride {
+			if slot, ok := memorySlotFromConfiguredAddress(address); ok {
+				discoverySlots[slot] = true
+			}
+		}
 	}
 
-	for i := 0; i < registerCount; i++ {
+	for i := 0; i < maximumRegisters; i++ {
+		if addressDrivenDDR5 && !discoverySlots[i] {
+			continue
+		}
 		if d.Debug {
 			logger.Log(logger.Fields{"address": colorAddresses[i]}).Info("Probing address")
 		}
 
-		if slices.Contains(config.GetConfig().EnhancementKits, colorAddresses[i]) {
+		if configuredMemorySlotContains(config.GetConfig().EnhancementKits, i) {
 			d.setEnhancementKit(colorAddresses[i])
 		}
 
 		// Probe for register
 		_, err := smbus.ReadRegister(d.dev.File, colorAddresses[i], 0x00)
 		if err != nil {
-			if !slices.Contains(config.GetConfig().EnhancementKits, colorAddresses[i]) {
-				if !slices.Contains(config.GetConfig().MemoryRegisterOverride, colorAddresses[i]) {
-					if d.RuntimeMemoryType == 5 && config.GetConfig().RamTempViaHwmon && moduleIndex < len(modules) {
+			if !configuredMemorySlotContains(config.GetConfig().EnhancementKits, i) {
+				if !configuredMemorySlotContains(config.GetConfig().MemoryRegisterOverride, i) {
+					if addressDrivenDDR5 {
 						logger.Log(logger.Fields{"register": colorAddresses[i]}).Info("No RGB controller found, continuing for hwmon temperature monitoring")
 					} else {
 						logger.Log(logger.Fields{"register": colorAddresses[i], "err": err}).Info("No such register found. Skipping...")
@@ -699,12 +770,19 @@ func (d *Device) getDevices() int {
 		}
 
 		memorySku := ""
-		if moduleIndex < len(modules) {
-			// Use the SKU decoded from the SPD belonging to this DIMM.
-			memorySku = strings.TrimSpace(modules[moduleIndex].SKU)
+		module, hasModule := moduleBySlot[i]
+		if addressDrivenDDR5 && hasModule {
+			// Use the SKU decoded from the SPD belonging to this physical slot.
+			memorySku = strings.TrimSpace(module.SKU)
+		} else if !addressDrivenDDR5 && i < len(modules) {
+			// Legacy fallback when SPD-address-driven discovery is not active.
+			module = modules[i]
+			hasModule = true
+			memorySku = strings.TrimSpace(module.SKU)
 		}
-		if len(memorySku) < 1 && dmiIndex < len(dmiDevices) {
+		if len(memorySku) < 1 && dmiIndex < len(dmiDevices) && !d.getEnhancementKit(colorAddresses[i]) {
 			// SMBIOS part number is a useful per-DIMM fallback when EEPROM decoding is unavailable.
+			// Enhancement kits are not physical memory and must never consume DMI metadata.
 			memorySku = strings.TrimSpace(dmiDevices[dmiIndex].PartNumber)
 			if len(memorySku) > 0 && d.Debug {
 				logger.Log(logger.Fields{"register": colorAddresses[i], "sku": memorySku}).Info("Using SMBIOS memory part number fallback")
@@ -799,8 +877,8 @@ func (d *Device) getDevices() int {
 						Label:             label,
 						RGB:               rgbProfile,
 					}
-					if moduleIndex < len(modules) {
-						device.I2CAddress = modules[moduleIndex].SPDAddress
+					if hasModule {
+						device.I2CAddress = module.SPDAddress
 					}
 
 					// Enrich the discovered DIMM with SMBIOS Type 17 metadata.
@@ -836,10 +914,6 @@ func (d *Device) getDevices() int {
 						device.LogicalSize = dmi.LogicalSize
 						dmiIndex++
 					}
-					if moduleIndex < len(modules) && !d.getEnhancementKit(colorAddresses[i]) {
-						moduleIndex++
-					}
-
 					if len(d.SkuLine) < 1 {
 						d.SkuLine = metadata.Name
 					}
@@ -855,8 +929,12 @@ func (d *Device) getDevices() int {
 					if config.GetConfig().RamTempViaHwmon {
 						if !d.getEnhancementKit(colorAddresses[i]) {
 							if d.RuntimeMemoryType == 5 {
-								if hwmonIndex < len(hwmonTemperatureFiles) {
-									hwmonTemperatureFile := hwmonTemperatureFiles[hwmonIndex]
+								hwmonTemperatureFile, ok := hwmonBySlot[i]
+								if !addressDrivenDDR5 && i < len(hwmonTemperatureFiles) {
+									hwmonTemperatureFile = hwmonTemperatureFiles[i]
+									ok = true
+								}
+								if ok {
 									device.HwmonPath = hwmonTemperatureFile
 									if address := i2cAddressFromPath(hwmonTemperatureFile); len(address) > 0 {
 										device.I2CAddress = address
@@ -869,7 +947,6 @@ func (d *Device) getDevices() int {
 									} else {
 										logger.Log(logger.Fields{"channel": i, "path": hwmonTemperatureFile, "error": err}).Warn("Unable to read memory hwmon temperature")
 									}
-									hwmonIndex++
 								} else {
 									logger.Log(logger.Fields{"channel": i}).Warn("No hwmon temperature sensor available for memory device")
 								}
