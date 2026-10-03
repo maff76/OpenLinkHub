@@ -682,7 +682,7 @@
         "txtNormal": "Normal",
         "txtFast": "Fast",
         "txtUnableToUpdateHardwareLight": "Unable to update device Hardware Light",
-        "txtHardwareLightUpdated": "Device Hardware Light is successfully updated"
-    },
-    "txtSpeedProfileBiosMode": "Unable to apply speed profile while fan is in BIOS mode. Change the operating mode to PWM first."
+        "txtHardwareLightUpdated": "Device Hardware Light is successfully updated",
+        "txtSpeedProfileBiosMode": "Unable to apply speed profile while fan is in BIOS mode. Change the operating mode to PWM first."
+    }
 }

@@ -134,6 +134,99 @@ func restartOpenLinkHub(w http.ResponseWriter, _ *http.Request) {
 	}()
 }
 
+// configManual serves the manual fan-control setting from a single route.
+// GET reads the current value; POST validates and persists a new value.
+func configManual(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		resp := &Response{
+			Code:   http.StatusOK,
+			Status: 1,
+			Data: map[string]bool{
+				"manual": config.GetConfig().Manual,
+			},
+		}
+		resp.Send(w)
+	case http.MethodPost:
+		var request struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			(&Response{
+				Code:    http.StatusBadRequest,
+				Status:  0,
+				Message: "Unable to validate manual fan control setting",
+			}).Send(w)
+			return
+		}
+
+		if config.UpdateManual(request.Enabled) != 1 {
+			(&Response{
+				Code:    http.StatusInternalServerError,
+				Status:  0,
+				Message: "Unable to update manual fan control setting",
+			}).Send(w)
+			return
+		}
+
+		(&Response{
+			Code:    http.StatusOK,
+			Status:  1,
+			Message: "Manual fan control setting updated. Restart OpenLinkHub to apply the change.",
+			Data: map[string]bool{
+				"manual": config.GetConfig().Manual,
+			},
+		}).Send(w)
+	default:
+		http.Error(w, language.GetValue("txtMethodNotAllowed"), http.StatusMethodNotAllowed)
+	}
+}
+
+// configEditable serves the safe, user-facing OpenLinkHub configuration subset.
+// GET returns the persisted values; POST validates and saves the replacement set.
+func configEditable(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		(&Response{
+			Code:   http.StatusOK,
+			Status: 1,
+			Data: map[string]interface{}{
+				"settings": config.GetEditableSettings(),
+			},
+		}).Send(w)
+	case http.MethodPost:
+		var settings config.EditableSettings
+		if err := json.NewDecoder(r.Body).Decode(&settings); err != nil {
+			(&Response{
+				Code:    http.StatusBadRequest,
+				Status:  0,
+				Message: "Unable to validate OpenLinkHub configuration",
+			}).Send(w)
+			return
+		}
+
+		if err := config.UpdateEditableSettings(settings); err != nil {
+			(&Response{
+				Code:    http.StatusBadRequest,
+				Status:  0,
+				Message: err.Error(),
+			}).Send(w)
+			return
+		}
+
+		(&Response{
+			Code:    http.StatusOK,
+			Status:  1,
+			Message: "OpenLinkHub configuration saved. Restart OpenLinkHub to apply the change.",
+			Data: map[string]interface{}{
+				"settings": config.GetEditableSettings(),
+			},
+		}).Send(w)
+	default:
+		http.Error(w, language.GetValue("txtMethodNotAllowed"), http.StatusMethodNotAllowed)
+	}
+}
+
 // getCpuTemperature will return current cpu temperature in string format
 func getCpuTemperature(w http.ResponseWriter, _ *http.Request) {
 	resp := &Response{
@@ -2654,6 +2747,8 @@ func setRoutes() http.Handler {
 	// GET
 	handleFunc(r, "/api/", http.MethodGet, homePage)
 	handleFunc(r, "/api/systemInfo", http.MethodGet, getSystemInfo)
+	r.HandleFunc("/api/config/manual", configManual)
+	r.HandleFunc("/api/config/editable", configEditable)
 	handleFunc(r, "/api/cpuTemp", http.MethodGet, getCpuTemperature)
 	handleFunc(r, "/api/cpuTemp/clean", http.MethodGet, getCpuTemperatureClean)
 	handleFunc(r, "/api/cpuLoad", http.MethodGet, getCpuLoad)
