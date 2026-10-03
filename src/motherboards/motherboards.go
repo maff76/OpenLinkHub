@@ -156,9 +156,9 @@ func discoverMotherboard(legacy *Motherboard) (*Motherboard, string) {
 			continue
 		}
 		chip := strings.TrimSpace(string(nameBytes))
-		if !isLikelyMotherboardFanChip(chip) {
-			continue
-		}
+		// A complete fanN_input + pwmN + pwmN_enable mapping is the capability
+		// test. Do not require a pre-approved controller name: this lets new
+		// hwmon-compatible Super-I/O drivers work without a code/database update.
 		headers := discoverHeaders(path, chip, legacy)
 		if len(headers) == 0 {
 			continue
@@ -200,17 +200,6 @@ func discoverMotherboard(legacy *Motherboard) (*Motherboard, string) {
 		return candidates[i].board.Chip < candidates[j].board.Chip
 	})
 	return candidates[0].board, candidates[0].path
-}
-
-func isLikelyMotherboardFanChip(chip string) bool {
-	name := strings.ToLower(strings.TrimSpace(chip))
-	prefixes := []string{"nct", "it86", "it87", "w836", "f718", "sch56", "asus", "gigabyte"}
-	for _, prefix := range prefixes {
-		if strings.HasPrefix(name, prefix) {
-			return true
-		}
-	}
-	return false
 }
 
 func discoverHeaders(path, chip string, legacy *Motherboard) map[int]Headers {
@@ -266,9 +255,12 @@ func discoverHeaders(path, chip string, legacy *Motherboard) map[int]Headers {
 }
 
 func headerModesForChip(chip string) map[int]string {
-	// Linux hwmon convention uses 1 for manual PWM and commonly 2 for an
-	// automatic/firmware-controlled mode. nct679x exposes Smart Fan as mode 5.
-	if strings.HasPrefix(chip, "nct679") {
+	// pwmN_enable values are driver-defined. Linux hwmon commonly uses 1 for
+	// manual PWM and 2 for automatic/firmware control. The nct679x family uses
+	// Smart Fan mode 5. Board-specific JSON remains available as an override
+	// when a driver exposes different semantics.
+	name := strings.ToLower(strings.TrimSpace(chip))
+	if strings.HasPrefix(name, "nct679") {
 		return map[int]string{1: "PWM", 5: "BIOS"}
 	}
 	return map[int]string{1: "PWM", 2: "BIOS"}

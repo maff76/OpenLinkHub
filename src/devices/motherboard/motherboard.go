@@ -457,7 +457,9 @@ func (d *Device) UpdateSpeedProfile(channelId int, profile string) uint8 {
 	}
 
 	if motherboards.GetMotherboardHeaderMode(channelId) == d.getBiosOperatingMode(channelId) {
-		return 0
+		// The profile exists, but OpenLinkHub must not silently take a header
+		// away from firmware/BIOS control.
+		return 7
 	}
 
 	// If the profile is liquid temperature, check for the presence of AIOs
@@ -509,6 +511,12 @@ func (d *Device) UpdateSpeedProfileBulk(channelIds []int, profile string) uint8 
 	profiles := temperatures.GetTemperatureProfile(profile)
 	if profiles == nil {
 		return 0
+	}
+
+	for _, channelId := range channelIds {
+		if motherboards.GetMotherboardHeaderMode(channelId) == d.getBiosOperatingMode(channelId) {
+			return 7
+		}
 	}
 
 	// If the profile is liquid temperature, check for the presence of AIOs

@@ -585,6 +585,8 @@ func ProcessChangeSpeed(r *http.Request) *Payload {
 			return &Payload{Message: language.GetValue("txtSpeedProfileNoTemperatureData"), Code: http.StatusOK, Status: 0}
 		case 6:
 			return &Payload{Message: language.GetValue("txtSpeedProfileNoPSU"), Code: http.StatusOK, Status: 0}
+		case 7:
+			return &Payload{Message: language.GetValue("txtSpeedProfileBiosMode"), Code: http.StatusOK, Status: 0}
 		}
 	}
 	return &Payload{Message: language.GetValue("txtUnableToApplySpeedProfile"), Code: http.StatusOK, Status: 0}
