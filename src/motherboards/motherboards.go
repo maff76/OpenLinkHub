@@ -204,7 +204,7 @@ func discoverMotherboard(legacy *Motherboard) (*Motherboard, string) {
 		logger.Log(logger.Fields{
 			"chip": chip, "path": path, "headers": len(headers),
 			"labeledHeaders": labeled, "platformDevice": platformPath, "score": score,
-		}).Info("Motherboard fan-control candidate discovered")
+		}).Debug("Motherboard fan-control candidate discovered")
 	}
 	if len(candidates) == 0 {
 		return nil, ""
@@ -342,7 +342,7 @@ func logDiscoveredHeaders(board *Motherboard, path string) {
 			"label":      header.HeaderLabel,
 			"hwmonPath":  path,
 			"controller": board.Chip,
-		}).Info("Motherboard fan header discovered")
+		}).Debug("Motherboard fan header discovered")
 	}
 }
 

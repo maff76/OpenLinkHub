@@ -71,6 +71,7 @@ type Configuration struct {
 	ResumeDelay               int       `json:"resumeDelay"`
 	LogFile                   string    `json:"logFile"`
 	LogLevel                  string    `json:"logLevel"`
+	LogRetentionDays          int       `json:"logRetentionDays"`
 	EnhancementKits           ByteArray `json:"enhancementKits"`
 	TemperatureOffset         int       `json:"temperatureOffset"`
 	AMDGpuIndex               int       `json:"amdGpuIndex"`
@@ -96,6 +97,7 @@ var (
 		"memorySku":                 "",
 		"resumeDelay":               15000,
 		"logLevel":                  "info",
+		"logRetentionDays":          14,
 		"logFile":                   "",
 		"enhancementKits":           make([]byte, 0),
 		"temperatureOffset":         0,
@@ -164,6 +166,7 @@ func UpdateManual(enabled bool) uint8 {
 type EditableSettings struct {
 	Debug                     bool      `json:"debug"`
 	LogLevel                  string    `json:"logLevel"`
+	LogRetentionDays          int       `json:"logRetentionDays"`
 	MemorySku                 string    `json:"memorySku"`
 	MemoryRegisterOverride    ByteArray `json:"memoryRegisterOverride"`
 	GraphProfiles             bool      `json:"graphProfiles"`
@@ -184,6 +187,7 @@ func GetEditableSettings() EditableSettings {
 	return EditableSettings{
 		Debug:                     configuration.Debug,
 		LogLevel:                  configuration.LogLevel,
+		LogRetentionDays:          configuration.LogRetentionDays,
 		MemorySku:                 configuration.MemorySku,
 		MemoryRegisterOverride:    append(ByteArray(nil), configuration.MemoryRegisterOverride...),
 		GraphProfiles:             configuration.GraphProfiles,
@@ -206,6 +210,9 @@ func UpdateEditableSettings(settings EditableSettings) error {
 	if !validLogLevels[settings.LogLevel] {
 		return fmt.Errorf("log level must be debug, info, warn, or error")
 	}
+	if settings.LogRetentionDays < 0 || settings.LogRetentionDays > 3650 {
+		return fmt.Errorf("log retention must be between 0 and 3650 days")
+	}
 	if len(settings.MemoryRegisterOverride) > 32 {
 		return fmt.Errorf("memory register override cannot contain more than 32 addresses")
 	}
@@ -221,6 +228,7 @@ func UpdateEditableSettings(settings EditableSettings) error {
 
 	configuration.Debug = settings.Debug
 	configuration.LogLevel = settings.LogLevel
+	configuration.LogRetentionDays = settings.LogRetentionDays
 	configuration.MemorySku = settings.MemorySku
 	configuration.MemoryRegisterOverride = append(ByteArray(nil), settings.MemoryRegisterOverride...)
 	configuration.GraphProfiles = settings.GraphProfiles
@@ -278,6 +286,7 @@ func upgradeFile(cfg string) {
 			MemorySku:                 "",
 			ResumeDelay:               15000,
 			LogLevel:                  "info",
+			LogRetentionDays:          14,
 			LogFile:                   "",
 			EnhancementKits:           make(ByteArray, 0),
 			TemperatureOffset:         0,

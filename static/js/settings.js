@@ -213,6 +213,7 @@ $(document).ready(function () {
     function applyEditableConfig(settings) {
         $('#cfgDebug').prop('checked', settings.debug === true);
         $('#cfgLogLevel').val(settings.logLevel || 'info');
+        $('#cfgLogRetentionDays').val(Number.isInteger(settings.logRetentionDays) ? settings.logRetentionDays : 14);
         $('#cfgMemorySku').val(settings.memorySku || '');
         $('#cfgMemoryRegisterOverride').val((settings.memoryRegisterOverride || []).map(function(value) { return '0x' + Number(value).toString(16).toUpperCase().padStart(2, '0'); }).join(', '));
         $('#cfgGraphProfiles').prop('checked', settings.graphProfiles === true);
@@ -258,6 +259,7 @@ $(document).ready(function () {
         const settings = {
             debug: $('#cfgDebug').is(':checked'),
             logLevel: $('#cfgLogLevel').val(),
+            logRetentionDays: parseInt($('#cfgLogRetentionDays').val(), 10),
             memorySku: $('#cfgMemorySku').val().trim(),
             memoryRegisterOverride: memoryRegisterOverride,
             graphProfiles: $('#cfgGraphProfiles').is(':checked'),
