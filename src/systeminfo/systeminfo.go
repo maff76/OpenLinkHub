@@ -69,9 +69,15 @@ type KernelData struct {
 }
 
 type MotherboardData struct {
-	Model    string
-	BIOS     string
-	BIOSDate string
+	Manufacturer       string `json:"manufacturer"`
+	Model              string `json:"model"`
+	Version            string `json:"version"`
+	BIOSVendor         string `json:"biosVendor"`
+	BIOS               string `json:"biosVersion"`
+	BIOSDate           string `json:"biosDate"`
+	SystemManufacturer string `json:"systemManufacturer"`
+	SystemProduct      string `json:"systemProduct"`
+	SystemVersion      string `json:"systemVersion"`
 }
 
 type SystemInfo struct {
@@ -395,32 +401,38 @@ func (si *SystemInfo) GetStorageData() {
 }
 
 // GetBoardData will return motherboard details
+func readDMIValue(name string) string {
+	data, err := os.ReadFile(filepath.Join("/sys/class/dmi/id", name))
+	if err != nil {
+		return ""
+	}
+	value := strings.TrimSpace(string(data))
+	switch strings.ToLower(value) {
+	case "", "unknown", "none", "not specified", "to be filled by o.e.m.", "default string":
+		return ""
+	default:
+		return value
+	}
+}
+
+// GetBoardData reads static SMBIOS/DMI identity and firmware metadata exposed
+// by the kernel. Missing fields are tolerated individually so one unavailable
+// sysfs value never discards the rest of the system information.
 func (si *SystemInfo) GetBoardData() {
-	board := &MotherboardData{}
-
-	// Motherboard model
-	f, err := os.ReadFile("/sys/class/dmi/id/product_name")
-	if err != nil {
-		logger.Log(logger.Fields{"error": err}).Error("Unable to read kernel ostype")
-		return
+	board := &MotherboardData{
+		Manufacturer:       readDMIValue("board_vendor"),
+		Model:              readDMIValue("board_name"),
+		Version:            readDMIValue("board_version"),
+		BIOSVendor:         readDMIValue("bios_vendor"),
+		BIOS:               readDMIValue("bios_version"),
+		BIOSDate:           readDMIValue("bios_date"),
+		SystemManufacturer: readDMIValue("sys_vendor"),
+		SystemProduct:      readDMIValue("product_name"),
+		SystemVersion:      readDMIValue("product_version"),
 	}
-	board.Model = strings.TrimSpace(string(f))
-
-	// BIOS version
-	f, err = os.ReadFile("/sys/class/dmi/id/bios_version")
-	if err != nil {
-		logger.Log(logger.Fields{"error": err}).Error("Unable to read kernel ostype")
-		return
+	if board.Model == "" {
+		board.Model = board.SystemProduct
 	}
-	board.BIOS = strings.TrimSpace(string(f))
-
-	// BIOS release date
-	f, err = os.ReadFile("/sys/class/dmi/id/bios_date")
-	if err != nil {
-		logger.Log(logger.Fields{"error": err}).Error("Unable to read kernel ostype")
-		return
-	}
-	board.BIOSDate = strings.TrimSpace(string(f))
 	si.Motherboard = board
 }
 

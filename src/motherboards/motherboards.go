@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -52,7 +53,9 @@ var (
 func Init() {
 	pwd = config.GetConfig().ConfigPath
 
-	// Read actual board name from DMI
+	// Read actual board name from DMI. The board identity is used for display,
+	// stable serial generation and optional legacy overrides, not as a
+	// prerequisite for discovering motherboard fan controls.
 	dmiBoardNamePath := "/sys/class/dmi/id/board_name"
 	if b, err := os.ReadFile(dmiBoardNamePath); err != nil {
 		logger.Log(logger.Fields{"error": err, "location": dmiBoardNamePath}).Warn("Unable to read system board name")
@@ -62,39 +65,210 @@ func Init() {
 		boardSerial = hex.EncodeToString(sum[:])
 	}
 
+	// Keep the existing database as an optional compatibility/override source.
+	// Automatic sysfs discovery below is authoritative for which channels
+	// actually exist.
 	location := pwd + "/database/motherboard/motherboard.json"
-
-	file, fe := os.Open(location)
-	if fe != nil {
-		logger.Log(logger.Fields{"error": fe, "location": location}).Warn("Unable to open motherboard file")
-		return
-	}
-
-	defer func(file *os.File) {
-		err := file.Close()
-		if err != nil {
-			//
+	if file, err := os.Open(location); err == nil {
+		defer file.Close()
+		reader := json.NewDecoder(file)
+		if err := reader.Decode(&motherboard); err != nil {
+			logger.Log(logger.Fields{"error": err, "location": location}).Warn("Unable to decode motherboard file")
 		}
-	}(file)
+	} else {
+		logger.Log(logger.Fields{"error": err, "location": location}).Warn("Unable to open motherboard file; using automatic motherboard discovery")
+	}
 
-	reader := json.NewDecoder(file)
-	if err := reader.Decode(&motherboard); err != nil {
-		logger.Log(logger.Fields{"error": err, "location": location}).Warn("Unable to decode motherboard file")
+	legacy := getConfiguredMotherboard()
+	discovered, path := discoverMotherboard(legacy)
+	if discovered != nil {
+		hwmonPath = path
+		motherboard.Motherboards = []Motherboard{*discovered}
+		logger.Log(logger.Fields{
+			"board":   boardName,
+			"chip":    discovered.Chip,
+			"headers": len(discovered.Headers),
+			"path":    hwmonPath,
+		}).Info("Motherboard fan headers discovered from hwmon")
 		return
 	}
 
-	m := GetMotherboard()
-	if m != nil {
-		hwmonPath = findHwmonByChip(motherboard.Entry, m.Chip)
+	// Fall back to the legacy board definition if automatic discovery could
+	// not prove a complete fan/PWM control mapping.
+	if legacy != nil {
+		hwmonPath = findHwmonByChip(motherboard.Entry, legacy.Chip)
+		if hwmonPath != "" {
+			for k, v := range legacy.Headers {
+				headerLabel := readHeaderLabel(hwmonPath, v.HeaderLabel)
+				if headerLabel != "" {
+					v.HeaderName = headerLabel
+					legacy.Headers[k] = v
+				}
+			}
+			motherboard.Motherboards = []Motherboard{*legacy}
+			logger.Log(logger.Fields{"board": boardName, "chip": legacy.Chip}).Info("Using legacy motherboard definition")
+		}
+	}
+}
 
-		for k, v := range m.Headers {
-			headerLabel := GetMotherboardHeaderLabel(v.Id)
-			if headerLabel != "" {
-				v.HeaderName = headerLabel
-				m.Headers[k] = v
+// getConfiguredMotherboard returns the optional board-specific definition.
+func getConfiguredMotherboard() *Motherboard {
+	for i := range motherboard.Motherboards {
+		if motherboard.Motherboards[i].Name == boardName {
+			return &motherboard.Motherboards[i]
+		}
+	}
+	return nil
+}
+
+// discoverMotherboard scans hwmon for a controller exposing complete matching
+// fanN_input + pwmN + pwmN_enable triplets. RPM-only channels are deliberately
+// ignored because OpenLinkHub must never guess a writable PWM mapping.
+func discoverMotherboard(legacy *Motherboard) (*Motherboard, string) {
+	base := strings.TrimSpace(motherboard.Entry)
+	if base == "" {
+		base = "/sys/class/hwmon/"
+	}
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		logger.Log(logger.Fields{"base": base, "error": err}).Warn("Unable to scan hwmon for motherboard fan controls")
+		return nil, ""
+	}
+
+	type candidate struct {
+		board *Motherboard
+		path  string
+	}
+	var candidates []candidate
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), "hwmon") {
+			continue
+		}
+		path := filepath.Join(base, entry.Name())
+		nameBytes, err := os.ReadFile(filepath.Join(path, "name"))
+		if err != nil {
+			continue
+		}
+		chip := strings.TrimSpace(string(nameBytes))
+		if !isLikelyMotherboardFanChip(chip) {
+			continue
+		}
+		headers := discoverHeaders(path, chip, legacy)
+		if len(headers) == 0 {
+			continue
+		}
+		displayName := boardName
+		if legacy != nil && legacy.DisplayName != "" {
+			displayName = legacy.DisplayName
+		}
+		candidates = append(candidates, candidate{
+			board: &Motherboard{
+				Name: boardName, DisplayName: displayName, Chip: chip,
+				Interval: 3000, Headers: headers,
+			},
+			path: path,
+		})
+	}
+	if len(candidates) == 0 {
+		return nil, ""
+	}
+
+	// Prefer the controller with the most complete fan/PWM channels. If the
+	// legacy definition knows the chip, use that only as a tie-breaker.
+	sort.SliceStable(candidates, func(i, j int) bool {
+		li, lj := len(candidates[i].board.Headers), len(candidates[j].board.Headers)
+		if li != lj {
+			return li > lj
+		}
+		if legacy != nil {
+			return candidates[i].board.Chip == legacy.Chip && candidates[j].board.Chip != legacy.Chip
+		}
+		return candidates[i].board.Chip < candidates[j].board.Chip
+	})
+	return candidates[0].board, candidates[0].path
+}
+
+func isLikelyMotherboardFanChip(chip string) bool {
+	name := strings.ToLower(strings.TrimSpace(chip))
+	prefixes := []string{"nct", "it86", "it87", "w836", "f718", "sch56", "asus", "gigabyte"}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func discoverHeaders(path, chip string, legacy *Motherboard) map[int]Headers {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return nil
+	}
+	var physical []int
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, "fan") || !strings.HasSuffix(name, "_input") {
+			continue
+		}
+		indexText := strings.TrimSuffix(strings.TrimPrefix(name, "fan"), "_input")
+		index, err := strconv.Atoi(indexText)
+		if err != nil || index < 1 {
+			continue
+		}
+		if !common.FileExists(filepath.Join(path, fmt.Sprintf("pwm%d", index))) ||
+			!common.FileExists(filepath.Join(path, fmt.Sprintf("pwm%d_enable", index))) {
+			continue
+		}
+		physical = append(physical, index)
+	}
+	sort.Ints(physical)
+
+	headers := make(map[int]Headers, len(physical))
+	for logical, index := range physical {
+		id := logical + 1
+		labelFile := fmt.Sprintf("fan%d_label", index)
+		name := readHeaderLabel(path, labelFile)
+		if name == "" {
+			name = fmt.Sprintf("Fan %d", id)
+		}
+		modes := headerModesForChip(chip)
+		// Preserve a known board's mode semantics when available, but never its
+		// channel existence or sysfs mapping.
+		if legacy != nil {
+			if old, ok := legacy.Headers[index]; ok && len(old.HeaderModes) > 0 {
+				modes = old.HeaderModes
 			}
 		}
+		headers[id] = Headers{
+			Id: id, HeaderName: name,
+			HeaderInput:  fmt.Sprintf("fan%d_input", index),
+			HeaderConfig: fmt.Sprintf("pwm%d_enable", index),
+			HeaderLabel:  labelFile,
+			HeaderModes:  modes,
+			HeaderValue:  fmt.Sprintf("pwm%d", index),
+		}
 	}
+	return headers
+}
+
+func headerModesForChip(chip string) map[int]string {
+	// Linux hwmon convention uses 1 for manual PWM and commonly 2 for an
+	// automatic/firmware-controlled mode. nct679x exposes Smart Fan as mode 5.
+	if strings.HasPrefix(chip, "nct679") {
+		return map[int]string{1: "PWM", 5: "BIOS"}
+	}
+	return map[int]string{1: "PWM", 2: "BIOS"}
+}
+
+func readHeaderLabel(path, labelFile string) string {
+	if strings.TrimSpace(labelFile) == "" {
+		return ""
+	}
+	b, err := os.ReadFile(filepath.Join(path, strings.TrimPrefix(labelFile, "/")))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
 
 // GetMotherboard will return motherboard by its name
@@ -103,6 +277,9 @@ func GetMotherboard() *Motherboard {
 		if motherboard.Motherboards[i].Name == boardName {
 			return &motherboard.Motherboards[i]
 		}
+	}
+	if len(motherboard.Motherboards) == 1 {
+		return &motherboard.Motherboards[0]
 	}
 	return nil
 }
@@ -122,17 +299,16 @@ func SetMotherboardHeaderMode(header, mode int) uint8 {
 	mutex.Lock()
 	defer mutex.Unlock()
 
-	if mode < 1 || mode > 2 {
-		logger.Log(logger.Fields{"mode": mode, "header": header}).Warn("Invalid PWM header mode")
-		return 0
-	}
-
 	m := GetMotherboard()
 	if m == nil {
 		return 0
 	}
 
 	if val, ok := m.Headers[header]; ok {
+		if _, valid := val.HeaderModes[mode]; !valid {
+			logger.Log(logger.Fields{"mode": mode, "header": header}).Warn("Invalid PWM header mode")
+			return 0
+		}
 		pwmConfig := filepath.Join(hwmonPath, strings.TrimPrefix(val.HeaderConfig, "/"))
 		if common.FileExists(pwmConfig) {
 			err := os.WriteFile(pwmConfig, []byte(fmt.Sprintf("%d\n", mode)), 0)
@@ -180,8 +356,8 @@ func GetMotherboardHeaderMode(header int) int {
 		return 0
 	}
 
-	if n > 2 {
-		return 2
+	if _, valid := val.HeaderModes[n]; !valid {
+		return 0
 	}
 
 	return n

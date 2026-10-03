@@ -34,7 +34,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 )
 
 // Response contains data what is sent back to a client
@@ -56,7 +55,6 @@ type Header struct {
 
 var headers []Header
 var server = &http.Server{}
-var restartHandler func() error
 
 // Send will process response and send it back to a client
 func (r *Response) Send(w http.ResponseWriter) {
@@ -86,6 +84,16 @@ func homePage(w http.ResponseWriter, _ *http.Request) {
 	resp := &Response{
 		Code:   http.StatusOK,
 		Device: devices.GetDevices(),
+	}
+	resp.Send(w)
+}
+
+// getSystemInfo returns static host identity, CPU, kernel and motherboard firmware metadata.
+func getSystemInfo(w http.ResponseWriter, _ *http.Request) {
+	resp := &Response{
+		Code:   http.StatusOK,
+		Status: 1,
+		Data:   systeminfo.GetInfo(),
 	}
 	resp.Send(w)
 }
@@ -174,16 +182,6 @@ func getStorageTemperature(w http.ResponseWriter, _ *http.Request) {
 	resp.Send(w)
 }
 
-// getHwMonTemperatures returns current external hwmon temperature sensors.
-func getHwMonTemperatures(w http.ResponseWriter, _ *http.Request) {
-	resp := &Response{
-		Code:   http.StatusOK,
-		Status: 1,
-		Data:   temperatures.GetExternalHwMonSensors(),
-	}
-	resp.Send(w)
-}
-
 // getBatteryStats will return battery stats
 func getBatteryStats(w http.ResponseWriter, _ *http.Request) {
 	resp := &Response{
@@ -207,87 +205,6 @@ func getSupportedDevices(w http.ResponseWriter, _ *http.Request) {
 		Data: devices.GetSupportedDevices(),
 	}
 	resp.Send(w)
-}
-
-// manualFanControl exposes and updates the existing manual fan speed configuration flag.
-// A single ServeMux route handles both methods because handleFunc registers paths,
-// not method-qualified patterns.
-// SetRestartHandler registers the application restart callback.
-// The controller owns shutdown/re-exec so the server package does not import it.
-func SetRestartHandler(handler func() error) {
-	restartHandler = handler
-}
-
-// editableConfig exposes the safe Control Panel configuration subset.
-// One ServeMux path handles both GET and POST to avoid duplicate path registration.
-func editableConfig(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		resp := &Response{Code: http.StatusOK, Status: 1, Data: map[string]interface{}{
-			"settings": config.GetEditableSettings(), "restartRequired": true,
-		}}
-		resp.Send(w)
-	case http.MethodPost:
-		settings := config.EditableSettings{}
-		if err := json.NewDecoder(r.Body).Decode(&settings); err != nil {
-			(&Response{Code: http.StatusBadRequest, Status: 0, Message: "Unable to validate configuration request"}).Send(w)
-			return
-		}
-		if err := config.UpdateEditableSettings(settings); err != nil {
-			(&Response{Code: http.StatusBadRequest, Status: 0, Message: err.Error()}).Send(w)
-			return
-		}
-		(&Response{Code: http.StatusOK, Status: 1, Message: "Configuration saved. Restart OpenLinkHub to apply the changes.", Data: map[string]interface{}{
-			"settings": config.GetEditableSettings(), "restartRequired": true,
-		}}).Send(w)
-	default:
-		http.Error(w, language.GetValue("txtMethodNotAllowed"), http.StatusMethodNotAllowed)
-	}
-}
-
-// restartService acknowledges the request before re-executing OpenLinkHub.
-// Re-exec keeps the container alive while restarting only the OpenLinkHub process.
-func restartService(w http.ResponseWriter, r *http.Request) {
-	if restartHandler == nil {
-		(&Response{Code: http.StatusServiceUnavailable, Status: 0, Message: "OpenLinkHub restart is unavailable"}).Send(w)
-		return
-	}
-	(&Response{Code: http.StatusOK, Status: 1, Message: "OpenLinkHub is restarting..."}).Send(w)
-	go func() {
-		time.Sleep(500 * time.Millisecond)
-		if err := restartHandler(); err != nil {
-			logger.Log(logger.Fields{"error": err}).Error("Unable to restart OpenLinkHub")
-		}
-	}()
-}
-
-func manualFanControl(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		resp := &Response{
-			Code:   http.StatusOK,
-			Status: 1,
-			Data: map[string]interface{}{
-				"manual":          config.GetConfig().Manual,
-				"restartRequired": true,
-			},
-		}
-		resp.Send(w)
-	case http.MethodPost:
-		request := requests.ProcessSetManualFanControl(r)
-		resp := &Response{
-			Code:    request.Code,
-			Status:  request.Status,
-			Message: request.Message,
-			Data: map[string]interface{}{
-				"manual":          config.GetConfig().Manual,
-				"restartRequired": true,
-			},
-		}
-		resp.Send(w)
-	default:
-		http.Error(w, language.GetValue("txtMethodNotAllowed"), http.StatusMethodNotAllowed)
-	}
 }
 
 // setSupportedDevices handles enable / disable of supported devices
@@ -2237,7 +2154,6 @@ func uiDeviceOverview(w http.ResponseWriter, r *http.Request) {
 	web.Lcd = lcd.GetLcdDevices()
 	web.LCDImages = lcd.GetLcdImages()
 	web.Temperatures = temperatures.GetTemperatureProfiles()
-	web.HwMonSensors = temperatures.GetExternalHwMonSensors()
 	web.Rgb = rgb.GetRGB().Profiles
 	web.BuildInfo = version.GetBuildInfo()
 	web.SystemInfo = systeminfo.GetInfo()
@@ -2549,7 +2465,6 @@ func uiSettings(w http.ResponseWriter, _ *http.Request) {
 	web.Scheduler = scheduler.GetScheduler()
 	web.BuildInfo = version.GetBuildInfo()
 	web.SystemInfo = systeminfo.GetInfo()
-	web.HwMonSensors = temperatures.GetExternalHwMonSensors()
 	web.Dashboard = dashboard.GetDashboard()
 	web.Languages = language.GetLanguages()
 	web.LanguageCode = dashboard.GetDashboard().LanguageCode
@@ -2702,6 +2617,7 @@ func setRoutes() http.Handler {
 
 	// GET
 	handleFunc(r, "/api/", http.MethodGet, homePage)
+	handleFunc(r, "/api/systemInfo", http.MethodGet, getSystemInfo)
 	handleFunc(r, "/api/cpuTemp", http.MethodGet, getCpuTemperature)
 	handleFunc(r, "/api/cpuTemp/clean", http.MethodGet, getCpuTemperatureClean)
 	handleFunc(r, "/api/cpuLoad", http.MethodGet, getCpuLoad)
@@ -2710,7 +2626,6 @@ func setRoutes() http.Handler {
 	handleFunc(r, "/api/gpuTemp/clean", http.MethodGet, getGpuTemperatureClean)
 	handleFunc(r, "/api/gpuLoad", http.MethodGet, getGpuLoad)
 	handleFunc(r, "/api/storageTemp", http.MethodGet, getStorageTemperature)
-	handleFunc(r, "/api/hwmonTemps", http.MethodGet, getHwMonTemperatures)
 	handleFunc(r, "/api/batteryStats", http.MethodGet, getBatteryStats)
 	handleFunc(r, "/api/devices/", http.MethodGet, getDevices)
 	handleFunc(r, "/api/color/", http.MethodGet, getColor)
@@ -2735,9 +2650,6 @@ func setRoutes() http.Handler {
 	handleFunc(r, "/api/systray", http.MethodGet, getSystrayData)
 	handleFunc(r, "/api/keyboard/dial/getColors/", http.MethodGet, getControlDialColors)
 	handleFunc(r, "/api/getSupportedDevices", http.MethodGet, getSupportedDevices)
-	r.HandleFunc("/api/config/manual", manualFanControl)
-	r.HandleFunc("/api/config/editable", editableConfig)
-	handleFunc(r, "/api/restart", http.MethodPost, restartService)
 	handleFunc(r, "/api/backup", http.MethodGet, backup.PerformBackup)
 	handleFunc(r, "/api/position/", http.MethodGet, getPositionData)
 	handleFunc(r, "/api/headset/getEqualizers/", http.MethodGet, getEqualizers)
