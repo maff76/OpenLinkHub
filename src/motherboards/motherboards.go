@@ -142,8 +142,11 @@ func discoverMotherboard(legacy *Motherboard) (*Motherboard, string) {
 	}
 
 	type candidate struct {
-		board *Motherboard
-		path  string
+		board        *Motherboard
+		path         string
+		score        int
+		platformPath bool
+		labeled      int
 	}
 	var candidates []candidate
 	for _, entry := range entries {
@@ -175,31 +178,83 @@ func discoverMotherboard(legacy *Motherboard) (*Motherboard, string) {
 			}
 			discovery = "automatic+override"
 		}
+		platformPath := isPlatformHwmonPath(path)
+		labeled := labeledHeaderCount(path, headers)
+		score := len(headers) * 20
+		if platformPath {
+			// Super-I/O motherboard fan controllers are normally platform
+			// devices. Prefer that hardware topology without requiring a
+			// controller-name allowlist.
+			score += 150
+		}
+		score += labeled * 5
+		if legacy != nil && chip == legacy.Chip {
+			// A matching legacy definition is supporting evidence only; it
+			// must never create channels that sysfs did not prove exist.
+			score += 50
+		}
+
 		candidates = append(candidates, candidate{
 			board: &Motherboard{
 				Name: boardName, DisplayName: displayName, Chip: chip,
 				Interval: interval, Headers: headers, Discovery: discovery,
 			},
-			path: path,
+			path: path, platformPath: platformPath, labeled: labeled, score: score,
 		})
+		logger.Log(logger.Fields{
+			"chip": chip, "path": path, "headers": len(headers),
+			"labeledHeaders": labeled, "platformDevice": platformPath, "score": score,
+		}).Debug("Motherboard fan-control candidate discovered")
 	}
 	if len(candidates) == 0 {
 		return nil, ""
 	}
 
-	// Prefer the controller with the most complete fan/PWM channels. If the
-	// legacy definition knows the chip, use that only as a tie-breaker.
+	// Rank by hardware evidence rather than controller name. A platform-backed
+	// complete mapping is strong evidence of the board Super-I/O controller;
+	// channel count, kernel labels and an optional legacy chip match add further
+	// confidence. This avoids selecting an unrelated PCI/USB PWM device merely
+	// because it exposes more channels, while remaining open to new hwmon drivers.
 	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].score != candidates[j].score {
+			return candidates[i].score > candidates[j].score
+		}
 		li, lj := len(candidates[i].board.Headers), len(candidates[j].board.Headers)
 		if li != lj {
 			return li > lj
 		}
-		if legacy != nil {
-			return candidates[i].board.Chip == legacy.Chip && candidates[j].board.Chip != legacy.Chip
-		}
 		return candidates[i].board.Chip < candidates[j].board.Chip
 	})
-	return candidates[0].board, candidates[0].path
+	selected := candidates[0]
+	logger.Log(logger.Fields{
+		"chip": selected.board.Chip, "path": selected.path,
+		"headers": len(selected.board.Headers), "labeledHeaders": selected.labeled,
+		"platformDevice": selected.platformPath, "score": selected.score,
+		"candidates": len(candidates),
+	}).Info("Selected motherboard fan-control candidate")
+	return selected.board, selected.path
+}
+
+// isPlatformHwmonPath checks hardware topology rather than a controller-name
+// allowlist. Linux Super-I/O motherboard monitoring drivers are commonly bound
+// below /sys/devices/platform. Failure to resolve the symlink is non-fatal.
+func isPlatformHwmonPath(path string) bool {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false
+	}
+	clean := filepath.ToSlash(filepath.Clean(resolved))
+	return strings.Contains(clean, "/devices/platform/")
+}
+
+func labeledHeaderCount(path string, headers map[int]Headers) int {
+	count := 0
+	for _, header := range headers {
+		if readHeaderLabel(path, header.HeaderLabel) != "" {
+			count++
+		}
+	}
+	return count
 }
 
 func discoverHeaders(path, chip string, legacy *Motherboard) map[int]Headers {
