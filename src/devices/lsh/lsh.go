@@ -4062,13 +4062,13 @@ func (d *Device) getDevices() int {
 
 		lcdSerial := ""
 		if d.DeviceProfile != nil {
-			// Profile is set
-			if ls, ok := d.DeviceProfile.LCDDevices[i]; ok {
-				if len(ls) > 0 {
+			// LCDDevices is intentionally sparse: saveDeviceProfile only stores
+			// entries for pump/AIO channels. A missing entry is therefore normal
+			// for fans and other non-LCD LINK devices.
+			if deviceMeta.ContainsPump || deviceMeta.AIO {
+				if ls, ok := d.DeviceProfile.LCDDevices[i]; ok && len(ls) > 0 {
 					lcdSerial = ls
 				}
-			} else {
-				logger.Log(logger.Fields{"serial": d.Serial, "lcdSerial": ls}).Warn("Tried to apply rgb profile to the non-existing channel")
 			}
 		} else {
 			logger.Log(logger.Fields{"serial": d.Serial}).Warn("DeviceProfile is not set, probably first startup")
