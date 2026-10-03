@@ -35,6 +35,7 @@ type Motherboard struct {
 	Chip        string          `json:"chip"`
 	Interval    float32         `json:"interval"`
 	Headers     map[int]Headers `json:"headers"`
+	Discovery   string          `json:"discovery,omitempty"`
 }
 type Motherboards struct {
 	Entry        string        `json:"entry"`
@@ -85,11 +86,13 @@ func Init() {
 		hwmonPath = path
 		motherboard.Motherboards = []Motherboard{*discovered}
 		logger.Log(logger.Fields{
-			"board":   boardName,
-			"chip":    discovered.Chip,
-			"headers": len(discovered.Headers),
-			"path":    hwmonPath,
+			"board":     boardName,
+			"chip":      discovered.Chip,
+			"headers":   len(discovered.Headers),
+			"path":      hwmonPath,
+			"discovery": discovered.Discovery,
 		}).Info("Motherboard fan headers discovered from hwmon")
+		logDiscoveredHeaders(discovered, hwmonPath)
 		return
 	}
 
@@ -105,8 +108,11 @@ func Init() {
 					legacy.Headers[k] = v
 				}
 			}
+			legacy.Discovery = "legacy"
 			motherboard.Motherboards = []Motherboard{*legacy}
-			logger.Log(logger.Fields{"board": boardName, "chip": legacy.Chip}).Info("Using legacy motherboard definition")
+			logger.Log(logger.Fields{
+				"board": boardName, "chip": legacy.Chip, "path": hwmonPath, "discovery": legacy.Discovery,
+			}).Info("Using legacy motherboard definition")
 		}
 	}
 }
@@ -158,13 +164,21 @@ func discoverMotherboard(legacy *Motherboard) (*Motherboard, string) {
 			continue
 		}
 		displayName := boardName
-		if legacy != nil && legacy.DisplayName != "" {
-			displayName = legacy.DisplayName
+		interval := float32(3000)
+		discovery := "automatic"
+		if legacy != nil {
+			if legacy.DisplayName != "" {
+				displayName = legacy.DisplayName
+			}
+			if legacy.Interval > 0 {
+				interval = legacy.Interval
+			}
+			discovery = "automatic+override"
 		}
 		candidates = append(candidates, candidate{
 			board: &Motherboard{
 				Name: boardName, DisplayName: displayName, Chip: chip,
-				Interval: 3000, Headers: headers,
+				Interval: interval, Headers: headers, Discovery: discovery,
 			},
 			path: path,
 		})
@@ -258,6 +272,31 @@ func headerModesForChip(chip string) map[int]string {
 		return map[int]string{1: "PWM", 5: "BIOS"}
 	}
 	return map[int]string{1: "PWM", 2: "BIOS"}
+}
+
+func logDiscoveredHeaders(board *Motherboard, path string) {
+	if board == nil {
+		return
+	}
+	ids := make([]int, 0, len(board.Headers))
+	for id := range board.Headers {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+
+	for _, id := range ids {
+		header := board.Headers[id]
+		logger.Log(logger.Fields{
+			"header":     id,
+			"name":       header.HeaderName,
+			"rpm":        header.HeaderInput,
+			"pwm":        header.HeaderValue,
+			"pwmEnable":  header.HeaderConfig,
+			"label":      header.HeaderLabel,
+			"hwmonPath":  path,
+			"controller": board.Chip,
+		}).Info("Motherboard fan header discovered")
+	}
 }
 
 func readHeaderLabel(path, labelFile string) string {
