@@ -539,6 +539,7 @@ func (d *Device) loadDeviceMetadata() {
 		file, err := os.Open(deviceMetadata)
 		if err != nil {
 			logger.Log(logger.Fields{"error": err, "serial": d.Serial, "location": deviceMetadata}).Error("Unable to load devices metadata")
+			return
 		}
 		if err = json.NewDecoder(file).Decode(&d.supportedDevices); err != nil {
 			logger.Log(logger.Fields{"error": err, "serial": d.Serial, "location": deviceMetadata}).Error("Unable to decode devices metadata")
