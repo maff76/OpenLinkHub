@@ -293,7 +293,7 @@ func discoverHeaders(path, chip string, legacy *Motherboard) map[int]Headers {
 		// Preserve a known board's mode semantics when available, but never its
 		// channel existence or sysfs mapping.
 		if legacy != nil {
-			if old, ok := legacy.Headers[index]; ok && len(old.HeaderModes) > 0 {
+			if old, ok := legacy.Headers[id]; ok && len(old.HeaderModes) > 0 {
 				modes = old.HeaderModes
 			}
 		}
