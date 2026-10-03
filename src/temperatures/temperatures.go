@@ -96,6 +96,7 @@ type HwMonSensor struct {
 	SensorName string
 	InputName  string
 	Label      string
+	Model      string
 	TempC      float64
 	Path       string
 }
@@ -1152,6 +1153,26 @@ func hwMonStableID(sensorName, hardwareKey, label, inputName string) string {
 	}, "_")
 }
 
+// hwMonModel returns the kernel-exposed model for storage devices.
+// This reads sysfs only; it does not invoke smartctl or wake disks for SMART data.
+func hwMonModel(hwmonPath, category string) string {
+	if category != "storage" {
+		return ""
+	}
+	modelPaths := []string{
+		filepath.Join(hwmonPath, "device", "model"),
+		filepath.Join(hwmonPath, "device", "device", "model"),
+	}
+	for _, modelPath := range modelPaths {
+		if data, err := os.ReadFile(modelPath); err == nil {
+			if model := strings.TrimSpace(string(data)); model != "" {
+				return model
+			}
+		}
+	}
+	return ""
+}
+
 func GetExternalHwMonSensors() interface{} {
 	basePath := "/sys/class/hwmon/"
 	hwmonEntries, err := os.ReadDir(basePath)
@@ -1187,6 +1208,7 @@ func GetExternalHwMonSensors() interface{} {
 
 		hardwareKey := hwMonHardwareKey(hwmonPath, sensorName)
 		category := hwMonCategory(sensorName)
+		model := hwMonModel(hwmonPath, category)
 
 		files, err := os.ReadDir(hwmonPath)
 		if err != nil {
@@ -1228,6 +1250,7 @@ func GetExternalHwMonSensors() interface{} {
 						SensorName: sensorName,
 						InputName:  fileName,
 						Label:      label,
+						Model:      model,
 						TempC:      tempC,
 						Path:       fullPath,
 					},
