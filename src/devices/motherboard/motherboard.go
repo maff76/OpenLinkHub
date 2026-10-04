@@ -108,6 +108,7 @@ type Device struct {
 	Exit              bool
 	deviceLock        sync.Mutex
 	instance          *common.Device
+	stopOnce          sync.Once
 }
 
 // Init will initialize a new device
@@ -171,58 +172,44 @@ func (d *Device) createDevice() {
 	}
 }
 
+// stop shuts down motherboard background work exactly once. Closing the stop
+// channels synchronously ensures the workers are signalled before BIOS mode is
+// restored, rather than racing the final hardware writes during teardown.
+func (d *Device) stop(dirty bool) {
+	d.stopOnce.Do(func() {
+		d.Exit = true
+		message := "Stopping device..."
+		if dirty {
+			message = "Stopping device (dirty)..."
+		}
+		logger.Log(logger.Fields{"serial": d.Serial, "product": d.Product}).Info(message)
+
+		d.timer.Stop()
+		if !config.GetConfig().Manual {
+			d.timerSpeed.Stop()
+			if d.speedRefreshChan != nil {
+				close(d.speedRefreshChan)
+			}
+		}
+		if d.autoRefreshChan != nil {
+			close(d.autoRefreshChan)
+		}
+
+		if config.GetConfig().MotherboardBiosOnExit {
+			d.setBiosMode()
+		}
+		logger.Log(logger.Fields{"serial": d.Serial, "product": d.Product}).Info("Device stopped")
+	})
+}
+
 // Stop will stop all device operations and switch a device back to hardware mode
 func (d *Device) Stop() {
-	d.Exit = true
-	logger.Log(logger.Fields{"serial": d.Serial, "product": d.Product}).Info("Stopping device...")
-
-	d.timer.Stop()
-	var once sync.Once
-	go func() {
-		once.Do(func() {
-			if !config.GetConfig().Manual {
-				d.timerSpeed.Stop()
-				if d.speedRefreshChan != nil {
-					close(d.speedRefreshChan)
-				}
-			}
-			if d.autoRefreshChan != nil {
-				close(d.autoRefreshChan)
-			}
-		})
-	}()
-
-	if config.GetConfig().MotherboardBiosOnExit {
-		d.setBiosMode()
-	}
-	logger.Log(logger.Fields{"serial": d.Serial, "product": d.Product}).Info("Device stopped")
+	d.stop(false)
 }
 
 // StopDirty will stop device in a dirty way
 func (d *Device) StopDirty() uint8 {
-	d.Exit = true
-	logger.Log(logger.Fields{"serial": d.Serial, "product": d.Product}).Info("Stopping device (dirty)...")
-
-	d.timer.Stop()
-	var once sync.Once
-	go func() {
-		once.Do(func() {
-			if !config.GetConfig().Manual {
-				d.timerSpeed.Stop()
-				if d.speedRefreshChan != nil {
-					close(d.speedRefreshChan)
-				}
-			}
-			if d.autoRefreshChan != nil {
-				close(d.autoRefreshChan)
-			}
-		})
-	}()
-
-	if config.GetConfig().MotherboardBiosOnExit {
-		d.setBiosMode()
-	}
-	logger.Log(logger.Fields{"serial": d.Serial, "product": d.Product}).Info("Device stopped")
+	d.stop(true)
 	return 1
 }
 
