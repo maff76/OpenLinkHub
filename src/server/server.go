@@ -69,21 +69,17 @@ func (r *Response) Send(w http.ResponseWriter) {
 	r.Lock()
 	defer r.Unlock()
 
-	w.Header().Add("Content-Type", "application/json")
-	w.WriteHeader(r.Code)
-
 	data, err := json.Marshal(r)
 	if err != nil {
-		_, err := fmt.Println(w, err.Error())
-		if err != nil {
-			return
-		}
+		logger.Log(logger.Fields{"error": err}).Error("Unable to encode API response")
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
 
-	_, err = w.Write(data)
-	if err != nil {
-		return
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(r.Code)
+	if _, err = w.Write(data); err != nil {
+		logger.Log(logger.Fields{"error": err}).Error("Unable to write API response")
 	}
 }
 
@@ -188,7 +184,7 @@ func configManual(w http.ResponseWriter, r *http.Request) {
 			},
 		}).Send(w)
 	default:
-		http.Error(w, language.GetValue("txtMethodNotAllowed"), http.StatusMethodNotAllowed)
+		methodNotAllowed(w, http.MethodGet, http.MethodPost)
 	}
 }
 
@@ -233,7 +229,7 @@ func configEditable(w http.ResponseWriter, r *http.Request) {
 			},
 		}).Send(w)
 	default:
-		http.Error(w, language.GetValue("txtMethodNotAllowed"), http.StatusMethodNotAllowed)
+		methodNotAllowed(w, http.MethodGet, http.MethodPost)
 	}
 }
 
@@ -2738,13 +2734,24 @@ func getDeviceID(uri string, r *http.Request) (string, bool) {
 	return value, true
 }
 
+func methodNotAllowed(w http.ResponseWriter, allowedMethods ...string) {
+	if len(allowedMethods) > 0 {
+		w.Header().Set("Allow", strings.Join(allowedMethods, ", "))
+	}
+	(&Response{
+		Code:    http.StatusMethodNotAllowed,
+		Status:  0,
+		Message: language.GetValue("txtMethodNotAllowed"),
+	}).Send(w)
+}
+
 func handleFunc(mux *http.ServeMux, path, method string, handler func(w http.ResponseWriter, r *http.Request)) {
 	mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == method {
 			handler(w, r)
-		} else {
-			http.Error(w, language.GetValue("txtMethodNotAllowed"), http.StatusMethodNotAllowed)
+			return
 		}
+		methodNotAllowed(w, method)
 	})
 }
 
