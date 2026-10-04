@@ -30,6 +30,7 @@ import (
 	"OpenLinkHub/src/version"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -72,8 +73,8 @@ func (r *Response) Send(w http.ResponseWriter) {
 	data, err := json.Marshal(r)
 	if err != nil {
 		logger.Log(logger.Fields{"error": err}).Error("Unable to encode API response")
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
+		data = []byte(`{"code":500,"status":0,"message":"Unable to encode API response"}`)
+		r.Code = http.StatusInternalServerError
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -140,6 +141,27 @@ func restartOpenLinkHub(w http.ResponseWriter, _ *http.Request) {
 	}()
 }
 
+const maxAPIRequestBody = 1 << 20 // 1 MiB
+
+// decodeJSONRequest decodes exactly one JSON value and rejects oversized or
+// trailing request data. Unknown fields remain tolerated for API compatibility.
+func decodeJSONRequest(w http.ResponseWriter, r *http.Request, dst interface{}) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxAPIRequestBody)
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(dst); err != nil {
+		return err
+	}
+
+	var trailing interface{}
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("request body must contain exactly one JSON value")
+		}
+		return err
+	}
+	return nil
+}
+
 // configManual serves the manual fan-control setting from a single route.
 // GET reads the current value; POST validates and persists a new value.
 func configManual(w http.ResponseWriter, r *http.Request) {
@@ -155,9 +177,9 @@ func configManual(w http.ResponseWriter, r *http.Request) {
 		resp.Send(w)
 	case http.MethodPost:
 		var request struct {
-			Enabled bool `json:"enabled"`
+			Enabled *bool `json:"enabled"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		if err := decodeJSONRequest(w, r, &request); err != nil || request.Enabled == nil {
 			(&Response{
 				Code:    http.StatusBadRequest,
 				Status:  0,
@@ -166,7 +188,7 @@ func configManual(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if config.UpdateManual(request.Enabled) != 1 {
+		if config.UpdateManual(*request.Enabled) != 1 {
 			(&Response{
 				Code:    http.StatusInternalServerError,
 				Status:  0,
@@ -202,7 +224,7 @@ func configEditable(w http.ResponseWriter, r *http.Request) {
 		}).Send(w)
 	case http.MethodPost:
 		var settings config.EditableSettings
-		if err := json.NewDecoder(r.Body).Decode(&settings); err != nil {
+		if err := decodeJSONRequest(w, r, &settings); err != nil {
 			(&Response{
 				Code:    http.StatusBadRequest,
 				Status:  0,
