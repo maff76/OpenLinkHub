@@ -248,6 +248,7 @@ type Device struct {
 	pumpInnerLedStartIndex int
 	queue                  chan []byte
 	instance               *common.Device
+	stopOnce               sync.Once
 	Psu                    bool
 }
 
@@ -634,129 +635,94 @@ func (d *Device) GetRgbProfiles() interface{} {
 
 // Stop will stop all device operations and switch a device back to hardware mode
 func (d *Device) Stop() {
-	d.Exit = true
-	logger.Log(logger.Fields{"serial": d.Serial, "product": d.Product}).Info("Stopping device...")
-	if d.activeRgb != nil {
-		d.activeRgb.Stop()
-	}
-
-	d.timer.Stop()
-	var once sync.Once
-	go func() {
-		once.Do(func() {
-			if d.HasLCD {
-				close(d.lcdRefreshChan)
-				close(d.lcdImageChan)
-				d.lcdTimer.Stop()
-			}
-
-			if !config.GetConfig().Manual {
-				d.timerSpeed.Stop()
-				if d.speedRefreshChan != nil {
-					close(d.speedRefreshChan)
-					d.speedRefreshChan = nil
-				}
-			}
-			if d.autoRefreshChan != nil {
-				close(d.autoRefreshChan)
-				d.autoRefreshChan = nil
-
-			}
-			if d.queue != nil {
-				close(d.queue)
-				d.queue = nil
-			}
-		})
-	}()
-
-	if d.HasLCD {
-		for _, lcdHidDevice := range d.lcdDevices {
-			if lcdHidDevice.Lcd != nil {
-				lcdReports := map[int][]byte{
-					0: {0x03, 0x1e, 0x01, 0x01},
-					1: {0x03, 0x1d, 0x00, 0x01},
-					2: {0x03, 0x0b, 0x64, 0x01},
-				}
-				for i := 0; i <= 2; i++ {
-					_, e := lcdHidDevice.Lcd.SendFeatureReport(lcdReports[i])
-					if e != nil {
-						logger.Log(logger.Fields{"error": e}).Error("Unable to send report to LCD HID device")
-					}
-				}
-				err := lcdHidDevice.Lcd.Close()
-				if err != nil {
-					logger.Log(logger.Fields{"error": err}).Error("Unable to close LCD HID device")
-				}
-			}
-		}
-	}
-
-	d.setHardwareMode()
-	if d.dev != nil {
-		err := d.dev.Close()
-		if err != nil {
-			logger.Log(logger.Fields{"error": err}).Error("Unable to close HID device")
-		}
-	}
-	logger.Log(logger.Fields{"serial": d.Serial, "product": d.Product}).Info("Device stopped")
+	d.stop(false)
 }
 
 // StopDirty will stop device in a dirty way
 func (d *Device) StopDirty() uint8 {
-	d.Exit = true
-	logger.Log(logger.Fields{"serial": d.Serial, "product": d.Product}).Info("Stopping device (dirty)...")
-	if d.activeRgb != nil {
-		d.activeRgb.Stop()
-	}
+	d.stop(true)
+	return 2
+}
 
-	d.timer.Stop()
-	var once sync.Once
-	go func() {
-		once.Do(func() {
-			if d.HasLCD {
+// stop performs device shutdown exactly once. Stop and StopDirty can be reached
+// from different lifecycle paths (application shutdown and USB removal), so the
+// shutdown guard must belong to the device rather than to an individual call.
+func (d *Device) stop(dirty bool) {
+	d.stopOnce.Do(func() {
+		d.Exit = true
+		if dirty {
+			logger.Log(logger.Fields{"serial": d.Serial, "product": d.Product}).Info("Stopping device (dirty)...")
+		} else {
+			logger.Log(logger.Fields{"serial": d.Serial, "product": d.Product}).Info("Stopping device...")
+		}
+
+		if d.activeRgb != nil {
+			d.activeRgb.Stop()
+		}
+
+		d.timer.Stop()
+		if d.HasLCD {
+			if d.lcdRefreshChan != nil {
 				close(d.lcdRefreshChan)
+				d.lcdRefreshChan = nil
+			}
+			if d.lcdImageChan != nil {
 				close(d.lcdImageChan)
-				d.lcdTimer.Stop()
+				d.lcdImageChan = nil
 			}
+			d.lcdTimer.Stop()
+		}
 
-			if !config.GetConfig().Manual {
-				d.timerSpeed.Stop()
-				if d.speedRefreshChan != nil {
-					close(d.speedRefreshChan)
-					d.speedRefreshChan = nil
+		if !config.GetConfig().Manual {
+			d.timerSpeed.Stop()
+			if d.speedRefreshChan != nil {
+				close(d.speedRefreshChan)
+				d.speedRefreshChan = nil
+			}
+		}
+		if d.autoRefreshChan != nil {
+			close(d.autoRefreshChan)
+			d.autoRefreshChan = nil
+		}
+		if d.queue != nil {
+			close(d.queue)
+			d.queue = nil
+		}
+
+		if d.HasLCD {
+			for _, lcdHidDevice := range d.lcdDevices {
+				if lcdHidDevice.Lcd == nil {
+					continue
 				}
-			}
-			if d.autoRefreshChan != nil {
-				close(d.autoRefreshChan)
-				d.autoRefreshChan = nil
 
-			}
-			if d.queue != nil {
-				close(d.queue)
-				d.queue = nil
-			}
-		})
-	}()
-
-	if d.HasLCD {
-		for _, lcdHidDevice := range d.lcdDevices {
-			if lcdHidDevice.Lcd != nil {
-				lcdReports := map[int][]byte{0: {0x03, 0x1e, 0x01, 0x01}, 1: {0x03, 0x1d, 0x00, 0x01}}
-				for i := 0; i <= 1; i++ {
-					_, e := lcdHidDevice.Lcd.SendFeatureReport(lcdReports[i])
-					if e != nil {
-						logger.Log(logger.Fields{"error": e}).Error("Unable to send report to LCD HID device")
+				lcdReports := map[int][]byte{
+					0: {0x03, 0x1e, 0x01, 0x01},
+					1: {0x03, 0x1d, 0x00, 0x01},
+				}
+				if !dirty {
+					lcdReports[2] = []byte{0x03, 0x0b, 0x64, 0x01}
+				}
+				for i := 0; i < len(lcdReports); i++ {
+					if _, err := lcdHidDevice.Lcd.SendFeatureReport(lcdReports[i]); err != nil {
+						logger.Log(logger.Fields{"error": err}).Error("Unable to send report to LCD HID device")
 					}
 				}
-				err := lcdHidDevice.Lcd.Close()
-				if err != nil {
+				if err := lcdHidDevice.Lcd.Close(); err != nil {
 					logger.Log(logger.Fields{"error": err}).Error("Unable to close LCD HID device")
 				}
 			}
 		}
-	}
-	logger.Log(logger.Fields{"serial": d.Serial, "product": d.Product}).Info("Device stopped")
-	return 2
+
+		if !dirty {
+			d.setHardwareMode()
+		}
+		if d.dev != nil {
+			if err := d.dev.Close(); err != nil {
+				logger.Log(logger.Fields{"error": err}).Error("Unable to close HID device")
+			}
+		}
+		logger.Log(logger.Fields{"serial": d.Serial, "product": d.Product}).Info("Device stopped")
+	})
 }
 
 // loadDeviceMetadata will load device meta data
@@ -4062,13 +4028,13 @@ func (d *Device) getDevices() int {
 
 		lcdSerial := ""
 		if d.DeviceProfile != nil {
-			// LCDDevices is intentionally sparse: saveDeviceProfile only stores
-			// entries for pump/AIO channels. A missing entry is therefore normal
-			// for fans and other non-LCD LINK devices.
-			if deviceMeta.ContainsPump || deviceMeta.AIO {
-				if ls, ok := d.DeviceProfile.LCDDevices[i]; ok && len(ls) > 0 {
+			// Profile is set
+			if ls, ok := d.DeviceProfile.LCDDevices[i]; ok {
+				if len(ls) > 0 {
 					lcdSerial = ls
 				}
+			} else {
+				logger.Log(logger.Fields{"serial": d.Serial, "lcdSerial": ls}).Warn("Tried to apply rgb profile to the non-existing channel")
 			}
 		} else {
 			logger.Log(logger.Fields{"serial": d.Serial}).Warn("DeviceProfile is not set, probably first startup")
