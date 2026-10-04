@@ -67,6 +67,7 @@ type Payload struct {
 	Linear                        bool                  `json:"linear"`
 	HwmonDeviceId                 string                `json:"hwmonDeviceId"`
 	HwmonDevice                   string                `json:"hwmonDevice"`
+	HwmonPersistentId             string                `json:"hwmonPersistentId"`
 	TemperatureInputId            string                `json:"temperatureInputId"`
 	ExternalExecutable            string                `json:"externalExecutable"`
 	GpuIndex                      uint8                 `json:"gpuIndex"`
@@ -421,6 +422,7 @@ func ProcessNewTemperatureProfile(r *http.Request) *Payload {
 	}
 
 	hwmonId := ""
+	hwmonPersistentId := ""
 	temperatureInputId := ""
 	if sensor == temperatures.SensorTypeExternalHwMon {
 		hwmonDeviceId := req.HwmonDeviceId
@@ -448,6 +450,11 @@ func ProcessNewTemperatureProfile(r *http.Request) *Payload {
 				Code:    http.StatusOK,
 				Status:  0,
 			}
+		}
+
+		hwmonPersistentId = req.HwmonPersistentId
+		if hwmonPersistentId != "" && !common.AlphanumericUnderscore.MatchString(hwmonPersistentId) {
+			return &Payload{Message: language.GetValue("txtInvalidHwMon"), Code: http.StatusOK, Status: 0}
 		}
 
 		deviceId = fmt.Sprintf("/sys/class/hwmon/%s/%s", hwmonDeviceId, temperatureInputId)
@@ -497,6 +504,7 @@ func ProcessNewTemperatureProfile(r *http.Request) *Payload {
 		Sensor:             sensor,
 		ChannelId:          channelId,
 		HwmonDevice:        hwmonId,
+		HwmonPersistentID:  hwmonPersistentId,
 		TemperatureInputId: temperatureInputId,
 		GpuIndex:           gpuIndex,
 	}

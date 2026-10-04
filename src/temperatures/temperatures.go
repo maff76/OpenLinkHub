@@ -70,6 +70,7 @@ type TemperatureProfileData struct {
 	Points             map[uint8][]Point    `json:"points"`
 	Device             string               `json:"device"`
 	HwmonDevice        string               `json:"hwmonDevice"`
+	HwmonPersistentID  string               `json:"hwmonPersistentId,omitempty"`
 	TemperatureInputId string               `json:"temperatureInputId"`
 	ChannelId          int                  `json:"channelId"`
 	Linear             bool                 `json:"linear"`
@@ -90,15 +91,16 @@ type MemoryTemperatures struct {
 }
 
 type HwMonSensor struct {
-	ID         string
-	Category   string
-	HwmonName  string
-	SensorName string
-	InputName  string
-	Label      string
-	Model      string
-	TempC      float64
-	Path       string
+	ID           string
+	Category     string
+	HwmonName    string
+	SensorName   string
+	InputName    string
+	Label        string
+	Model        string
+	PersistentID string
+	TempC        float64
+	Path         string
 }
 
 type NewTemperatureProfile struct {
@@ -110,6 +112,7 @@ type NewTemperatureProfile struct {
 	Sensor             uint8
 	ChannelId          int
 	HwmonDevice        string
+	HwmonPersistentID  string
 	TemperatureInputId string
 	GpuIndex           uint8
 }
@@ -516,6 +519,7 @@ func AddTemperatureProfile(newTemperatureProfile *NewTemperatureProfile) bool {
 
 		if len(newTemperatureProfile.HwmonDevice) > 0 {
 			pf.HwmonDevice = newTemperatureProfile.HwmonDevice
+			pf.HwmonPersistentID = newTemperatureProfile.HwmonPersistentID
 			pf.TemperatureInputId = newTemperatureProfile.TemperatureInputId
 		}
 
@@ -725,11 +729,22 @@ func LoadUserProfiles(profiles map[string]TemperatureProfileData) {
 			logger.Log(logger.Fields{"error": fe, "location": profileLocation, "caller": "LoadUserProfiles()"}).Fatal("Unable to read temperature profile")
 		}
 
-		// Recalculate hwmon dynamic path
-		if len(profile.HwmonDevice) > 0 && len(profile.TemperatureInputId) > 0 {
+		// Recalculate the dynamic hwmon path. New profiles use a stable
+		// hardware-backed identity so duplicate driver names (for example
+		// several spd5118 or drivetemp devices) cannot bind to the wrong
+		// hwmonX directory after a reboot. Keep the name-based lookup for
+		// profiles created by older OpenLinkHub versions.
+		if len(profile.HwmonPersistentID) > 0 && len(profile.TemperatureInputId) > 0 {
+			if deviceId := resolveHwMonPersistentID(profile.HwmonPersistentID, profile.TemperatureInputId); deviceId != "" {
+				profile.Device = deviceId
+			} else {
+				logger.Log(logger.Fields{"profile": profileName, "hwmonPersistentId": profile.HwmonPersistentID}).Warn("Unable to resolve persistent hwmon sensor identity")
+			}
+		} else if len(profile.HwmonDevice) > 0 && len(profile.TemperatureInputId) > 0 {
 			path := getHwMonDirectoryByDeviceName(profile.HwmonDevice)
-			deviceId := fmt.Sprintf("%s/%s", path, profile.TemperatureInputId)
-			profile.Device = deviceId
+			if path != "" {
+				profile.Device = filepath.Join(path, profile.TemperatureInputId)
+			}
 		}
 		profiles[profileName] = profile
 	}
@@ -1141,6 +1156,41 @@ func hwMonIDPart(value string) string {
 	return strings.Trim(b.String(), "_")
 }
 
+// hwMonPersistentID identifies the physical sensor independently of its
+// transient hwmonX directory and display label. The existing API ID remains
+// unchanged because consumers may already use it as a persistent entity ID.
+func hwMonPersistentID(sensorName, hardwareKey, inputName string) string {
+	return strings.Join([]string{
+		hwMonIDPart(sensorName),
+		hwMonIDPart(hardwareKey),
+		hwMonIDPart(strings.TrimSuffix(inputName, "_input")),
+	}, "_")
+}
+
+func resolveHwMonPersistentID(persistentID, inputName string) string {
+	entries, err := os.ReadDir("/sys/class/hwmon")
+	if err != nil {
+		return ""
+	}
+	for _, entry := range entries {
+		hwmonPath := filepath.Join("/sys/class/hwmon", entry.Name())
+		nameBytes, err := os.ReadFile(filepath.Join(hwmonPath, "name"))
+		if err != nil {
+			continue
+		}
+		sensorName := strings.TrimSpace(string(nameBytes))
+		hardwareKey := hwMonHardwareKey(hwmonPath, sensorName)
+		if hwMonPersistentID(sensorName, hardwareKey, inputName) != persistentID {
+			continue
+		}
+		path := filepath.Join(hwmonPath, inputName)
+		if common.FileExists(path) {
+			return path
+		}
+	}
+	return ""
+}
+
 func hwMonStableID(sensorName, hardwareKey, label, inputName string) string {
 	channel := label
 	if strings.TrimSpace(channel) == "" {
@@ -1244,15 +1294,16 @@ func GetExternalHwMonSensors() interface{} {
 
 				sensors = append(sensors,
 					HwMonSensor{
-						ID:         hwMonStableID(sensorName, hardwareKey, label, fileName),
-						Category:   category,
-						HwmonName:  hwmonDirName,
-						SensorName: sensorName,
-						InputName:  fileName,
-						Label:      label,
-						Model:      model,
-						TempC:      tempC,
-						Path:       fullPath,
+						ID:           hwMonStableID(sensorName, hardwareKey, label, fileName),
+						Category:     category,
+						HwmonName:    hwmonDirName,
+						SensorName:   sensorName,
+						InputName:    fileName,
+						Label:        label,
+						Model:        model,
+						PersistentID: hwMonPersistentID(sensorName, hardwareKey, fileName),
+						TempC:        tempC,
+						Path:         fullPath,
 					},
 				)
 			}
