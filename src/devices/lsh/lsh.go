@@ -2244,32 +2244,12 @@ func (d *Device) SaveUserProfile(profileName string) uint8 {
 	if d.DeviceProfile != nil {
 		profilePath := pwd + "/database/profiles/" + d.Serial + "-" + profileName + ".json"
 
-		newProfile := d.DeviceProfile
+		newProfile := *d.DeviceProfile
 		newProfile.Path = profilePath
 		newProfile.Active = false
 
-		buffer, err := json.Marshal(newProfile)
-		if err != nil {
-			logger.Log(logger.Fields{"error": err}).Error("Unable to convert to json format")
-			return 0
-		}
-
-		// Create profile filename
-		file, err := os.Create(profilePath)
-		if err != nil {
-			logger.Log(logger.Fields{"error": err, "location": newProfile.Path}).Error("Unable to create new device profile")
-			return 0
-		}
-
-		_, err = file.Write(buffer)
-		if err != nil {
-			logger.Log(logger.Fields{"error": err, "location": newProfile.Path}).Error("Unable to write data")
-			return 0
-		}
-
-		err = file.Close()
-		if err != nil {
-			logger.Log(logger.Fields{"error": err, "location": newProfile.Path}).Error("Unable to close file handle")
+		if err := common.SaveJsonData(profilePath, newProfile); err != nil {
+			logger.Log(logger.Fields{"error": err, "location": newProfile.Path}).Error("Unable to save new device profile")
 			return 0
 		}
 		d.loadDeviceProfiles()
