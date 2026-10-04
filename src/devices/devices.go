@@ -167,7 +167,7 @@ type Product struct {
 }
 
 var (
-	mutex               sync.Mutex
+	mutex               sync.RWMutex
 	cls                 *cluster.Device
 	expectedPermissions = []os.FileMode{os.FileMode(0600), os.FileMode(0660)}
 	vendorId            = uint16(6940)  // Corsair
@@ -185,9 +185,20 @@ func Stop() {
 	// Stop all cluster operations
 	cls.Stop()
 
+	// Take a snapshot so USB hotplug removal cannot mutate the device map while
+	// the application is shutting devices down. Do not hold the registry lock
+	// while calling into a device: Stop/StopDirty implementations may call back
+	// into this package.
+	mutex.RLock()
+	activeDevices := make([]*common.Device, 0, len(devices))
 	for _, device := range devices {
+		activeDevices = append(activeDevices, device)
+	}
+	mutex.RUnlock()
+
+	for _, device := range activeDevices {
 		CallDeviceMethod(device.Serial, "Stop")
-		delete(devices, device.Serial)
+		deleteDevice(device.Serial)
 	}
 	err := hid.Exit()
 	if err != nil {
@@ -197,12 +208,14 @@ func Stop() {
 
 // StopDirty will stop the device without closing the file handles. Used when device is unplugged
 func StopDirty(deviceId string, productId uint16) {
+	mutex.RLock()
 	device, ok := devices[deviceId]
 	if !ok {
 		device, ok = devices[strconv.Itoa(int(productId))]
-		if !ok {
-			return
-		}
+	}
+	mutex.RUnlock()
+	if !ok {
+		return
 	}
 
 	if config.GetConfig().EnableOpenRGBTargetServer {
@@ -248,8 +261,9 @@ func GetSupportedDevices() interface{} {
 
 // GetRgbProfiles will return a list of all RGB profiles for every device
 func GetRgbProfiles() map[string]interface{} {
-	profiles := make(map[string]interface{}, len(devices))
-	for _, device := range devices {
+	activeDevices := GetDevices()
+	profiles := make(map[string]interface{}, len(activeDevices))
+	for _, device := range activeDevices {
 		res := CallDeviceMethod(device.Serial, "GetRgbProfiles")
 		if res != nil {
 			val := res[0]
@@ -283,7 +297,7 @@ func ControlDeviceRgb(mode bool) {
 // UpdateGlobalRgbProfile will update device RGB profile
 func UpdateGlobalRgbProfile(profile string) uint8 {
 	channelId := -1
-	for _, device := range devices {
+	for _, device := range GetDevices() {
 		CallDeviceMethod(device.Serial, "UpdateRgbProfile", channelId, profile)
 	}
 	return 1
@@ -297,7 +311,7 @@ func UpdateAllDevicesStaticColor(color rgb.Color) uint8 {
 		EndColor:   color,
 		Brightness: 1.0,
 	}
-	for _, device := range devices {
+	for _, device := range GetDevices() {
 		CallDeviceMethod(device.Serial, "UpdateRgbProfileData", "static", profile)
 		CallDeviceMethod(device.Serial, "UpdateRgbProfile", channelId, "static")
 	}
@@ -306,7 +320,7 @@ func UpdateAllDevicesStaticColor(color rgb.Color) uint8 {
 
 // ResetSpeedProfiles will reset the speed profile on each available device
 func ResetSpeedProfiles(profile string) {
-	for _, device := range devices {
+	for _, device := range GetDevices() {
 		if device.ProductType == common.ProductTypeLinkHub ||
 			device.ProductType == common.ProductTypeCC ||
 			device.ProductType == common.ProductTypeCCXT ||
@@ -323,7 +337,7 @@ func ResetSpeedProfiles(profile string) {
 // GetDevicesLedData will return led data for all devices
 func GetDevicesLedData() interface{} {
 	var leds []interface{}
-	for _, device := range devices {
+	for _, device := range GetDevices() {
 		res := CallDeviceMethod(device.Serial, "GetDeviceLedData")
 		if res != nil && len(res) > 0 {
 			val := res[0]
@@ -336,7 +350,7 @@ func GetDevicesLedData() interface{} {
 // GetTemperatureProbes will return a list of temperature probes
 func GetTemperatureProbes() interface{} {
 	var probes []interface{}
-	for _, device := range devices {
+	for _, device := range GetDevices() {
 		if device.ProductType == common.ProductTypeLinkHub ||
 			device.ProductType == common.ProductTypeCC ||
 			device.ProductType == common.ProductTypeCCXT ||
@@ -362,7 +376,7 @@ func UpdateDeviceMetrics() {
 	metrics.PopulateDefault()
 	metrics.PopulateStorage()
 
-	for _, device := range devices {
+	for _, device := range GetDevices() {
 		CallDeviceMethod(device.Serial, "UpdateDeviceMetrics")
 	}
 }
@@ -389,16 +403,19 @@ func addDevice(device *common.Device) {
 
 // CallDeviceMethod will call device method based on method name and arguments
 func CallDeviceMethod(deviceId string, methodName string, args ...interface{}) []reflect.Value {
-	mutex.Lock()
-	defer mutex.Unlock()
-
+	// Only protect the registry lookup. Holding the registry lock while invoking
+	// arbitrary device code can deadlock when that code removes a device (for
+	// example a USB-only StopDirty path). The common.Device pointer remains valid
+	// for the duration of this call even if its registry entry is removed.
+	mutex.RLock()
 	device, ok := devices[deviceId]
+	mutex.RUnlock()
 	if !ok {
 		logger.Log(logger.Fields{"deviceId": deviceId}).Warn("Device not found")
 		return nil
 	}
 
-	method := reflect.ValueOf(GetDevice(device.Serial)).MethodByName(methodName)
+	method := reflect.ValueOf(device.Instance).MethodByName(methodName)
 	if !method.IsValid() {
 		return nil
 	}
@@ -418,15 +435,27 @@ func GetProducts() map[string]Device {
 
 // GetDevice will return a device by device serial
 func GetDevice(deviceId string) interface{} {
-	if device, ok := devices[deviceId]; ok {
+	mutex.RLock()
+	device, ok := devices[deviceId]
+	mutex.RUnlock()
+	if ok {
 		return device.Instance
 	}
 	return nil
 }
 
-// GetDevices will return all available devices
+// GetDevices will return a snapshot of all available devices. Returning the
+// registry map itself allowed request handlers to iterate it concurrently with
+// USB hotplug add/remove operations.
 func GetDevices() map[string]*common.Device {
-	return devices
+	mutex.RLock()
+	defer mutex.RUnlock()
+
+	out := make(map[string]*common.Device, len(devices))
+	for serial, device := range devices {
+		out[serial] = device
+	}
+	return out
 }
 
 // GetMouse will return all available mouse devices
@@ -447,7 +476,7 @@ func GetMouse() map[string]string {
 // GetDevicesEx will return all available devices with partial data
 func GetDevicesEx() map[string]*common.Device {
 	out := make(map[string]*common.Device)
-	for _, device := range devices {
+	for _, device := range GetDevices() {
 		out[device.Serial] = &common.Device{
 			ProductType: 0,
 			Product:     device.Product,
