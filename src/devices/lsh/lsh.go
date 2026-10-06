@@ -3956,7 +3956,7 @@ func (d *Device) getDevices() int {
 					logger.Log(logger.Fields{"serial": d.Serial, "profile": sp}).Warn("Tried to apply non-existing profile")
 				}
 			} else {
-				logger.Log(logger.Fields{"serial": d.Serial, "profile": sp}).Warn("Tried to apply non-existing channel")
+				logger.Log(logger.Fields{"serial": d.Serial, "channel": i}).Debug("Speed profile channel is not present; using default profile")
 			}
 
 			// Device label
@@ -4000,24 +4000,19 @@ func (d *Device) getDevices() int {
 					logger.Log(logger.Fields{"serial": d.Serial, "profile": rp}).Warn("Tried to apply non-existing rgb profile")
 				}
 			} else {
-				logger.Log(logger.Fields{"serial": d.Serial, "profile": rp}).Warn("Tried to apply rgb profile to the non-existing channel")
+				logger.Log(logger.Fields{"serial": d.Serial, "channel": i}).Debug("RGB profile channel is not present; using default profile")
 			}
 		} else {
 			logger.Log(logger.Fields{"serial": d.Serial}).Warn("DeviceProfile is not set, probably first startup")
 		}
 
 		lcdSerial := ""
-		if d.DeviceProfile != nil {
-			// Profile is set
-			if ls, ok := d.DeviceProfile.LCDDevices[i]; ok {
-				if len(ls) > 0 {
-					lcdSerial = ls
-				}
-			} else {
-				logger.Log(logger.Fields{"serial": d.Serial, "lcdSerial": ls}).Warn("Tried to apply rgb profile to the non-existing channel")
+		// LCD profile state is meaningful only for pump/AIO devices. A missing
+		// LCDDevices entry is valid (for example, an AIO without an LCD cap).
+		if d.DeviceProfile != nil && (deviceMeta.ContainsPump || deviceMeta.AIO) {
+			if ls, ok := d.DeviceProfile.LCDDevices[i]; ok && len(ls) > 0 {
+				lcdSerial = ls
 			}
-		} else {
-			logger.Log(logger.Fields{"serial": d.Serial}).Warn("DeviceProfile is not set, probably first startup")
 		}
 
 		var ledChannels uint8 = 0
