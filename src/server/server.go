@@ -12,6 +12,7 @@ import (
 	"OpenLinkHub/src/dashboard"
 	"OpenLinkHub/src/devices"
 	"OpenLinkHub/src/devices/lcd"
+	"OpenLinkHub/src/discovery"
 	"OpenLinkHub/src/display"
 	"OpenLinkHub/src/inputmanager"
 	"OpenLinkHub/src/language"
@@ -31,6 +32,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -3013,9 +3015,13 @@ func Init() {
 				server.Addr,
 			),
 		)
-		err := server.ListenAndServe()
+		listener, err := net.Listen("tcp", server.Addr)
 		if err != nil {
 			logger.Log(logger.Fields{"error": err}).Fatal("Unable to start REST server")
+		}
+		discovery.Start()
+		if err = server.Serve(listener); err != nil && err != http.ErrServerClosed {
+			logger.Log(logger.Fields{"error": err}).Fatal("Unable to serve REST requests")
 		}
 	} else {
 		logger.Log(logger.Fields{}).Info("REST server is disabled")

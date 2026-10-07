@@ -10,6 +10,7 @@ import (
 	"OpenLinkHub/src/dashboard"
 	"OpenLinkHub/src/devices"
 	"OpenLinkHub/src/devices/lcd"
+	"OpenLinkHub/src/discovery"
 	"OpenLinkHub/src/display"
 	"OpenLinkHub/src/inputmanager"
 	"OpenLinkHub/src/keyboards"
@@ -67,6 +68,7 @@ func Start() {
 
 // Stop will stop device control
 func Stop() {
+	discovery.Stop()    // Network discovery
 	devices.Stop()      // Devices
 	inputmanager.Stop() // Cleanup virtual devices
 	audio.StopAudio()   // Virtual Audio

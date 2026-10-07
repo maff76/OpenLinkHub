@@ -6,6 +6,7 @@ package config
 
 import (
 	"OpenLinkHub/src/common"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -88,6 +89,7 @@ type Configuration struct {
 	EnableMotherboard         bool      `json:"enableMotherboard"`
 	MotherboardBiosOnExit     bool      `json:"motherboardBiosOnExit"`
 	MemoryRegisterOverride    ByteArray `json:"memoryRegisterOverride"`
+	InstanceID                string    `json:"instanceId"`
 }
 
 var (
@@ -115,6 +117,7 @@ var (
 		"enableMotherboard":         false,
 		"motherboardBiosOnExit":     false,
 		"memoryRegisterOverride":    make([]byte, 0),
+		"instanceId":                "",
 	}
 	systemService = true
 )
@@ -146,6 +149,32 @@ func Init() {
 		panic(err.Error())
 	}
 	configuration.ConfigPath = configPath
+	ensureInstanceID()
+}
+
+// ensureInstanceID creates the stable identity used by network discovery.
+// The value is application-owned and intentionally not exposed as an editable setting.
+func ensureInstanceID() {
+	if configuration.InstanceID != "" {
+		return
+	}
+
+	configuration.InstanceID = newUUID()
+	saveConfigSettings(configuration)
+}
+
+// newUUID returns an RFC 4122 version 4 UUID using the kernel CSPRNG.
+func newUUID() string {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		panic(fmt.Sprintf("unable to generate OpenLinkHub instance ID: %v", err))
+	}
+	value[6] = (value[6] & 0x0f) | 0x40
+	value[8] = (value[8] & 0x3f) | 0x80
+	return fmt.Sprintf(
+		"%08x-%04x-%04x-%04x-%012x",
+		value[0:4], value[4:6], value[6:8], value[8:10], value[10:16],
+	)
 }
 
 // GetConfig will return structs.Configuration struct
