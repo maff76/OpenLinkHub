@@ -88,6 +88,37 @@ type Devices struct {
 	NonVolatileSize      string  `json:"nonVolatileSize"`
 	CacheSize            string  `json:"cacheSize"`
 	LogicalSize          string  `json:"logicalSize"`
+	SPDRevision          string  `json:"spdRevision"`
+	SPDCRCValid          bool    `json:"spdCrcValid"`
+	DRAMDeviceType       string  `json:"dramDeviceType"`
+	SPDModuleType        string  `json:"spdModuleType"`
+	DensityPerDie        string  `json:"densityPerDie"`
+	Package              string  `json:"package"`
+	DiesPerPackage       int     `json:"diesPerPackage"`
+	IOWidth              string  `json:"ioWidth"`
+	BankGroups           int     `json:"bankGroups"`
+	BanksPerBankGroup    int     `json:"banksPerBankGroup"`
+	RanksPerChannel      int     `json:"ranksPerChannel"`
+	RankMix              string  `json:"rankMix"`
+	ChannelsPerDIMM      int     `json:"channelsPerDimm"`
+	BusWidthPerChannel   int     `json:"busWidthPerChannel"`
+	JEDECDataRate        int     `json:"jedecDataRate"`
+	ModuleHeightMM       int     `json:"moduleHeightMm"`
+	DRAMManufacturer     string  `json:"dramManufacturer"`
+	ManufacturingDate    string  `json:"manufacturingDate"`
+	DRAMStepping         int     `json:"dramStepping"`
+	XMPPresent           bool    `json:"xmpPresent"`
+	XMPProfileName       string  `json:"xmpProfileName"`
+	XMPDataRate          int     `json:"xmpDataRate"`
+	XMPCASLatency        int     `json:"xmpCasLatency"`
+	XMPtrCD              int     `json:"xmpTRCD"`
+	XMPtrP               int     `json:"xmpTRP"`
+	XMPtrAS              int     `json:"xmpTRAS"`
+	XMPVDD               float64 `json:"xmpVdd"`
+	XMPVDDQ              float64 `json:"xmpVddq"`
+	XMPVPP               float64 `json:"xmpVpp"`
+	XMPCRCValid          bool    `json:"xmpCrcValid"`
+	EXPOPresent          bool    `json:"expoPresent"`
 	HasTemps             bool    `json:"-"`
 	HasSpeed             bool
 	ContainsPump         bool
@@ -882,6 +913,37 @@ func (d *Device) getDevices() int {
 					}
 					if hasModule {
 						device.I2CAddress = module.SPDAddress
+						device.SPDRevision = module.SPDRevision
+						device.SPDCRCValid = module.SPDCRCValid
+						device.DRAMDeviceType = module.DRAMDeviceType
+						device.SPDModuleType = module.ModuleType
+						device.DensityPerDie = module.DensityPerDie
+						device.Package = module.Package
+						device.DiesPerPackage = module.DiesPerPackage
+						device.IOWidth = module.IOWidth
+						device.BankGroups = module.BankGroups
+						device.BanksPerBankGroup = module.BanksPerBankGroup
+						device.RanksPerChannel = module.RanksPerChannel
+						device.RankMix = module.RankMix
+						device.ChannelsPerDIMM = module.ChannelsPerDIMM
+						device.BusWidthPerChannel = module.BusWidthPerChannel
+						device.JEDECDataRate = module.JEDECDataRate
+						device.ModuleHeightMM = module.ModuleHeightMM
+						device.DRAMManufacturer = module.DRAMManufacturer
+						device.ManufacturingDate = module.ManufacturingDate
+						device.DRAMStepping = module.DRAMStepping
+						device.XMPPresent = module.XMPPresent
+						device.XMPProfileName = module.XMPProfileName
+						device.XMPDataRate = module.XMPDataRate
+						device.XMPCASLatency = module.XMPCASLatency
+						device.XMPtrCD = module.XMPtrCD
+						device.XMPtrP = module.XMPtrP
+						device.XMPtrAS = module.XMPtrAS
+						device.XMPVDD = module.XMPVDD
+						device.XMPVDDQ = module.XMPVDDQ
+						device.XMPVPP = module.XMPVPP
+						device.XMPCRCValid = module.XMPCRCValid
+						device.EXPOPresent = module.EXPOPresent
 					}
 
 					// Enrich the discovered DIMM with SMBIOS Type 17 metadata.
