@@ -3925,7 +3925,7 @@ func (d *Device) getDevices() int {
 	var devices = make(map[int]*Devices)
 	var nonAIOLcdData = lcd.GetNonAioLCDData()
 
-	response := d.read(modeGetDevices, dataTypeGetDevices, false, v2)
+	response := d.readExpected(modeGetDevices, dataTypeGetDevices, false, v2)
 
 	// Guaranteed getDevices-level diagnostic. This is deliberately emitted here
 	// as well as in read() so we can prove exactly what the parser receives even
@@ -5381,7 +5381,9 @@ func (d *Device) getDeviceFirmware() {
 	d.FirmwareInternal = []int{v1, v2, v3}
 }
 
-// read will read data from a device and return data as a byte array
+// read will read data from a device and return data as a byte array.
+// Keep the author's original semantics here because existing callers expect the
+// first endpoint response even when its type does not match bufferType.
 func (d *Device) read(endpoint, bufferType []byte, psu bool, v2 byte) []byte {
 	d.deviceLock.Lock()
 	defer d.deviceLock.Unlock()
@@ -5398,56 +5400,12 @@ func (d *Device) read(endpoint, bufferType []byte, psu bool, v2 byte) []byte {
 		logger.Log(logger.Fields{"error": err}).Error("Unable to open endpoint")
 	}
 
-	// A LINK hub can have an unrelated/stale HID response queued when an
-	// endpoint is opened. Never hand that packet to a caller that requested a
-	// specific response type. Drain a small, bounded number of packets until
-	// bytes 4:6 identify the requested data type. The bound prevents a broken
-	// device from trapping OpenLinkHub in an endless read loop.
-	const maxResponseAttempts = 4
-	matched := false
-	for attempt := 1; attempt <= maxResponseAttempts; attempt++ {
-		buffer, err = d.transfer(cmdRead, endpoint, psu, v2)
-		if err != nil {
-			logger.Log(logger.Fields{"error": err}).Error("Unable to read endpoint")
-			break
-		}
-
-		if responseMatchSafe(buffer, bufferType) {
-			matched = true
-			if attempt > 1 {
-				logger.Log(logger.Fields{
-					"serial":       d.Serial,
-					"attempt":      attempt,
-					"expectedType": fmt.Sprintf("% 2x", bufferType),
-				}).Debug("Matched endpoint response after skipping unrelated HID packet")
-			}
-			break
-		}
-
-		actualType := "short"
-		if len(buffer) >= 6 {
-			actualType = fmt.Sprintf("% 2x", buffer[4:6])
-		}
-		logger.Log(logger.Fields{
-			"serial":       d.Serial,
-			"attempt":      attempt,
-			"expectedType": fmt.Sprintf("% 2x", bufferType),
-			"actualType":   actualType,
-			"responseLen":  len(buffer),
-		}).Debug("Skipping unrelated HID endpoint response")
+	buffer, err = d.transfer(cmdRead, endpoint, psu, v2)
+	if err != nil {
+		logger.Log(logger.Fields{"error": err}).Error("Unable to read endpoint")
 	}
 
-	if !matched {
-		logger.Log(logger.Fields{
-			"serial":       d.Serial,
-			"expectedType": fmt.Sprintf("% 2x", bufferType),
-			"attempts":     maxResponseAttempts,
-		}).Warn("Unable to obtain expected HID endpoint response")
-		buffer = nil
-	} else {
-		// Preserve the author's continuation behaviour once the correct first
-		// response has been found. The continuation packet has a four-byte HID
-		// framing prefix which is omitted when joining the payloads.
+	if responseMatch(buffer, bufferType) {
 		next, e := d.transfer(cmdRead, endpoint, psu, v2)
 		if e != nil {
 			logger.Log(logger.Fields{"error": e}).Error("Unable to read endpoint")
@@ -5461,6 +5419,84 @@ func (d *Device) read(endpoint, bufferType []byte, psu bool, v2 byte) []byte {
 		logger.Log(logger.Fields{"error": err}).Error("Unable to close endpoint")
 	}
 	return buffer
+}
+
+// readExpected is deliberately used only by LINK device enumeration. Unlike
+// read(), getDevices must never parse an unrelated/stale HID response as a
+// device list. Drain a bounded number of responses until the requested data
+// type is observed. Returning nil is safe because getDevices validates the
+// response length before indexing it.
+func (d *Device) readExpected(endpoint, bufferType []byte, psu bool, v2 byte) []byte {
+	d.deviceLock.Lock()
+	defer d.deviceLock.Unlock()
+
+	_, err := d.transfer(cmdCloseEndpoint, endpoint, psu, v2)
+	if err != nil {
+		logger.Log(logger.Fields{"error": err}).Error("Unable to close endpoint")
+	}
+
+	_, err = d.transfer(cmdOpenEndpoint, endpoint, psu, v2)
+	if err != nil {
+		logger.Log(logger.Fields{"error": err}).Error("Unable to open endpoint")
+	}
+
+	defer func() {
+		if _, closeErr := d.transfer(cmdCloseEndpoint, endpoint, psu, v2); closeErr != nil {
+			logger.Log(logger.Fields{"error": closeErr}).Error("Unable to close endpoint")
+		}
+	}()
+
+	const maxResponseAttempts = 4
+	for attempt := 1; attempt <= maxResponseAttempts; attempt++ {
+		buffer, readErr := d.transfer(cmdRead, endpoint, psu, v2)
+		if readErr != nil {
+			logger.Log(logger.Fields{"error": readErr, "attempt": attempt}).Error("Unable to read expected endpoint response")
+			return nil
+		}
+
+		actualType := "short"
+		if len(buffer) >= 6 {
+			actualType = fmt.Sprintf("% 2x", buffer[4:6])
+		}
+
+		if !responseMatchSafe(buffer, bufferType) {
+			logger.Log(logger.Fields{
+				"serial":       d.Serial,
+				"attempt":      attempt,
+				"expectedType": fmt.Sprintf("% 2x", bufferType),
+				"actualType":   actualType,
+				"responseLen":  len(buffer),
+			}).Warn("getDevices() - Skipping unrelated HID endpoint response")
+			continue
+		}
+
+		logger.Log(logger.Fields{
+			"serial":       d.Serial,
+			"attempt":      attempt,
+			"expectedType": fmt.Sprintf("% 2x", bufferType),
+			"actualType":   actualType,
+			"responseLen":  len(buffer),
+		}).Warn("getDevices() - Matched expected HID endpoint response")
+
+		// Preserve the author's continuation behaviour once the correct first
+		// packet has been found.
+		next, nextErr := d.transfer(cmdRead, endpoint, psu, v2)
+		if nextErr != nil {
+			logger.Log(logger.Fields{"error": nextErr}).Error("Unable to read endpoint continuation")
+			return buffer
+		}
+		if len(next) >= 4 {
+			buffer = append(buffer, next[4:]...)
+		}
+		return buffer
+	}
+
+	logger.Log(logger.Fields{
+		"serial":       d.Serial,
+		"expectedType": fmt.Sprintf("% 2x", bufferType),
+		"attempts":     maxResponseAttempts,
+	}).Warn("getDevices() - Expected HID endpoint response not received")
+	return nil
 }
 
 // readDeviceData will read data from a device and return data as a byte array
