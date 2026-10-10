@@ -3927,21 +3927,6 @@ func (d *Device) getDevices() int {
 
 	response := d.readExpected(modeGetDevices, dataTypeGetDevices, false, v2)
 
-	// Guaranteed getDevices-level diagnostic. This is deliberately emitted here
-	// as well as in read() so we can prove exactly what the parser receives even
-	// if lower-level endpoint diagnostics are filtered or changed later.
-	headerLen := 16
-	if len(response) < headerLen {
-		headerLen = len(response)
-	}
-	logger.Log(logger.Fields{
-		"serial":       d.Serial,
-		"responseLen":  len(response),
-		"expectedType": fmt.Sprintf("% 2x", dataTypeGetDevices),
-		"header":       fmt.Sprintf("% 2x", response[:headerLen]),
-		"typeMatch":    responseMatchSafe(response, dataTypeGetDevices),
-	}).Warn("getDevices() - Parser input diagnostic")
-
 	if d.Debug {
 		logger.Log(logger.Fields{"serial": d.Serial, "data": fmt.Sprintf("% 2x", response)}).Info("getDevices()")
 	}
@@ -5446,57 +5431,98 @@ func (d *Device) readExpected(endpoint, bufferType []byte, psu bool, v2 byte) []
 		}
 	}()
 
+	// A stale response can occasionally still be queued when the endpoint is
+	// opened. Do not hand an unrelated packet to the device-list parser.
 	const maxResponseAttempts = 4
+	var buffer []byte
 	for attempt := 1; attempt <= maxResponseAttempts; attempt++ {
-		buffer, readErr := d.transfer(cmdRead, endpoint, psu, v2)
+		candidate, readErr := d.transfer(cmdRead, endpoint, psu, v2)
 		if readErr != nil {
 			logger.Log(logger.Fields{"error": readErr, "attempt": attempt}).Error("Unable to read expected endpoint response")
 			return nil
 		}
-
-		actualType := "short"
-		if len(buffer) >= 6 {
-			actualType = fmt.Sprintf("% 2x", buffer[4:6])
-		}
-
-		if !responseMatchSafe(buffer, bufferType) {
-			logger.Log(logger.Fields{
-				"serial":       d.Serial,
-				"attempt":      attempt,
-				"expectedType": fmt.Sprintf("% 2x", bufferType),
-				"actualType":   actualType,
-				"responseLen":  len(buffer),
-			}).Warn("getDevices() - Skipping unrelated HID endpoint response")
+		if !responseMatchSafe(candidate, bufferType) {
+			if d.Debug {
+				actualType := "short"
+				if len(candidate) >= 6 {
+					actualType = fmt.Sprintf("% 2x", candidate[4:6])
+				}
+				logger.Log(logger.Fields{
+					"serial":       d.Serial,
+					"attempt":      attempt,
+					"expectedType": fmt.Sprintf("% 2x", bufferType),
+					"actualType":   actualType,
+				}).Debug("getDevices() - Skipping unrelated HID endpoint response")
+			}
 			continue
 		}
-
-		logger.Log(logger.Fields{
-			"serial":       d.Serial,
-			"attempt":      attempt,
-			"expectedType": fmt.Sprintf("% 2x", bufferType),
-			"actualType":   actualType,
-			"responseLen":  len(buffer),
-		}).Warn("getDevices() - Matched expected HID endpoint response")
-
-		// Preserve the author's continuation behaviour once the correct first
-		// packet has been found.
-		next, nextErr := d.transfer(cmdRead, endpoint, psu, v2)
-		if nextErr != nil {
-			logger.Log(logger.Fields{"error": nextErr}).Error("Unable to read endpoint continuation")
-			return buffer
-		}
-		if len(next) >= 4 {
-			buffer = append(buffer, next[4:]...)
-		}
-		return buffer
+		buffer = candidate
+		break
 	}
 
-	logger.Log(logger.Fields{
-		"serial":       d.Serial,
-		"expectedType": fmt.Sprintf("% 2x", bufferType),
-		"attempts":     maxResponseAttempts,
-	}).Warn("getDevices() - Expected HID endpoint response not received")
-	return nil
+	if len(buffer) == 0 {
+		logger.Log(logger.Fields{
+			"serial":       d.Serial,
+			"expectedType": fmt.Sprintf("% 2x", bufferType),
+		}).Warn("getDevices() - Expected HID endpoint response not received")
+		return nil
+	}
+
+	// LINK device records are variable length and a populated hub can require
+	// more than two HID reports. Keep collecting 508-byte continuation payloads
+	// until the channel count and all variable-length records are complete.
+	// Eight reports cap the assembled response at 4068 bytes, comfortably above
+	// the protocol's 24-device capacity while preventing unbounded reads.
+	const maxPackets = 8
+	for packet := 1; packet < maxPackets && !getDevicesResponseComplete(buffer); packet++ {
+		next, readErr := d.transfer(cmdRead, endpoint, psu, v2)
+		if readErr != nil {
+			logger.Log(logger.Fields{"error": readErr, "packet": packet + 1}).Error("Unable to read endpoint continuation")
+			return buffer
+		}
+		if len(next) < 4 {
+			logger.Log(logger.Fields{
+				"serial": d.Serial,
+				"packet": packet + 1,
+				"length": len(next),
+			}).Warn("getDevices() - Continuation response too short")
+			return buffer
+		}
+		buffer = append(buffer, next[4:]...)
+	}
+
+	if !getDevicesResponseComplete(buffer) {
+		logger.Log(logger.Fields{
+			"serial":      d.Serial,
+			"responseLen": len(buffer),
+			"maxPackets":  maxPackets,
+		}).Warn("getDevices() - Device list still incomplete after maximum continuation packets")
+	}
+	return buffer
+}
+
+// getDevicesResponseComplete checks only the wire-format record boundaries.
+// It deliberately does not depend on device metadata, profiles, or known model
+// types, so future LINK devices can still be enumerated safely.
+func getDevicesResponseComplete(response []byte) bool {
+	if len(response) < 7 {
+		return false
+	}
+
+	channels := int(response[6])
+	data := response[7:]
+	position := 0
+	for i := 0; i < channels; i++ {
+		if position+8 > len(data) {
+			return false
+		}
+		recordLen := 8 + int(data[position+7])
+		if position+recordLen > len(data) {
+			return false
+		}
+		position += recordLen
+	}
+	return true
 }
 
 // readDeviceData will read data from a device and return data as a byte array
