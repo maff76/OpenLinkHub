@@ -5398,50 +5398,60 @@ func (d *Device) read(endpoint, bufferType []byte, psu bool, v2 byte) []byte {
 		logger.Log(logger.Fields{"error": err}).Error("Unable to open endpoint")
 	}
 
-	buffer, err = d.transfer(cmdRead, endpoint, psu, v2)
-	if err != nil {
-		logger.Log(logger.Fields{"error": err}).Error("Unable to read endpoint")
-	}
+	// A LINK hub can have an unrelated/stale HID response queued when an
+	// endpoint is opened. Never hand that packet to a caller that requested a
+	// specific response type. Drain a small, bounded number of packets until
+	// bytes 4:6 identify the requested data type. The bound prevents a broken
+	// device from trapping OpenLinkHub in an endless read loop.
+	const maxResponseAttempts = 4
+	matched := false
+	for attempt := 1; attempt <= maxResponseAttempts; attempt++ {
+		buffer, err = d.transfer(cmdRead, endpoint, psu, v2)
+		if err != nil {
+			logger.Log(logger.Fields{"error": err}).Error("Unable to read endpoint")
+			break
+		}
 
-	// Identify getDevices reads by the requested response data type rather than
-	// the endpoint slice. This makes the diagnostic independent of endpoint
-	// slice reuse/mutation elsewhere in the protocol path.
-	isGetDevicesRead := bytes.Equal(bufferType, dataTypeGetDevices)
+		if responseMatchSafe(buffer, bufferType) {
+			matched = true
+			if attempt > 1 {
+				logger.Log(logger.Fields{
+					"serial":       d.Serial,
+					"attempt":      attempt,
+					"expectedType": fmt.Sprintf("% 2x", bufferType),
+				}).Debug("Matched endpoint response after skipping unrelated HID packet")
+			}
+			break
+		}
 
-	// getDevices is sensitive to stale or unexpected HID packets because the
-	// parser expects bytes 4:6 to identify the requested data type and byte 6
-	// to contain the device count. Log the first packet header before deciding
-	// whether a continuation packet belongs to this response.
-	if isGetDevicesRead {
-		headerLen := 16
-		if len(buffer) < headerLen {
-			headerLen = len(buffer)
+		actualType := "short"
+		if len(buffer) >= 6 {
+			actualType = fmt.Sprintf("% 2x", buffer[4:6])
 		}
 		logger.Log(logger.Fields{
 			"serial":       d.Serial,
-			"responseLen":  len(buffer),
+			"attempt":      attempt,
 			"expectedType": fmt.Sprintf("% 2x", bufferType),
-			"header":       fmt.Sprintf("% 2x", buffer[:headerLen]),
-			"typeMatch":    responseMatchSafe(buffer, bufferType),
-		}).Warn("getDevices() - First HID response diagnostic")
+			"actualType":   actualType,
+			"responseLen":  len(buffer),
+		}).Debug("Skipping unrelated HID endpoint response")
 	}
 
-	if responseMatchSafe(buffer, bufferType) {
+	if !matched {
+		logger.Log(logger.Fields{
+			"serial":       d.Serial,
+			"expectedType": fmt.Sprintf("% 2x", bufferType),
+			"attempts":     maxResponseAttempts,
+		}).Warn("Unable to obtain expected HID endpoint response")
+		buffer = nil
+	} else {
+		// Preserve the author's continuation behaviour once the correct first
+		// response has been found. The continuation packet has a four-byte HID
+		// framing prefix which is omitted when joining the payloads.
 		next, e := d.transfer(cmdRead, endpoint, psu, v2)
 		if e != nil {
 			logger.Log(logger.Fields{"error": e}).Error("Unable to read endpoint")
 		} else if len(next) >= 4 {
-			if isGetDevicesRead {
-				headerLen := 16
-				if len(next) < headerLen {
-					headerLen = len(next)
-				}
-				logger.Log(logger.Fields{
-					"serial":      d.Serial,
-					"responseLen": len(next),
-					"header":      fmt.Sprintf("% 2x", next[:headerLen]),
-				}).Warn("getDevices() - Continuation HID response diagnostic")
-			}
 			buffer = append(buffer, next[4:]...)
 		}
 	}
