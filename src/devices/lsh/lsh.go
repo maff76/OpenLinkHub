@@ -3926,6 +3926,22 @@ func (d *Device) getDevices() int {
 	var nonAIOLcdData = lcd.GetNonAioLCDData()
 
 	response := d.read(modeGetDevices, dataTypeGetDevices, false, v2)
+
+	// Guaranteed getDevices-level diagnostic. This is deliberately emitted here
+	// as well as in read() so we can prove exactly what the parser receives even
+	// if lower-level endpoint diagnostics are filtered or changed later.
+	headerLen := 16
+	if len(response) < headerLen {
+		headerLen = len(response)
+	}
+	logger.Log(logger.Fields{
+		"serial":       d.Serial,
+		"responseLen":  len(response),
+		"expectedType": fmt.Sprintf("% 2x", dataTypeGetDevices),
+		"header":       fmt.Sprintf("% 2x", response[:headerLen]),
+		"typeMatch":    responseMatchSafe(response, dataTypeGetDevices),
+	}).Warn("getDevices() - Parser input diagnostic")
+
 	if d.Debug {
 		logger.Log(logger.Fields{"serial": d.Serial, "data": fmt.Sprintf("% 2x", response)}).Info("getDevices()")
 	}
@@ -5387,11 +5403,16 @@ func (d *Device) read(endpoint, bufferType []byte, psu bool, v2 byte) []byte {
 		logger.Log(logger.Fields{"error": err}).Error("Unable to read endpoint")
 	}
 
+	// Identify getDevices reads by the requested response data type rather than
+	// the endpoint slice. This makes the diagnostic independent of endpoint
+	// slice reuse/mutation elsewhere in the protocol path.
+	isGetDevicesRead := bytes.Equal(bufferType, dataTypeGetDevices)
+
 	// getDevices is sensitive to stale or unexpected HID packets because the
 	// parser expects bytes 4:6 to identify the requested data type and byte 6
-	// to contain the device count.  Log the first packet header before deciding
+	// to contain the device count. Log the first packet header before deciding
 	// whether a continuation packet belongs to this response.
-	if bytes.Equal(endpoint, modeGetDevices) {
+	if isGetDevicesRead {
 		headerLen := 16
 		if len(buffer) < headerLen {
 			headerLen = len(buffer)
@@ -5410,7 +5431,7 @@ func (d *Device) read(endpoint, bufferType []byte, psu bool, v2 byte) []byte {
 		if e != nil {
 			logger.Log(logger.Fields{"error": e}).Error("Unable to read endpoint")
 		} else if len(next) >= 4 {
-			if bytes.Equal(endpoint, modeGetDevices) {
+			if isGetDevicesRead {
 				headerLen := 16
 				if len(next) < headerLen {
 					headerLen = len(next)
