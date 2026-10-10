@@ -5364,12 +5364,42 @@ func (d *Device) read(endpoint, bufferType []byte, psu bool, v2 byte) []byte {
 		logger.Log(logger.Fields{"error": err}).Error("Unable to read endpoint")
 	}
 
-	if responseMatch(buffer, bufferType) {
+	// getDevices is sensitive to stale or unexpected HID packets because the
+	// parser expects bytes 4:6 to identify the requested data type and byte 6
+	// to contain the device count.  Log the first packet header before deciding
+	// whether a continuation packet belongs to this response.
+	if bytes.Equal(endpoint, modeGetDevices) {
+		headerLen := 16
+		if len(buffer) < headerLen {
+			headerLen = len(buffer)
+		}
+		logger.Log(logger.Fields{
+			"serial":       d.Serial,
+			"responseLen":  len(buffer),
+			"expectedType": fmt.Sprintf("% 2x", bufferType),
+			"header":       fmt.Sprintf("% 2x", buffer[:headerLen]),
+			"typeMatch":    responseMatchSafe(buffer, bufferType),
+		}).Warn("getDevices() - First HID response diagnostic")
+	}
+
+	if responseMatchSafe(buffer, bufferType) {
 		next, e := d.transfer(cmdRead, endpoint, psu, v2)
 		if e != nil {
 			logger.Log(logger.Fields{"error": e}).Error("Unable to read endpoint")
+		} else if len(next) >= 4 {
+			if bytes.Equal(endpoint, modeGetDevices) {
+				headerLen := 16
+				if len(next) < headerLen {
+					headerLen = len(next)
+				}
+				logger.Log(logger.Fields{
+					"serial":      d.Serial,
+					"responseLen": len(next),
+					"header":      fmt.Sprintf("% 2x", next[:headerLen]),
+				}).Warn("getDevices() - Continuation HID response diagnostic")
+			}
+			buffer = append(buffer, next[4:]...)
 		}
-		buffer = append(buffer, next[4:]...)
 	}
 
 	_, err = d.transfer(cmdCloseEndpoint, endpoint, psu, v2)
@@ -6028,6 +6058,15 @@ func (d *Device) transfer(endpoint, buffer []byte, psu bool, v2 byte) ([]byte, e
 
 // responseMatch will check if two byte arrays match
 func responseMatch(response, expected []byte) bool {
-	responseBuffer := response[4:6]
-	return bytes.Equal(responseBuffer, expected)
+	return responseMatchSafe(response, expected)
+}
+
+// responseMatchSafe validates the response header before comparing the
+// two-byte data type.  A short HID read must never be allowed to panic while
+// the device is being enumerated.
+func responseMatchSafe(response, expected []byte) bool {
+	if len(response) < 6 || len(expected) != 2 {
+		return false
+	}
+	return bytes.Equal(response[4:6], expected)
 }
