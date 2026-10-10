@@ -3907,14 +3907,55 @@ func (d *Device) getDevices() int {
 		logger.Log(logger.Fields{"serial": d.Serial, "data": fmt.Sprintf("% 2x", response)}).Info("getDevices()")
 	}
 
+	// A valid get-devices response must contain the protocol header through the
+	// channel-count byte. Never index response[6] unless it is present.
+	if len(response) < 7 {
+		logger.Log(logger.Fields{
+			"serial":      d.Serial,
+			"responseLen": len(response),
+		}).Error("getDevices() - Response too short")
+		return 0
+	}
+
 	channels := response[6]
 	data := response[7:]
 	position := 0
 	duoPort := 1
 	for i := 1; i <= int(channels); i++ {
-		deviceIdLen := data[position+7]
+		// Each device record begins with an 8-byte header. Validate that header
+		// before reading the variable device-ID length at offset +7.
+		if position < 0 || position+8 > len(data) {
+			logger.Log(logger.Fields{
+				"serial":   d.Serial,
+				"channel":  i,
+				"channels": channels,
+				"position": position,
+				"dataLen":  len(data),
+			}).Warn("getDevices() - Device record header exceeds response length")
+			break
+		}
+
+		deviceIdLen := int(data[position+7])
+		recordLen := 8 + deviceIdLen
+
+		// Validate the complete variable-length record before slicing either the
+		// fixed header or device ID. This also gives us enough diagnostics to
+		// distinguish malformed data from a response truncated at the HID limit.
+		if recordLen < 8 || position+recordLen > len(data) {
+			logger.Log(logger.Fields{
+				"serial":      d.Serial,
+				"channel":     i,
+				"channels":    channels,
+				"position":    position,
+				"deviceIdLen": deviceIdLen,
+				"recordLen":   recordLen,
+				"dataLen":     len(data),
+			}).Warn("getDevices() - Device record exceeds response length")
+			break
+		}
+
 		if deviceIdLen == 0 {
-			position += 8
+			position += recordLen
 			continue
 		}
 		deviceTypeModel := data[position : position+8]
@@ -3924,7 +3965,7 @@ func (d *Device) getDevices() int {
 			lcdAvailable = true
 		}
 
-		deviceId := data[position+8 : position+8+int(deviceIdLen)]
+		deviceId := data[position+8 : position+recordLen]
 
 		// Get device definition
 		deviceMeta := d.getSupportedDevice(deviceTypeModel[2], deviceTypeModel[3])
@@ -3941,7 +3982,7 @@ func (d *Device) getDevices() int {
 		if deviceMeta == nil {
 			logger.Log(logger.Fields{"serial": d.Serial, "type": deviceTypeModel[2], "model": deviceTypeModel[3]}).Warn("getDevices() - Device not found in metadata")
 			if deviceIdLen > 0 {
-				position += 8 + int(deviceIdLen)
+				position += recordLen
 			} else {
 				position += 8
 			}
