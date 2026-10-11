@@ -175,11 +175,14 @@
 
                                 <!-- Speed Profile -->
                                 <div class="settings-row">
-                                    <span class="settings-label text-ellipsis">{{ .Lang "txtSpeed" }}</span>
+                                    <span class="settings-label text-ellipsis">FAN PROFILE</span>
                                     <label for="globalSpeedProfile">
                                         <select id="globalSpeedProfile" class="form-select system-select compact auto-width globalTempProfile" name="globalTempProfile">
                                             {{ range $key, $pf := $temperatures }}
                                             {{ if $pf.Hidden }}
+                                            {{ continue }}
+                                            {{ end }}
+                                            {{ if eq $pf.Sensor 10 }}
                                             {{ continue }}
                                             {{ end }}
                                             <option value="{{ $key }}" {{ if eq $deviceProfile.MultiProfile $key }}selected {{ end }}>{{ $key }}</option>

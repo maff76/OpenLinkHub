@@ -2289,6 +2289,18 @@ func (d *Device) SaveUserProfile(profileName string) uint8 {
 	return 0
 }
 
+// isGlobalFanSpeedTarget reports whether a LINK endpoint should be controlled by
+// the hub-level fan profile selector. Pumps/AIOs, PSUs, VRM coolers and other
+// special speed endpoints keep their own per-device profiles.
+func isGlobalFanSpeedTarget(device *Devices) bool {
+	return device != nil &&
+		device.HasSpeed &&
+		!device.ContainsPump &&
+		!device.AIO &&
+		!device.IsPSU &&
+		!device.IsVrmCooler
+}
+
 // UpdateSpeedProfile will update device channel speed.
 // If channelId is 0, all device channels will be updated
 func (d *Device) UpdateSpeedProfile(channelId int, profile string) uint8 {
@@ -2344,11 +2356,21 @@ func (d *Device) UpdateSpeedProfile(channelId int, profile string) uint8 {
 	}
 
 	if channelId < 0 {
-		d.DeviceProfile.MultiProfile = profile
-		// All devices
+		// The hub-level selector is a fan profile control, not a controller-wide
+		// speed override. Pumps/AIOs, PSUs and other special speed endpoints keep
+		// their own per-device profiles.
+		updated := false
 		for _, device := range d.Devices {
+			if !isGlobalFanSpeedTarget(device) {
+				continue
+			}
 			d.Devices[device.ChannelId].Profile = profile
+			updated = true
 		}
+		if !updated {
+			return 4
+		}
+		d.DeviceProfile.MultiProfile = profile
 	} else {
 		// Check if actual channelId exists in the device list
 		if _, ok := d.Devices[channelId]; ok {
@@ -2412,15 +2434,25 @@ func (d *Device) UpdateSpeedProfileBulk(channelIds []int, profile string) uint8 
 	}
 
 	if len(channelIds) > 0 {
-		d.DeviceProfile.MultiProfile = profile
+		updated := false
 		for _, channelId := range channelIds {
-			if _, ok := d.Devices[channelId]; ok {
-				// Update channel with new profile
-				d.Devices[channelId].Profile = profile
-			} else {
+			device, ok := d.Devices[channelId]
+			if !ok {
 				return 0
 			}
+			// Bulk changes originate from the hub-level fan profile selector. Keep
+			// pumps/AIOs, PSUs and other special speed endpoints independent even
+			// when their cards are selected in the UI.
+			if !isGlobalFanSpeedTarget(device) {
+				continue
+			}
+			d.Devices[channelId].Profile = profile
+			updated = true
 		}
+		if !updated {
+			return 4
+		}
+		d.DeviceProfile.MultiProfile = profile
 	} else {
 		return 0
 	}
