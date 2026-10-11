@@ -221,7 +221,8 @@ func configEditable(w http.ResponseWriter, r *http.Request) {
 			Code:   http.StatusOK,
 			Status: 1,
 			Data: map[string]interface{}{
-				"settings": config.GetEditableSettings(),
+				"settings":       config.GetEditableSettings(),
+				"cpuSensorChips": temperatures.GetCpuSensorChips(),
 			},
 		}).Send(w)
 	case http.MethodPost:

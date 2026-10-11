@@ -196,8 +196,18 @@ type EditableSettings struct {
 	Debug                     bool      `json:"debug"`
 	LogLevel                  string    `json:"logLevel"`
 	LogRetentionDays          int       `json:"logRetentionDays"`
+	Memory                    bool      `json:"memory"`
+	MemorySmBus               string    `json:"memorySmBus"`
+	MemoryType                int       `json:"memoryType"`
 	MemorySku                 string    `json:"memorySku"`
 	MemoryRegisterOverride    ByteArray `json:"memoryRegisterOverride"`
+	EnhancementKits           ByteArray `json:"enhancementKits"`
+	CPUSensorChip             string    `json:"cpuSensorChip"`
+	CpuTempFile               string    `json:"cpuTempFile"`
+	AMDGpuIndex               int       `json:"amdGpuIndex"`
+	AMDSmiPath                string    `json:"amdsmiPath"`
+	NvidiaGpuIndex            []int     `json:"nvidiaGpuIndex"`
+	DefaultNvidiaGPU          int       `json:"defaultNvidiaGPU"`
 	GraphProfiles             bool      `json:"graphProfiles"`
 	Metrics                   bool      `json:"metrics"`
 	RamTempViaHwmon           bool      `json:"ramTempViaHwmon"`
@@ -217,8 +227,18 @@ func GetEditableSettings() EditableSettings {
 		Debug:                     configuration.Debug,
 		LogLevel:                  configuration.LogLevel,
 		LogRetentionDays:          configuration.LogRetentionDays,
+		Memory:                    configuration.Memory,
+		MemorySmBus:               configuration.MemorySmBus,
+		MemoryType:                configuration.MemoryType,
 		MemorySku:                 configuration.MemorySku,
 		MemoryRegisterOverride:    append(ByteArray(nil), configuration.MemoryRegisterOverride...),
+		EnhancementKits:           append(ByteArray(nil), configuration.EnhancementKits...),
+		CPUSensorChip:             configuration.CPUSensorChip,
+		CpuTempFile:               configuration.CpuTempFile,
+		AMDGpuIndex:               configuration.AMDGpuIndex,
+		AMDSmiPath:                configuration.AMDSmiPath,
+		NvidiaGpuIndex:            append([]int(nil), configuration.NvidiaGpuIndex...),
+		DefaultNvidiaGPU:          configuration.DefaultNvidiaGPU,
 		GraphProfiles:             configuration.GraphProfiles,
 		Metrics:                   configuration.Metrics,
 		RamTempViaHwmon:           configuration.RamTempViaHwmon,
@@ -245,6 +265,23 @@ func UpdateEditableSettings(settings EditableSettings) error {
 	if len(settings.MemoryRegisterOverride) > 32 {
 		return fmt.Errorf("memory register override cannot contain more than 32 addresses")
 	}
+	if settings.MemoryType != 4 && settings.MemoryType != 5 {
+		return fmt.Errorf("memory type must be DDR4 or DDR5")
+	}
+	if len(settings.EnhancementKits) > 32 {
+		return fmt.Errorf("enhancement kits cannot contain more than 32 addresses")
+	}
+	if settings.AMDGpuIndex < 0 {
+		return fmt.Errorf("AMD GPU index cannot be negative")
+	}
+	if settings.DefaultNvidiaGPU < 0 {
+		return fmt.Errorf("default NVIDIA GPU index cannot be negative")
+	}
+	for _, index := range settings.NvidiaGpuIndex {
+		if index < 0 {
+			return fmt.Errorf("NVIDIA GPU indexes cannot be negative")
+		}
+	}
 	if settings.OpenRGBPort < 1 || settings.OpenRGBPort > 65535 {
 		return fmt.Errorf("OpenRGB port must be between 1 and 65535")
 	}
@@ -258,8 +295,18 @@ func UpdateEditableSettings(settings EditableSettings) error {
 	configuration.Debug = settings.Debug
 	configuration.LogLevel = settings.LogLevel
 	configuration.LogRetentionDays = settings.LogRetentionDays
+	configuration.Memory = settings.Memory
+	configuration.MemorySmBus = strings.TrimSpace(settings.MemorySmBus)
+	configuration.MemoryType = settings.MemoryType
 	configuration.MemorySku = settings.MemorySku
 	configuration.MemoryRegisterOverride = append(ByteArray(nil), settings.MemoryRegisterOverride...)
+	configuration.EnhancementKits = append(ByteArray(nil), settings.EnhancementKits...)
+	configuration.CPUSensorChip = strings.TrimSpace(settings.CPUSensorChip)
+	configuration.CpuTempFile = strings.TrimSpace(settings.CpuTempFile)
+	configuration.AMDGpuIndex = settings.AMDGpuIndex
+	configuration.AMDSmiPath = strings.TrimSpace(settings.AMDSmiPath)
+	configuration.NvidiaGpuIndex = append([]int(nil), settings.NvidiaGpuIndex...)
+	configuration.DefaultNvidiaGPU = settings.DefaultNvidiaGPU
 	configuration.GraphProfiles = settings.GraphProfiles
 	configuration.Metrics = settings.Metrics
 	configuration.RamTempViaHwmon = settings.RamTempViaHwmon

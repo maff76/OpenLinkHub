@@ -210,12 +210,74 @@ $(document).ready(function () {
         });
     });
 
-    function applyEditableConfig(settings) {
+    function formatByteArray(values) {
+        return (values || []).map(function(value) {
+            return '0x' + Number(value).toString(16).toUpperCase().padStart(2, '0');
+        }).join(', ');
+    }
+
+    function parseByteArray(selector, label) {
+        const text = $(selector).val().trim();
+        const values = [];
+        if (!text) {
+            return values;
+        }
+        const parts = text.split(/[\s,]+/).filter(Boolean);
+        for (const part of parts) {
+            const value = /^0x/i.test(part) ? parseInt(part, 16) : parseInt(part, 10);
+            if (!Number.isInteger(value) || value < 0 || value > 255) {
+                throw new Error(label + ' values must be 0x00-0xFF or 0-255');
+            }
+            values.push(value);
+        }
+        return values;
+    }
+
+    function parseIndexList(selector, label) {
+        const text = $(selector).val().trim();
+        if (!text) {
+            return [];
+        }
+        const values = [];
+        for (const part of text.split(/[\s,]+/).filter(Boolean)) {
+            const value = parseInt(part, 10);
+            if (!Number.isInteger(value) || value < 0) {
+                throw new Error(label + ' must contain non-negative integer indexes');
+            }
+            values.push(value);
+        }
+        return values;
+    }
+
+    function populateCpuSensorChips(chips, selected) {
+        const select = $('#cfgCpuSensorChip');
+        select.empty().append($('<option>', { value: '', text: 'Auto' }));
+        const values = Array.isArray(chips) ? chips.slice() : [];
+        if (selected && !values.includes(selected)) {
+            values.push(selected);
+        }
+        values.sort().forEach(function(chip) {
+            select.append($('<option>', { value: chip, text: chip }));
+        });
+        select.val(selected || '');
+    }
+
+    function applyEditableConfig(settings, cpuSensorChips) {
         $('#cfgDebug').prop('checked', settings.debug === true);
         $('#cfgLogLevel').val(settings.logLevel || 'info');
         $('#cfgLogRetentionDays').val(Number.isInteger(settings.logRetentionDays) ? settings.logRetentionDays : 14);
+        $('#cfgMemory').prop('checked', settings.memory === true);
+        $('#cfgMemoryType').val(String(settings.memoryType === 4 ? 4 : 5));
+        $('#cfgMemorySmBus').val(settings.memorySmBus || '');
         $('#cfgMemorySku').val(settings.memorySku || '');
-        $('#cfgMemoryRegisterOverride').val((settings.memoryRegisterOverride || []).map(function(value) { return '0x' + Number(value).toString(16).toUpperCase().padStart(2, '0'); }).join(', '));
+        $('#cfgMemoryRegisterOverride').val(formatByteArray(settings.memoryRegisterOverride));
+        $('#cfgEnhancementKits').val(formatByteArray(settings.enhancementKits));
+        populateCpuSensorChips(cpuSensorChips, settings.cpuSensorChip || '');
+        $('#cfgCpuTempFile').val(settings.cpuTempFile || '');
+        $('#cfgAmdGpuIndex').val(Number.isInteger(settings.amdGpuIndex) ? settings.amdGpuIndex : 0);
+        $('#cfgAmdSmiPath').val(settings.amdsmiPath || '');
+        $('#cfgNvidiaGpuIndex').val((settings.nvidiaGpuIndex || []).join(', '));
+        $('#cfgDefaultNvidiaGPU').val(Number.isInteger(settings.defaultNvidiaGPU) ? settings.defaultNvidiaGPU : 0);
         $('#cfgGraphProfiles').prop('checked', settings.graphProfiles === true);
         $('#cfgMetrics').prop('checked', settings.metrics === true);
         $('#cfgRamTempViaHwmon').prop('checked', settings.ramTempViaHwmon === true);
@@ -234,7 +296,7 @@ $(document).ready(function () {
         dataType: 'JSON',
         success: function(response) {
             if (response.status === 1 && response.data && response.data.settings) {
-                applyEditableConfig(response.data.settings);
+                applyEditableConfig(response.data.settings, response.data.cpuSensorChips || []);
             } else {
                 toast.warning(response.message || 'Unable to load OpenLinkHub configuration');
             }
@@ -242,26 +304,34 @@ $(document).ready(function () {
     });
 
     $('#btnSaveEditableConfig').on('click', function() {
-        const memoryRegisterText = $('#cfgMemoryRegisterOverride').val().trim();
-        let memoryRegisterOverride = [];
-        if (memoryRegisterText.length > 0) {
-            const parts = memoryRegisterText.split(/[\s,]+/).filter(Boolean);
-            for (const part of parts) {
-                const value = /^0x/i.test(part) ? parseInt(part, 16) : parseInt(part, 10);
-                if (!Number.isInteger(value) || value < 0 || value > 255) {
-                    toast.warning('Memory register override values must be 0x00-0xFF or 0-255');
-                    return;
-                }
-                memoryRegisterOverride.push(value);
-            }
+        let memoryRegisterOverride;
+        let enhancementKits;
+        let nvidiaGpuIndex;
+        try {
+            memoryRegisterOverride = parseByteArray('#cfgMemoryRegisterOverride', 'Memory register override');
+            enhancementKits = parseByteArray('#cfgEnhancementKits', 'Memory enhancement kit');
+            nvidiaGpuIndex = parseIndexList('#cfgNvidiaGpuIndex', 'NVIDIA GPU indexes');
+        } catch (err) {
+            toast.warning(err.message);
+            return;
         }
 
         const settings = {
             debug: $('#cfgDebug').is(':checked'),
             logLevel: $('#cfgLogLevel').val(),
             logRetentionDays: parseInt($('#cfgLogRetentionDays').val(), 10),
+            memory: $('#cfgMemory').is(':checked'),
+            memorySmBus: $('#cfgMemorySmBus').val().trim(),
+            memoryType: parseInt($('#cfgMemoryType').val(), 10),
             memorySku: $('#cfgMemorySku').val().trim(),
             memoryRegisterOverride: memoryRegisterOverride,
+            enhancementKits: enhancementKits,
+            cpuSensorChip: $('#cfgCpuSensorChip').val(),
+            cpuTempFile: $('#cfgCpuTempFile').val().trim(),
+            amdGpuIndex: parseInt($('#cfgAmdGpuIndex').val(), 10),
+            amdsmiPath: $('#cfgAmdSmiPath').val().trim(),
+            nvidiaGpuIndex: nvidiaGpuIndex,
+            defaultNvidiaGPU: parseInt($('#cfgDefaultNvidiaGPU').val(), 10),
             graphProfiles: $('#cfgGraphProfiles').is(':checked'),
             metrics: $('#cfgMetrics').is(':checked'),
             ramTempViaHwmon: $('#cfgRamTempViaHwmon').is(':checked'),
@@ -285,7 +355,7 @@ $(document).ready(function () {
                 if (response.status === 1) {
                     toast.success(response.message);
                     if (response.data && response.data.settings) {
-                        applyEditableConfig(response.data.settings);
+                        applyEditableConfig(response.data.settings, $('#cfgCpuSensorChip option').map(function() { return this.value; }).get().filter(Boolean));
                     }
                 } else {
                     toast.warning(response.message);

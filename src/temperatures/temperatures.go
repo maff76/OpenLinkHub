@@ -866,6 +866,40 @@ func getHwMonTemperature(hwmonDir string, entry os.DirEntry) float32 {
 	return temperature
 }
 
+// GetCpuSensorChips returns hwmon chip names that expose the configured CPU
+// temperature input. The empty value is represented by the Control Panel as Auto.
+func GetCpuSensorChips() []string {
+	hwmonDir := "/sys/class/hwmon"
+	entries, err := os.ReadDir(hwmonDir)
+	if err != nil {
+		return []string{}
+	}
+
+	seen := make(map[string]bool)
+	chips := make([]string, 0)
+	for _, entry := range entries {
+		nameBytes, err := os.ReadFile(filepath.Join(hwmonDir, entry.Name(), "name"))
+		if err != nil {
+			continue
+		}
+		name := strings.TrimSpace(string(nameBytes))
+		if name == "" || seen[name] {
+			continue
+		}
+		tempFile := defaultTempFile
+		if configured := strings.TrimSpace(config.GetConfig().CpuTempFile); configured != "" {
+			tempFile = configured
+		}
+		if _, err := os.Stat(filepath.Join(hwmonDir, entry.Name(), tempFile)); err != nil {
+			continue
+		}
+		seen[name] = true
+		chips = append(chips, name)
+	}
+	sort.Strings(chips)
+	return chips
+}
+
 // GetCpuTemperature will return CPU temperature
 func GetCpuTemperature() float32 {
 	hwmonDir := "/sys/class/hwmon"
