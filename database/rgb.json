@@ -52,6 +52,13 @@
       "profileName": "Rainbow Wave",
       "speed": 2
     },
+    "openrgbrainbowwave": {
+      "profileName": "Rainbow Wave (OpenRGB)",
+      "speed": 2,
+      "brightness": 1,
+      "rgbDirection": 4,
+      "frequency": 10
+    },
     "rain": {
       "profileName": "Rain",
       "alternateColors": false,

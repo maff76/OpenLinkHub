@@ -339,6 +339,7 @@ var (
 		"probe-temperature",
 		"rain",
 		"rainbow",
+		"openrgbrainbowwave",
 		"pastelrainbow",
 		"rotarystack",
 		"rotator",
@@ -360,6 +361,7 @@ var (
 		"rotarystack",
 		"sequential",
 		"spiralrainbow",
+		"openrgbrainbowwave",
 		"gradient",
 		"pastelrainbow",
 		"pastelspiralrainbow",
@@ -2610,6 +2612,8 @@ func (d *Device) UpdateRgbProfileData(profileName string, profile rgb.Profile) u
 	pf.EndColor = profile.EndColor
 	pf.MiddleColor = profile.MiddleColor
 	pf.Speed = profile.Speed
+	pf.RgbDirection = profile.RgbDirection
+	pf.Frequency = profile.Frequency
 	pf.Gradients = profile.Gradients
 	pf.MinTemp = profile.MinTemp
 	pf.MaxTemp = profile.MaxTemp
@@ -5061,6 +5065,13 @@ func (d *Device) generateRgbEffect(k int, channels uint8, startTime *time.Time, 
 	case "rainbow":
 		{
 			r.Rainbow(*startTime)
+			buff = r.Output
+		}
+	case "openrgbrainbowwave":
+		{
+			r.Frequency = profile.Frequency
+			r.RgbDirection = profile.RgbDirection
+			r.RainbowWave(*startTime)
 			buff = r.Output
 		}
 	case "pastelrainbow":

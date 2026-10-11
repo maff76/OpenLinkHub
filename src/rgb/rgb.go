@@ -43,6 +43,7 @@ type Profile struct {
 	ProfileName     string        `json:"profileName"`
 	AlternateColors bool          `json:"alternateColors"`
 	RgbDirection    byte          `json:"rgbDirection"`
+	Frequency       float64       `json:"frequency,omitempty"`
 	PerLed          bool          `json:"perLed"`
 	Version         int           `json:"version"`
 }
@@ -57,6 +58,8 @@ type ActiveRGB struct {
 	LightChannels          int
 	Smoothness             int
 	RgbModeSpeed           float64
+	Frequency              float64
+	RgbDirection           byte
 	RGBEndColor            *Color
 	RGBStartColor          *Color
 	RGBMiddleColor         *Color
