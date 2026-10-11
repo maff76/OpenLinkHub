@@ -511,11 +511,11 @@
                                         {{ $railName := "N/A" }}
 
                                         {{ if eq $vk 0 }}
-                                            {{ $railName = $root.Lang "txt3VRail" }}
+                                            {{ $railName = "3.3V" }}
                                         {{ else if eq $vk 1 }}
-                                            {{ $railName = $root.Lang "txt5VRail" }}
+                                            {{ $railName = "5V" }}
                                         {{ else if eq $vk 2 }}
-                                            {{ $railName = $root.Lang "txt12VRail" }}
+                                            {{ $railName = "12V" }}
                                         {{ end }}
 
                                         {{ $volts := index $device.Volts $vk }}
