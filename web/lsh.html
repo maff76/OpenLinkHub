@@ -150,6 +150,15 @@
                                     </label>
                                 </div>
 
+                                <!-- RGB power. Off preserves the configured profiles; On restores them. -->
+                                <div class="settings-row">
+                                    <span class="settings-label text-ellipsis">{{ .Lang "txtRgbOnOff" }}</span>
+                                    <div class="settings-actions">
+                                        <button type="button" class="system-button compact rgbPowerHub" data-enabled="1" {{ if not $deviceProfile.RgbOff }}disabled{{ end }}>On</button>
+                                        <button type="button" class="system-button compact danger rgbPowerHub" data-enabled="0" {{ if $deviceProfile.RgbOff }}disabled{{ end }}>Off</button>
+                                    </div>
+                                </div>
+
                                 <!-- RGB Profile -->
                                 <div class="settings-row">
                                     <span class="settings-label text-ellipsis">{{ .Lang "txtRgb" }}</span>
@@ -157,6 +166,7 @@
                                         <select id="globalRgbProfile" class="form-select system-select compact auto-width globalRgb" name="globalRgb">
                                             <option value="">None</option>
                                             {{ range $key, $mode := $rgbModes }}
+                                            {{ if eq $mode "off" }}{{ continue }}{{ end }}
                                             <option value="{{ $mode }}">{{ $mode }}</option>
                                             {{ end }}
                                         </select>

@@ -1307,6 +1307,16 @@ func setManualDeviceSpeed(w http.ResponseWriter, r *http.Request) {
 }
 
 // setDeviceColor handles device color changes
+func setRgbPower(w http.ResponseWriter, r *http.Request) {
+	request := requests.ProcessSetRgbPower(r)
+	resp := &Response{
+		Code:    request.Code,
+		Status:  request.Status,
+		Message: request.Message,
+	}
+	resp.Send(w)
+}
+
 func setDeviceColor(w http.ResponseWriter, r *http.Request) {
 	request := requests.ProcessChangeColor(r)
 	resp := &Response{
@@ -2842,6 +2852,7 @@ func setRoutes() http.Handler {
 	handleFunc(r, "/api/speed/manual", http.MethodPost, setManualDeviceSpeed)
 	handleFunc(r, "/api/operatingMode", http.MethodPost, setOperatingMode)
 	handleFunc(r, "/api/color", http.MethodPost, setDeviceColor)
+	handleFunc(r, "/api/color/power", http.MethodPost, setRgbPower)
 	handleFunc(r, "/api/color/global", http.MethodPost, setGlobalDeviceColor)
 	handleFunc(r, "/api/color/all", http.MethodPost, setAllDevicesColor)
 	handleFunc(r, "/api/color/linkAdapter", http.MethodPost, setLinkAdapterColor)

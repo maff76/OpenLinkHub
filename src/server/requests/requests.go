@@ -2796,6 +2796,36 @@ func ProcessManualChangeSpeed(r *http.Request) *Payload {
 	return &Payload{Message: language.GetValue("txtNoDeviceForSpeedControl"), Code: http.StatusOK, Status: 0}
 }
 
+// ProcessSetRgbPower will turn RGB output on or off without changing saved RGB profiles.
+// An empty deviceId applies the state globally and persists the dashboard RGB state.
+func ProcessSetRgbPower(r *http.Request) *Payload {
+	req := &Payload{}
+	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
+		logger.Log(map[string]interface{}{"error": err}).Error("Unable to decode JSON")
+		return &Payload{Message: language.GetValue("txtUnableToValidateRequest"), Code: http.StatusOK, Status: 0}
+	}
+
+	rgbOff := !req.Enabled
+	if req.DeviceId == "" {
+		devices.ControlDeviceRgb(rgbOff)
+		dash := dashboard.GetDashboard()
+		dash.RgbOff = rgbOff
+		if dashboard.SaveDashboardSettings(dash, true) == 0 {
+			return &Payload{Message: language.GetValue("txtUnableToSaveDashboardSettings"), Code: http.StatusOK, Status: 0}
+		}
+		return &Payload{Message: language.GetValue("txtDashboardSettingsUpdated"), Code: http.StatusOK, Status: 1}
+	}
+
+	if devices.GetDevice(req.DeviceId) == nil {
+		return &Payload{Message: language.GetValue("txtNonExistingDevice"), Code: http.StatusOK, Status: 0}
+	}
+
+	// ControlDeviceRgb intentionally has no return value. The device has already been
+	// validated above, so invoke it and report the accepted power-state change.
+	devices.CallDeviceMethod(req.DeviceId, "ControlDeviceRgb", rgbOff)
+	return &Payload{Message: language.GetValue("txtDeviceRgbProfileChanged"), Code: http.StatusOK, Status: 1}
+}
+
 // ProcessChangeColor will process POST request from a client for RGB profile change
 func ProcessChangeColor(r *http.Request) *Payload {
 	req := &Payload{}

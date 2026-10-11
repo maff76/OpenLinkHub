@@ -596,6 +596,39 @@ $(document).ready(function () {
     const checkboxAddDeviceToDashboard = $('#checkbox-addDeviceToDashboard');
     const checkboxRgbOff = $('#checkbox-rgbOff');
 
+    function updateGlobalRgbPowerButtons(rgbOff) {
+        checkboxRgbOff.prop('checked', rgbOff);
+        $('.rgbPowerGlobal[data-enabled="1"]').prop('disabled', !rgbOff);
+        $('.rgbPowerGlobal[data-enabled="0"]').prop('disabled', rgbOff);
+    }
+
+    $('.rgbPowerGlobal').on('click', function () {
+        const enabled = $(this).data('enabled') === 1;
+        const buttons = $('.rgbPowerGlobal');
+        buttons.prop('disabled', true);
+
+        $.ajax({
+            url: '/api/color/power',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ enabled: enabled }),
+            cache: false,
+            success: function (response) {
+                if (response?.status === 1) {
+                    updateGlobalRgbPowerButtons(!enabled);
+                    toast.success(response.message);
+                } else {
+                    updateGlobalRgbPowerButtons(checkboxRgbOff.is(':checked'));
+                    toast.warning(response?.message || 'Operation failed');
+                }
+            },
+            error: function () {
+                updateGlobalRgbPowerButtons(checkboxRgbOff.is(':checked'));
+                toast.warning('Request failed');
+            }
+        });
+    });
+
     function loadDashboardSettings() {
         // Load current settings
         $.ajax({
@@ -631,9 +664,7 @@ $(document).ready(function () {
                     if (response.dashboard.addDeviceToDashboard === true) {
                         checkboxAddDeviceToDashboard.attr('Checked','Checked');
                     }
-                    if (response.dashboard.rgbOff === true) {
-                        checkboxRgbOff.attr('Checked','Checked');
-                    }
+                    updateGlobalRgbPowerButtons(response.dashboard.rgbOff === true);
                 }
             }
         });

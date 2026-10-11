@@ -2639,6 +2639,38 @@ $(document).ready(function () {
         });
     });
 
+    $('.rgbPowerHub').on('click', function () {
+        const deviceId = $("#deviceId").val();
+        const enabled = $(this).data('enabled') === 1;
+        const buttons = $('.rgbPowerHub');
+        buttons.prop('disabled', true);
+
+        $.ajax({
+            url: '/api/color/power',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({
+                deviceId: deviceId,
+                enabled: enabled
+            }),
+            cache: false,
+            success: function (response) {
+                if (response?.status === 1) {
+                    $('.rgbPowerHub[data-enabled="1"]').prop('disabled', enabled);
+                    $('.rgbPowerHub[data-enabled="0"]').prop('disabled', !enabled);
+                    toast.success(response.message);
+                } else {
+                    buttons.prop('disabled', false);
+                    toast.warning(response?.message || 'Operation failed');
+                }
+            },
+            error: function () {
+                buttons.prop('disabled', false);
+                toast.warning('Request failed');
+            }
+        });
+    });
+
     $('.globalRgb').on('change', function () {
         const deviceId = $("#deviceId").val();
         const profile = $(this).val();

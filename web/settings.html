@@ -163,13 +163,14 @@
                                         </div>
                                     </div>
 
-                                    <!-- RGB Turn Off / On -->
+                                    <!-- RGB power. Off is a hard output state; On restores saved profiles. -->
                                     <div class="settings-row">
                                         <span class="settings-label text-ellipsis">{{ .Lang "txtRgbOnOff" }}</span>
-                                        <label class="system-toggle compact">
-                                            <input type="checkbox" id="checkbox-rgbOff">
-                                            <span class="toggle-track"></span>
-                                        </label>
+                                        <div class="settings-actions">
+                                            <input type="checkbox" id="checkbox-rgbOff" hidden>
+                                            <button type="button" class="system-button compact rgbPowerGlobal" data-enabled="1">On</button>
+                                            <button type="button" class="system-button compact danger rgbPowerGlobal" data-enabled="0">Off</button>
+                                        </div>
                                     </div>
 
                                     <!-- Style -->
