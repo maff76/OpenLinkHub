@@ -34,7 +34,7 @@ $(document).ready(function () {
         const dimms = [];
         $.each(devices || [], function (_, entry) {
             const parent = entry.GetDevice;
-            if (!parent || !Array.isArray(parent.devices)) return;
+            if (!parent || !parent.devices) return;
             $.each(parent.devices, function (_, device) {
                 if (Number(device.memoryType) === 4 || Number(device.memoryType) === 5 || device.xmpPresent === true || device.jedecDataRate > 0) {
                     dimms.push(device);

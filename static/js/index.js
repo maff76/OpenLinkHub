@@ -123,6 +123,24 @@ $(document).ready(function () {
         }
 
         let status = "";
+        const isMemory = Number(device.memoryType) === 4 || Number(device.memoryType) === 5 ||
+            device.xmpPresent === true || Number(device.configuredSpeed) > 0 || Number(device.jedecDataRate) > 0;
+
+        if (isMemory) {
+            const ddr = Number(device.memoryType) > 0 ? `DDR${device.memoryType}` : "DDR";
+            const configured = Number(device.configuredSpeed) > 0 ? `${ddr}-${device.configuredSpeed}` : "";
+            const jedec = Number(device.jedecDataRate) > 0 ? `${ddr}-${device.jedecDataRate}` : "";
+            const xmp = Number(device.xmpDataRate) > 0 ? `${ddr}-${device.xmpDataRate}` : "";
+            const timings = Number(device.xmpCasLatency) > 0 && Number(device.xmpTRAS) > 0
+                ? `CL${device.xmpCasLatency}-${device.xmpTRCD}-${device.xmpTRP}-${device.xmpTRAS}` : "";
+            const voltage = Number(device.xmpVdd) > 0 ? `${Number(device.xmpVdd).toFixed(2)} V` : "";
+            if (configured) status += renderStatusPill("Configured", configured, "memory-info");
+            else if (jedec) status += renderStatusPill("JEDEC", jedec, "memory-info");
+            if (device.capacity) status += renderStatusPill("Capacity", device.capacity, "memory-info");
+            if (xmp) status += renderStatusPill("XMP", [xmp, timings, voltage].filter(Boolean).join(" · "), "memory-info");
+            if (device.i2cAddress) status += renderStatusPill("SPD", device.i2cAddress, "memory-info");
+        }
+
         if (hasProfile) {
             status += renderStatusPill("Speed profile", device.profile, "speed-profile");
         }
