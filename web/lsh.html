@@ -154,8 +154,8 @@
                                 <div class="settings-row">
                                     <span class="settings-label text-ellipsis">{{ .Lang "txtRgbOnOff" }}</span>
                                     <div class="settings-actions">
-                                        <button type="button" class="system-button compact rgbPowerHub" data-enabled="1" {{ if not $deviceProfile.RgbOff }}disabled{{ end }}>On</button>
                                         <button type="button" class="system-button compact danger rgbPowerHub" data-enabled="0" {{ if $deviceProfile.RgbOff }}disabled{{ end }}>Off</button>
+                                        <button type="button" class="system-button compact rgbPowerHub" data-enabled="1" {{ if not $deviceProfile.RgbOff }}disabled{{ end }}>On</button>
                                     </div>
                                 </div>
 
