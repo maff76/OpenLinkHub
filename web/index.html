@@ -33,6 +33,24 @@
         font-weight: 500;
         white-space: nowrap;
     }
+    .dashboard-channel-group + .dashboard-channel-group {
+        border-top: 1px solid rgba(255,255,255,.07);
+    }
+    .dashboard-channel-group-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 9px 16px 3px;
+        color: rgba(190,201,212,.58);
+        font-size: 9px;
+        font-weight: 600;
+        letter-spacing: .07em;
+        text-transform: uppercase;
+    }
+    .dashboard-channel-group-heading span:last-child {
+        color: rgba(174,187,199,.38);
+        font-weight: 500;
+    }
     .dashboard-channel-grid {
         display: grid;
         grid-template-columns: repeat(12, minmax(0, 1fr));

@@ -161,10 +161,65 @@ $(document).ready(function () {
         `;
     }
 
+    function renderChannelGroup(title, parent, devices) {
+        let channels = "";
+        let channelCount = 0;
+        $.each(devices, function (_, device) {
+            const hasSpeed = device.HasSpeed === true || device.hasSpeed === true;
+            const hasTemps = device.HasTemps === true || device.hasTemps === true || Number(device.temperature) > 0;
+            if (!hasSpeed && !hasTemps) return;
+            channels += renderCompactChannel(parent, device);
+            channelCount++;
+        });
+        if (!channels) return "";
+        const countClass = channelCount >= 1 && channelCount <= 12 ? ` channels-${channelCount}` : "";
+        return `
+            <div class="dashboard-channel-group">
+                <div class="dashboard-channel-group-heading">
+                    <span>${title}</span>
+                    <span>${channelCount}</span>
+                </div>
+                <div class="dashboard-channel-grid${countClass}">${channels}</div>
+            </div>`;
+    }
+
+    function isLinkSystemHub(parent) {
+        const product = String(parent.product || parent.Product || "").toLowerCase();
+        return product.includes("link system hub");
+    }
+
+    function renderLinkSystemHub(parent, sectionTitle) {
+        const fans = [];
+        const specialised = [];
+        $.each(parent.devices || [], function (_, device) {
+            const name = String(device.name || device.description || "").toLowerCase();
+            const isPsu = device.IsPSU === true || device.isPSU === true || name.includes("hx") && name.includes("i");
+            const isPump = device.ContainsPump === true || device.containsPump === true || name.includes("titan") || name.includes("aio") || name.includes("pump");
+            if (isPsu || isPump) specialised.push(device);
+            else fans.push(device);
+        });
+
+        const fanHtml = renderChannelGroup("QX Fans", parent, fans);
+        const deviceHtml = renderChannelGroup("LINK Devices", parent, specialised);
+        const total = fans.length + specialised.length;
+        return `
+            <section class="dashboard-device-section">
+                <div class="dashboard-device-heading">
+                    <span>${sectionTitle}</span>
+                    <span class="dashboard-device-count">${total} ${total === 1 ? "channel" : "channels"}</span>
+                </div>
+                ${fanHtml}${deviceHtml}
+            </section>`;
+    }
+
     function renderDevice(dev) {
         const parent = dev.device;
         const parentLabel = showLabels && parent.DeviceProfile?.Label ? parent.DeviceProfile.Label : "";
         const sectionTitle = parentLabel || parent.product || parent.Product || "Device";
+
+        if (isLinkSystemHub(parent)) {
+            return renderLinkSystemHub(parent, sectionTitle);
+        }
 
         // Keep the existing richer PSU presentation; its voltage/current rails do not fit the compact
         // temperature/RPM dashboard layout particularly well.
