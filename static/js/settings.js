@@ -249,20 +249,40 @@ $(document).ready(function () {
         return values;
     }
 
-    function populateCpuSensorChips(chips, selected) {
+    function populateCpuSensorChips(info, selected) {
         const select = $('#cfgCpuSensorChip');
-        select.empty().append($('<option>', { value: '', text: 'Auto' }));
-        const values = Array.isArray(chips) ? chips.slice() : [];
+        const sensorInfo = info || {};
+        const values = Array.isArray(sensorInfo.candidates) ? sensorInfo.candidates.slice() : [];
+        const resolved = sensorInfo.resolvedChip || '';
+        const resolvedLabel = sensorInfo.resolvedLabel || '';
+        const resolvedFile = sensorInfo.resolvedFile || '';
+        let autoText = 'Auto';
+        if (resolved) {
+            autoText += ' — ' + resolved;
+            if (resolvedLabel) {
+                autoText += ' / ' + resolvedLabel;
+            } else if (resolvedFile) {
+                autoText += ' / ' + resolvedFile;
+            }
+            autoText += ' (currently selected)';
+        } else {
+            autoText += ' — no CPU sensor resolved';
+        }
+        select.empty().append($('<option>', { value: '', text: autoText }));
         if (selected && !values.includes(selected)) {
             values.push(selected);
         }
         values.sort().forEach(function(chip) {
-            select.append($('<option>', { value: chip, text: chip }));
+            let text = chip;
+            if (selected === chip && resolved === chip) {
+                text += ' — currently selected';
+            }
+            select.append($('<option>', { value: chip, text: text }));
         });
         select.val(selected || '');
     }
 
-    function applyEditableConfig(settings, cpuSensorChips) {
+    function applyEditableConfig(settings, cpuSensorInfo) {
         $('#cfgDebug').prop('checked', settings.debug === true);
         $('#cfgLogLevel').val(settings.logLevel || 'info');
         $('#cfgLogRetentionDays').val(Number.isInteger(settings.logRetentionDays) ? settings.logRetentionDays : 14);
@@ -272,7 +292,7 @@ $(document).ready(function () {
         $('#cfgMemorySku').val(settings.memorySku || '');
         $('#cfgMemoryRegisterOverride').val(formatByteArray(settings.memoryRegisterOverride));
         $('#cfgEnhancementKits').val(formatByteArray(settings.enhancementKits));
-        populateCpuSensorChips(cpuSensorChips, settings.cpuSensorChip || '');
+        populateCpuSensorChips(cpuSensorInfo, settings.cpuSensorChip || '');
         $('#cfgCpuTempFile').val(settings.cpuTempFile || '');
         $('#cfgAmdGpuIndex').val(Number.isInteger(settings.amdGpuIndex) ? settings.amdGpuIndex : 0);
         $('#cfgAmdSmiPath').val(settings.amdsmiPath || '');
@@ -296,7 +316,7 @@ $(document).ready(function () {
         dataType: 'JSON',
         success: function(response) {
             if (response.status === 1 && response.data && response.data.settings) {
-                applyEditableConfig(response.data.settings, response.data.cpuSensorChips || []);
+                applyEditableConfig(response.data.settings, response.data.cpuSensorInfo || {});
             } else {
                 toast.warning(response.message || 'Unable to load OpenLinkHub configuration');
             }
@@ -355,7 +375,7 @@ $(document).ready(function () {
                 if (response.status === 1) {
                     toast.success(response.message);
                     if (response.data && response.data.settings) {
-                        applyEditableConfig(response.data.settings, $('#cfgCpuSensorChip option').map(function() { return this.value; }).get().filter(Boolean));
+                        applyEditableConfig(response.data.settings, response.data.cpuSensorInfo || {});
                     }
                 } else {
                     toast.warning(response.message);

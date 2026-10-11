@@ -866,38 +866,100 @@ func getHwMonTemperature(hwmonDir string, entry os.DirEntry) float32 {
 	return temperature
 }
 
-// GetCpuSensorChips returns hwmon chip names that expose the configured CPU
-// temperature input. The empty value is represented by the Control Panel as Auto.
-func GetCpuSensorChips() []string {
+// CpuSensorInfo describes the CPU hwmon source OpenLinkHub can use and the
+// source currently resolved by automatic/manual selection.
+type CpuSensorInfo struct {
+	Candidates    []string `json:"candidates"`
+	Configured    string   `json:"configured"`
+	ResolvedChip  string   `json:"resolvedChip"`
+	ResolvedFile  string   `json:"resolvedFile"`
+	ResolvedLabel string   `json:"resolvedLabel"`
+}
+
+func isCpuSensorChip(name string) bool {
+	for _, chip := range cpuPackages {
+		if chip == name {
+			return true
+		}
+	}
+	return false
+}
+
+func cpuTemperatureFile() string {
+	if configured := strings.TrimSpace(config.GetConfig().CpuTempFile); configured != "" {
+		return configured
+	}
+	return defaultTempFile
+}
+
+func cpuSensorLabel(hwmonPath, inputFile string) string {
+	if !strings.HasSuffix(inputFile, "_input") {
+		return ""
+	}
+	labelFile := strings.TrimSuffix(inputFile, "_input") + "_label"
+	label, err := os.ReadFile(filepath.Join(hwmonPath, labelFile))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(label))
+}
+
+// GetCpuSensorInfo returns only known CPU hwmon drivers and reports the source
+// OpenLinkHub will actually use. This keeps motherboard, DIMM, NVMe and other
+// unrelated hwmon chips out of the CPU selector.
+func GetCpuSensorInfo() CpuSensorInfo {
+	info := CpuSensorInfo{
+		Candidates: make([]string, 0),
+		Configured: strings.TrimSpace(config.GetConfig().CPUSensorChip),
+	}
+
 	hwmonDir := "/sys/class/hwmon"
 	entries, err := os.ReadDir(hwmonDir)
 	if err != nil {
-		return []string{}
+		return info
 	}
 
+	tempFile := cpuTemperatureFile()
 	seen := make(map[string]bool)
-	chips := make([]string, 0)
 	for _, entry := range entries {
 		nameBytes, err := os.ReadFile(filepath.Join(hwmonDir, entry.Name(), "name"))
 		if err != nil {
 			continue
 		}
 		name := strings.TrimSpace(string(nameBytes))
-		if name == "" || seen[name] {
+		if !isCpuSensorChip(name) {
 			continue
 		}
-		tempFile := defaultTempFile
-		if configured := strings.TrimSpace(config.GetConfig().CpuTempFile); configured != "" {
-			tempFile = configured
-		}
-		if _, err := os.Stat(filepath.Join(hwmonDir, entry.Name(), tempFile)); err != nil {
+		hwmonPath := filepath.Join(hwmonDir, entry.Name())
+		if _, err := os.Stat(filepath.Join(hwmonPath, tempFile)); err != nil {
 			continue
 		}
-		seen[name] = true
-		chips = append(chips, name)
+		if !seen[name] {
+			seen[name] = true
+			info.Candidates = append(info.Candidates, name)
+		}
+
+		matchesSelection := info.Configured == name
+		if info.Configured == "" {
+			matchesSelection = isCpuSensorChip(name)
+		}
+		if info.ResolvedChip == "" && matchesSelection {
+			// Match GetCpuTemperature(): only report a source as resolved when
+			// its configured input can actually be read as a non-zero value.
+			if getHwMonTemperature(hwmonDir, entry) != 0 {
+				info.ResolvedChip = name
+				info.ResolvedFile = tempFile
+				info.ResolvedLabel = cpuSensorLabel(hwmonPath, tempFile)
+			}
+		}
 	}
-	sort.Strings(chips)
-	return chips
+	sort.Strings(info.Candidates)
+	return info
+}
+
+// GetCpuSensorChips is retained for callers that only need the filtered list.
+func GetCpuSensorChips() []string {
+	return GetCpuSensorInfo().Candidates
 }
 
 // GetCpuTemperature will return CPU temperature

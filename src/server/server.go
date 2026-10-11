@@ -221,8 +221,8 @@ func configEditable(w http.ResponseWriter, r *http.Request) {
 			Code:   http.StatusOK,
 			Status: 1,
 			Data: map[string]interface{}{
-				"settings":       config.GetEditableSettings(),
-				"cpuSensorChips": temperatures.GetCpuSensorChips(),
+				"settings":      config.GetEditableSettings(),
+				"cpuSensorInfo": temperatures.GetCpuSensorInfo(),
 			},
 		}).Send(w)
 	case http.MethodPost:
@@ -250,7 +250,8 @@ func configEditable(w http.ResponseWriter, r *http.Request) {
 			Status:  1,
 			Message: "OpenLinkHub configuration saved. Restart OpenLinkHub to apply the change.",
 			Data: map[string]interface{}{
-				"settings": config.GetEditableSettings(),
+				"settings":      config.GetEditableSettings(),
+				"cpuSensorInfo": temperatures.GetCpuSensorInfo(),
 			},
 		}).Send(w)
 	default:

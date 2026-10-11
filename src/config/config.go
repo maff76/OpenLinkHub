@@ -190,6 +190,36 @@ func UpdateManual(enabled bool) uint8 {
 	return 1
 }
 
+// EditableMemoryType keeps config.json/API compatibility numeric (4/5), while
+// accepting either numeric or display values from the Settings UI.
+type EditableMemoryType int
+
+func (m *EditableMemoryType) UnmarshalJSON(data []byte) error {
+	var value interface{}
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+
+	switch v := value.(type) {
+	case float64:
+		*m = EditableMemoryType(int(v))
+	case string:
+		switch strings.ToUpper(strings.TrimSpace(v)) {
+		case "4", "DDR4":
+			*m = 4
+		case "5", "DDR5":
+			*m = 5
+		default:
+			return fmt.Errorf("memory type must be DDR4 or DDR5")
+		}
+	case nil:
+		return fmt.Errorf("memory type must be DDR4 or DDR5")
+	default:
+		return fmt.Errorf("memory type must be DDR4 or DDR5")
+	}
+	return nil
+}
+
 // EditableSettings contains user-facing configuration options that can be safely
 // persisted from the Control Panel. These settings are applied after a service restart.
 type EditableSettings struct {
@@ -198,7 +228,7 @@ type EditableSettings struct {
 	LogRetentionDays          int       `json:"logRetentionDays"`
 	Memory                    bool      `json:"memory"`
 	MemorySmBus               string    `json:"memorySmBus"`
-	MemoryType                int       `json:"memoryType"`
+	MemoryType                EditableMemoryType `json:"memoryType"`
 	MemorySku                 string    `json:"memorySku"`
 	MemoryRegisterOverride    ByteArray `json:"memoryRegisterOverride"`
 	EnhancementKits           ByteArray `json:"enhancementKits"`
@@ -229,7 +259,7 @@ func GetEditableSettings() EditableSettings {
 		LogRetentionDays:          configuration.LogRetentionDays,
 		Memory:                    configuration.Memory,
 		MemorySmBus:               configuration.MemorySmBus,
-		MemoryType:                configuration.MemoryType,
+		MemoryType:                EditableMemoryType(configuration.MemoryType),
 		MemorySku:                 configuration.MemorySku,
 		MemoryRegisterOverride:    append(ByteArray(nil), configuration.MemoryRegisterOverride...),
 		EnhancementKits:           append(ByteArray(nil), configuration.EnhancementKits...),
@@ -297,7 +327,7 @@ func UpdateEditableSettings(settings EditableSettings) error {
 	configuration.LogRetentionDays = settings.LogRetentionDays
 	configuration.Memory = settings.Memory
 	configuration.MemorySmBus = strings.TrimSpace(settings.MemorySmBus)
-	configuration.MemoryType = settings.MemoryType
+	configuration.MemoryType = int(settings.MemoryType)
 	configuration.MemorySku = settings.MemorySku
 	configuration.MemoryRegisterOverride = append(ByteArray(nil), settings.MemoryRegisterOverride...)
 	configuration.EnhancementKits = append(ByteArray(nil), settings.EnhancementKits...)
