@@ -96,8 +96,12 @@ $(document).ready(function () {
     }
 
     function renderCompactChannel(parent, device) {
-        const label = showLabels && device?.label ? device.label : "";
-        const displayName = label || device.name || parent.product || "Device";
+        const rawLabel = typeof device?.label === "string" ? device.label.trim() : "";
+        const hasCustomLabel = showLabels && rawLabel !== "" && rawLabel.toLowerCase() !== "set label";
+        const label = hasCustomLabel ? rawLabel : "";
+        const baseName = device.name || device.description || parent.product || "Device";
+        const channelSuffix = Number(device.channelId) > 0 ? ` · Ch ${device.channelId}` : "";
+        const displayName = label || `${baseName}${channelSuffix}`;
         const hasTemperature = Number(device.temperature) > 0;
         const hasSpeed = device.HasSpeed === true || device.hasSpeed === true;
         const hasProfile = hasSpeed && typeof device.profile === "string" && device.profile.length > 0;
@@ -170,7 +174,8 @@ $(document).ready(function () {
                 if (device.IsTemperatureProbe || device.HasSpeed || device.Output) {
                     return;
                 }
-                const label = showLabels && device?.label ? device.label : "";
+                const rawLabel = typeof device?.label === "string" ? device.label.trim() : "";
+                const label = showLabels && rawLabel !== "" && rawLabel.toLowerCase() !== "set label" ? rawLabel : "";
                 html += `
                     <div class="col-md-3">
                         <div class="card system-card">

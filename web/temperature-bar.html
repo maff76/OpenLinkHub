@@ -24,6 +24,10 @@
         --temperature-accent: rgba(75, 192, 192, .95);
         --temperature-accent-soft: rgba(75, 192, 192, .10);
     }
+    .temperature-group-memory {
+        --temperature-accent: rgba(155, 126, 255, .95);
+        --temperature-accent-soft: rgba(155, 126, 255, .10);
+    }
     .temperature-group-storage {
         --temperature-accent: rgba(92, 184, 92, .95);
         --temperature-accent-soft: rgba(92, 184, 92, .10);
@@ -167,6 +171,21 @@
     </div>
 
     {{ if .HwMonSensors }}
+    <div class="temperature-group temperature-group-memory">
+        <div class="temperature-group-title">Memory</div>
+        <div class="temperature-compact-grid temperature-processor-grid">
+            {{ range .HwMonSensors }}
+            {{ if eq .SensorName "spd5118" }}
+            <div class="temperature-compact-item">
+                <div id="hwmon_temp-{{ .HwmonName }}-{{ .InputName }}" class="temperature-compact-value text-warning">{{ printf "%.1f °C" .TempC }}</div>
+                <div class="temperature-compact-name" title="{{ .Label }}">{{ .Label }}</div>
+                <div class="temperature-compact-detail">DDR5 DIMM</div>
+            </div>
+            {{ end }}
+            {{ end }}
+        </div>
+    </div>
+
     <div class="temperature-group temperature-group-motherboard">
         <div class="temperature-group-title">Motherboard / System</div>
         <div class="temperature-compact-grid">
