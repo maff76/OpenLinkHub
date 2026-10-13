@@ -14,6 +14,7 @@ import (
 	"OpenLinkHub/src/devices/lcd"
 	"OpenLinkHub/src/discovery"
 	"OpenLinkHub/src/display"
+	"OpenLinkHub/src/icueprofile"
 	"OpenLinkHub/src/inputmanager"
 	"OpenLinkHub/src/language"
 	"OpenLinkHub/src/logger"
@@ -34,6 +35,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -2628,6 +2630,64 @@ func uiLcdOverview(w http.ResponseWriter, _ *http.Request) {
 	}
 }
 
+// getICUEProfiles returns all imported iCUE profiles and parser failures.
+func getICUEProfiles(w http.ResponseWriter, _ *http.Request) {
+	profiles, failures, err := icueprofile.Scan(config.GetConfig().ConfigPath)
+	if err != nil {
+		http.Error(w, "Unable to scan iCUE profiles: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"profiles":  profiles,
+		"failures":  failures,
+		"directory": filepath.ToSlash(icueprofile.Directory(config.GetConfig().ConfigPath)),
+	})
+}
+
+// uploadICUEProfile validates and stores one Corsair .cueprofile. This stage is
+// parser-only: importing a profile never changes the currently active RGB.
+func uploadICUEProfile(w http.ResponseWriter, r *http.Request) {
+	const maxUpload = 16 << 20
+	r.Body = http.MaxBytesReader(w, r.Body, maxUpload)
+	if err := r.ParseMultipartForm(maxUpload); err != nil {
+		http.Error(w, "Unable to read profile upload: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	file, header, err := r.FormFile("profileFile")
+	if err != nil {
+		http.Error(w, "No .cueprofile file supplied", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+	if !strings.EqualFold(filepath.Ext(header.Filename), ".cueprofile") {
+		http.Error(w, "Only .cueprofile files are supported", http.StatusBadRequest)
+		return
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxUpload+1))
+	if err != nil || len(data) > maxUpload {
+		http.Error(w, "Unable to read profile or profile is larger than 16 MiB", http.StatusBadRequest)
+		return
+	}
+	profile, dest, err := icueprofile.Save(config.GetConfig().ConfigPath, header.Filename, data)
+	if err != nil {
+		http.Error(w, "iCUE profile parse failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	logger.Log(logger.Fields{"profile": profile.Name, "file": filepath.Base(dest), "layers": profile.Summary.Layers}).Info("Imported iCUE profile")
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  1,
+		"message": "iCUE profile imported successfully",
+		"profile": map[string]interface{}{
+			"fileName": filepath.Base(dest), "name": profile.Name, "id": profile.ID,
+			"deviceEntries": profile.Summary.DeviceEntries, "channels": profile.Summary.Channels,
+			"layers": profile.Summary.Layers, "enabledLayers": profile.Summary.EnabledLayers,
+			"effects": profile.Summary.Effects,
+		},
+	})
+}
+
 // uiSettings handles index page
 func uiSettings(w http.ResponseWriter, _ *http.Request) {
 	web := templates.Web{}
@@ -2933,6 +2993,7 @@ func setRoutes() http.Handler {
 	handleFunc(r, "/api/keyboard/dial/setColors", http.MethodPost, setKeyboardControlDialColors)
 	handleFunc(r, "/api/setSupportedDevices", http.MethodPost, setSupportedDevices)
 	handleFunc(r, "/api/restore", http.MethodPost, backup.PerformRestore)
+	handleFunc(r, "/api/icue/upload", http.MethodPost, uploadICUEProfile)
 	handleFunc(r, "/api/lcd/upload", http.MethodPost, lcd.PerformImageUpload)
 	handleFunc(r, "/api/headset/anc", http.MethodPost, changeActiveNoiseCancellation)
 	handleFunc(r, "/api/headset/sidetone", http.MethodPost, changeSidetone)

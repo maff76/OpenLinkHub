@@ -232,6 +232,23 @@
                                 </div>
                             </div>
                         </div>
+
+                        <!-- iCUE profile import (diagnostic/parser stage) -->
+                        <div class="card system-card text-center">
+                            <div class="card-header">iCUE Profiles</div>
+                            <div class="card-body text-left sentence-text">
+                                Upload Corsair <strong>.cueprofile</strong> files for parsing and diagnostics.
+                                Imported profiles do not change active RGB yet.
+                            </div>
+                            <div class="card-body">
+                                <form id="icueProfileForm" enctype="multipart/form-data" class="file-form full-width">
+                                    <input type="file" class="system-input file-input" id="icueProfileFile" name="profileFile" accept=".cueprofile">
+                                    <button class="system-button success" type="submit" id="btnICUEProfileUpload">Upload</button>
+                                </form>
+                                <div id="icueProfileDirectory" class="sentence-text text-left" style="margin-top: 12px;"></div>
+                                <div id="icueProfileList" class="settings-list" style="margin-top: 8px;"></div>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 <div class="col-12 col-xl-6">

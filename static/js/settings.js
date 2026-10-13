@@ -722,3 +722,82 @@ $(document).ready(function () {
     }
     loadDashboardSettings();
 });
+// iCUE profile importer - parser/diagnostic stage.
+// Profiles are validated server-side before being stored and never alter RGB here.
+function refreshICUEProfiles() {
+    $.ajax({
+        url: '/api/icue/profiles',
+        type: 'GET',
+        dataType: 'json',
+        success: function (response) {
+            const list = $('#icueProfileList');
+            list.empty();
+            $('#icueProfileDirectory').text(response.directory ? 'Stored in: ' + response.directory : '');
+
+            const profiles = response.profiles || [];
+            if (profiles.length === 0) {
+                list.append($('<div>', { class: 'settings-row' }).append($('<span>', { class: 'settings-label', text: 'No iCUE profiles imported' })));
+            }
+            profiles.forEach(function (profile) {
+                const effects = Object.keys(profile.effects || {}).sort().join(', ');
+                const detail = profile.layers + ' layers • ' + profile.channels + ' channels • ' + profile.deviceEntries + ' device entries' +
+                    (effects ? ' • ' + effects : '');
+                const row = $('<div>', { class: 'settings-row' });
+                const text = $('<div>', { class: 'text-left' });
+                text.append($('<div>', { text: profile.name || profile.fileName }));
+                text.append($('<small>', { text: detail }));
+                row.append(text);
+                list.append(row);
+            });
+
+            Object.keys(response.failures || {}).sort().forEach(function (fileName) {
+                const row = $('<div>', { class: 'settings-row' });
+                const text = $('<div>', { class: 'text-left' });
+                text.append($('<div>', { text: fileName + ' — parse failed' }));
+                text.append($('<small>', { text: response.failures[fileName] }));
+                row.append(text);
+                list.append(row);
+            });
+        },
+        error: function (xhr) {
+            $('#icueProfileList').empty().append($('<div>', { class: 'settings-row', text: 'Unable to load iCUE profiles: ' + xhr.responseText }));
+        }
+    });
+}
+
+$(document).ready(function () {
+    refreshICUEProfiles();
+    $('#icueProfileForm').on('submit', function (e) {
+        e.preventDefault();
+        const file = $('#icueProfileFile')[0].files[0];
+        if (!file) {
+            toast.warning('Please select a .cueprofile file first!');
+            return;
+        }
+        if (!file.name.toLowerCase().endsWith('.cueprofile')) {
+            toast.warning('Only .cueprofile files are supported.');
+            return;
+        }
+        const formData = new FormData();
+        formData.append('profileFile', file);
+        $('#btnICUEProfileUpload').prop('disabled', true);
+        $.ajax({
+            url: '/api/icue/upload',
+            type: 'POST',
+            data: formData,
+            processData: false,
+            contentType: false,
+            success: function (response) {
+                toast.success(response.message || 'iCUE profile imported successfully');
+                $('#icueProfileFile').val('');
+                refreshICUEProfiles();
+            },
+            error: function (xhr) {
+                toast.warning('iCUE profile import failed: ' + xhr.responseText);
+            },
+            complete: function () {
+                $('#btnICUEProfileUpload').prop('disabled', false);
+            }
+        });
+    });
+});
