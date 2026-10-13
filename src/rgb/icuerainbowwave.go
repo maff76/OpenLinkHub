@@ -29,14 +29,11 @@ func (r *ActiveRGB) ICUERainbowWave(startTime time.Time) {
 	}
 
 	// Keep speed 2 at one full hue rotation per second, matching the captured
-	// iCUE duration=1000 ms default. 1 is faster and 3 is slower.
-	secondsPerCycle := 1.0
-	switch {
-	case speed <= 1:
-		secondsPerCycle = 0.5
-	case speed >= 3:
-		secondsPerCycle = 2.0
-	}
+	// iCUE duration=1000 ms default. The UI presents speed from turtle to
+	// rabbit, so larger values must animate faster: 1=2 s/cycle, 2=1 s/cycle,
+	// 3=0.5 s/cycle. Use a continuous exponential mapping so the renderer also
+	// behaves correctly if the profile speed range gains fractional values.
+	secondsPerCycle := math.Pow(2.0, 2.0-speed)
 
 	phase := math.Mod(time.Since(startTime).Seconds()/secondsPerCycle, 1.0)
 	if r.RgbDirection == 5 {
