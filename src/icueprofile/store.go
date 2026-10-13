@@ -25,11 +25,21 @@ func Directory(configPath string) string {
 	return filepath.Join(configPath, "database", "rgb", "icue")
 }
 
+// EnsureDirectory creates the persistent iCUE profile import directory.
+// It is safe to call during startup and before every scan/upload.
+func EnsureDirectory(configPath string) (string, error) {
+	dir := Directory(configPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return dir, fmt.Errorf("create iCUE profile directory %q: %w", dir, err)
+	}
+	return dir, nil
+}
+
 // Scan parses every imported .cueprofile. Invalid files are reported without
 // preventing valid profiles from being returned.
 func Scan(configPath string) ([]ImportedProfile, map[string]string, error) {
-	dir := Directory(configPath)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	dir, err := EnsureDirectory(configPath)
+	if err != nil {
 		return nil, nil, err
 	}
 	entries, err := os.ReadDir(dir)
@@ -68,13 +78,13 @@ func Save(configPath, fileName string, data []byte) (*Profile, string, error) {
 	if base == "." || base == "" || !strings.EqualFold(filepath.Ext(base), ".cueprofile") {
 		return nil, "", fmt.Errorf("only .cueprofile files are supported")
 	}
-	p, err := Parse(strings.NewReader(string(data)))
+	dir, err := EnsureDirectory(configPath)
 	if err != nil {
 		return nil, "", err
 	}
-	dir := Directory(configPath)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, "", err
+	p, err := Parse(strings.NewReader(string(data)))
+	if err != nil {
+		return nil, "", fmt.Errorf("parse %s: %w", base, err)
 	}
 	tmp, err := os.CreateTemp(dir, ".icue-upload-*")
 	if err != nil {

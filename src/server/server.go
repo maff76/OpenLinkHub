@@ -2671,7 +2671,7 @@ func uploadICUEProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	profile, dest, err := icueprofile.Save(config.GetConfig().ConfigPath, header.Filename, data)
 	if err != nil {
-		http.Error(w, "iCUE profile parse failed: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, "iCUE profile import failed: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 	logger.Log(logger.Fields{"profile": profile.Name, "file": filepath.Base(dest), "layers": profile.Summary.Layers}).Info("Imported iCUE profile")
@@ -2895,6 +2895,7 @@ func setRoutes() http.Handler {
 	handleFunc(r, "/api/systray", http.MethodGet, getSystrayData)
 	handleFunc(r, "/api/keyboard/dial/getColors/", http.MethodGet, getControlDialColors)
 	handleFunc(r, "/api/getSupportedDevices", http.MethodGet, getSupportedDevices)
+	handleFunc(r, "/api/icue/profiles", http.MethodGet, getICUEProfiles)
 	handleFunc(r, "/api/backup", http.MethodGet, backup.PerformBackup)
 	handleFunc(r, "/api/position/", http.MethodGet, getPositionData)
 	handleFunc(r, "/api/headset/getEqualizers/", http.MethodGet, getEqualizers)
@@ -3073,6 +3074,11 @@ func Init() {
 	}
 
 	if config.GetConfig().ListenPort > 0 {
+		if dir, err := icueprofile.EnsureDirectory(config.GetConfig().ConfigPath); err != nil {
+			logger.Log(logger.Fields{"error": err, "directory": dir}).Error("Unable to initialize iCUE profile import directory")
+		} else {
+			logger.Log(logger.Fields{"directory": dir}).Info("iCUE profile import directory initialized")
+		}
 		templates.Init()
 		server = &http.Server{
 			Addr: fmt.Sprintf(
