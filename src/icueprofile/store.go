@@ -105,3 +105,64 @@ func Save(configPath, fileName string, data []byte) (*Profile, string, error) {
 	}
 	return p, dest, nil
 }
+
+// ProfileKey returns the stable OpenLinkHub RGB mode used for an imported
+// profile. Keeping the filename in the key makes replacement uploads retain
+// the same saved device selection.
+func ProfileKey(fileName string) string {
+	base := strings.TrimSuffix(filepath.Base(fileName), filepath.Ext(fileName))
+	base = strings.ToLower(base)
+	var b strings.Builder
+	lastDash := false
+	for _, r := range base {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			lastDash = false
+		} else if !lastDash && b.Len() > 0 {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	return "icue-" + strings.Trim(b.String(), "-")
+}
+
+// LoadByKey resolves and parses an imported profile by its RGB mode key.
+func LoadByKey(configPath, key string) (*Profile, string, error) {
+	dir, err := EnsureDirectory(configPath)
+	if err != nil {
+		return nil, "", err
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, "", err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".cueprofile") {
+			continue
+		}
+		if ProfileKey(entry.Name()) != key {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		p, err := ParseFile(path)
+		return p, path, err
+	}
+	return nil, "", fmt.Errorf("imported iCUE profile %q not found", key)
+}
+
+// Modes returns imported profile mode keys and display names.
+func Modes(configPath string) map[string]string {
+	out := map[string]string{}
+	profiles, _, err := Scan(configPath)
+	if err != nil {
+		return out
+	}
+	for _, p := range profiles {
+		name := strings.TrimSpace(p.Name)
+		if name == "" {
+			name = strings.TrimSuffix(p.FileName, filepath.Ext(p.FileName))
+		}
+		out[ProfileKey(p.FileName)] = "iCUE: " + name
+	}
+	return out
+}

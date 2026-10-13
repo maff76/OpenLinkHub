@@ -10,6 +10,7 @@ import (
 	"OpenLinkHub/src/config"
 	"OpenLinkHub/src/dashboard"
 	"OpenLinkHub/src/devices/lcd"
+	"OpenLinkHub/src/icueprofile"
 	"OpenLinkHub/src/led"
 	"OpenLinkHub/src/logger"
 	"OpenLinkHub/src/metrics"
@@ -449,6 +450,7 @@ func Init(vendorId, productId uint16, serial, path string) *common.Device {
 	d.loadDeviceMetadata()   // Device metadata
 	d.loadExternalDevices()  // External metadata
 	d.loadRgb()              // Load RGB
+	d.loadICUEProfiles()     // Imported iCUE profiles
 	d.loadDeviceProfiles()   // Load all device profiles
 	d.getDeviceLcd()         // Check for LCDs
 	d.getDeviceFirmware()    // Firmware
@@ -636,7 +638,7 @@ func (d *Device) GetRgbProfiles() interface{} {
 	// Filter unsupported modes out
 	profiles := make(map[string]rgb.Profile, len(tmp.Profiles))
 	for key, value := range tmp.Profiles {
-		if slices.Contains(rgbModes, key) {
+		if slices.Contains(d.RGBModes, key) {
 			profiles[key] = value
 		}
 	}
@@ -808,6 +810,44 @@ func (d *Device) getLcdImages() {
 			}
 		}
 	}
+}
+
+// loadICUEProfiles exposes validated imported profiles as LINK RGB modes. The
+// actual profile remains in database/rgb/icue and is rendered directly from
+// the Corsair layer data; the placeholder only lets the existing profile UI
+// and device-profile persistence select it normally.
+func (d *Device) loadICUEProfiles() {
+	if d.Rgb == nil {
+		return
+	}
+	modes := icueprofile.Modes(pwd)
+	for key, label := range modes {
+		if !slices.Contains(d.RGBModes, key) {
+			d.RGBModes = append(d.RGBModes, key)
+		}
+		if _, ok := d.Rgb.Profiles[key]; !ok {
+			d.Rgb.Profiles[key] = rgb.Profile{ProfileName: label, Speed: 1, Brightness: 1, Version: 1}
+		}
+	}
+	sort.Strings(d.RGBModes)
+}
+
+// qxOrdinal maps the current LINK QX ordering onto the 42-id stride observed
+// in iCUE captures. Only QX devices participate in this logical canvas.
+func (d *Device) qxOrdinal(channelID int) int {
+	keys := make([]int, 0)
+	for k, dev := range d.Devices {
+		if strings.Contains(strings.ToLower(dev.Name), "qx") && dev.LedChannels > 0 {
+			keys = append(keys, k)
+		}
+	}
+	sort.Ints(keys)
+	for i, k := range keys {
+		if k == channelID {
+			return i
+		}
+	}
+	return -1
 }
 
 // loadRgb will load RGB file if found, or create the default.
@@ -4952,6 +4992,26 @@ func (d *Device) setDeviceColor() {
 // generateRgbEffect will generate RGB effect for given device index
 func (d *Device) generateRgbEffect(k int, channels uint8, startTime *time.Time, rgbProfile string, subDeviceId int) []byte {
 	buff := make([]byte, 0)
+	if strings.HasPrefix(rgbProfile, "icue-") {
+		profile, _, err := icueprofile.LoadByKey(pwd, rgbProfile)
+		if err != nil {
+			logger.Log(logger.Fields{"error": err, "profile": rgbProfile}).Warn("Unable to load imported iCUE profile")
+			return make([]byte, int(channels)*3)
+		}
+		ordinal := d.qxOrdinal(k)
+		if ordinal < 0 {
+			return make([]byte, int(channels)*3)
+		}
+		brightness := rgb.GetBrightnessValueFloat(*d.DeviceProfile.BrightnessSlider)
+		if d.GlobalBrightness != 0 {
+			brightness = d.GlobalBrightness
+		}
+		output, unsupported := profile.RenderQX(ordinal, int(channels), *startTime, brightness)
+		if len(unsupported) > 0 {
+			logger.Log(logger.Fields{"profile": profile.Name, "effects": unsupported}).Debug("Skipped unsupported iCUE lighting effects")
+		}
+		return output
+	}
 	rgbCustomColor := true
 
 	profile := d.GetRgbProfile(rgbProfile)

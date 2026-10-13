@@ -242,7 +242,7 @@ func extractParameters(effect *Node) map[string]any {
 		if len(nodes) == 0 {
 			continue
 		}
-		if key == "transitions" || key == "colors" {
+		if key == "transitions" || key == "colors" || key == "color" {
 			vals := collectLeafValues(nodes[0])
 			if len(vals) > 0 {
 				result[key] = vals
