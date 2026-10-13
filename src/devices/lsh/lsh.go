@@ -339,6 +339,7 @@ var (
 		"probe-temperature",
 		"rain",
 		"rainbow",
+		"icuerainbowwave",
 		"pastelrainbow",
 		"rotarystack",
 		"rotator",
@@ -357,6 +358,7 @@ var (
 		"nebula",
 		"marquee",
 		"rain",
+		"icuerainbowwave",
 		"rotarystack",
 		"sequential",
 		"spiralrainbow",
@@ -5060,6 +5062,12 @@ func (d *Device) generateRgbEffect(k int, channels uint8, startTime *time.Time, 
 	case "rainbow":
 		{
 			r.Rainbow(*startTime)
+			buff = r.Output
+		}
+	case "icuerainbowwave":
+		{
+			r.RgbDirection = profile.RgbDirection
+			r.ICUERainbowWave(*startTime)
 			buff = r.Output
 		}
 	case "pastelrainbow":

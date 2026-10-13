@@ -59,6 +59,13 @@
       "rgbDirection": 4,
       "frequency": 10
     },
+    "icuerainbowwave": {
+      "profileName": "Rainbow Wave (iCUE)",
+      "speed": 2,
+      "brightness": 1,
+      "rgbDirection": 4,
+      "version": 1
+    },
     "rain": {
       "profileName": "Rain",
       "alternateColors": false,

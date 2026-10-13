@@ -189,6 +189,7 @@ $(document).ready(function () {
                                             case "spiralrainbow":
                                             case "rainbowwave":
                                             case "openrgbrainbowwave":
+                                            case "icuerainbowwave":
                                             case "rain":
                                             case "visor":
                                             case "colorwave": {
