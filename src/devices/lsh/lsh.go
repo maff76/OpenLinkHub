@@ -3961,19 +3961,50 @@ func (d *Device) getDevices() int {
 	var devices = make(map[int]*Devices)
 	var nonAIOLcdData = lcd.GetNonAioLCDData()
 
-	response := d.readExpected(modeGetDevices, dataTypeGetDevices, false, v2)
+	// LINK hubs can be present on USB before their endpoint firmware is ready
+	// immediately after a cold host boot. Retry the complete enumeration
+	// transaction when no valid get-devices response is returned. Keep this
+	// retry local to discovery so normal HID traffic is not delayed.
+	const maxEnumerationAttempts = 3
+	var response []byte
+	for attempt := 1; attempt <= maxEnumerationAttempts; attempt++ {
+		response = d.readExpected(modeGetDevices, dataTypeGetDevices, false, v2)
+		if len(response) >= 7 && responseMatchSafe(response, dataTypeGetDevices) {
+			if attempt > 1 {
+				logger.Log(logger.Fields{
+					"serial":  d.Serial,
+					"attempt": attempt,
+				}).Info("getDevices() - LINK endpoint became ready after retry")
+			}
+			break
+		}
+
+		if attempt < maxEnumerationAttempts {
+			delay := time.Duration(attempt) * 400 * time.Millisecond
+			logger.Log(logger.Fields{
+				"serial":      d.Serial,
+				"attempt":     attempt,
+				"maxAttempts": maxEnumerationAttempts,
+				"responseLen": len(response),
+				"retryIn":     delay.String(),
+			}).Warn("getDevices() - LINK endpoint not ready, retrying enumeration")
+			time.Sleep(delay)
+		}
+	}
 
 	if d.Debug {
 		logger.Log(logger.Fields{"serial": d.Serial, "data": fmt.Sprintf("% 2x", response)}).Info("getDevices()")
 	}
 
 	// A valid get-devices response must contain the protocol header through the
-	// channel-count byte. Never index response[6] unless it is present.
-	if len(response) < 7 {
+	// channel-count byte and must still be the requested endpoint data type.
+	// Never let a stale packet reach the device-list parser.
+	if len(response) < 7 || !responseMatchSafe(response, dataTypeGetDevices) {
 		logger.Log(logger.Fields{
-			"serial":      d.Serial,
-			"responseLen": len(response),
-		}).Error("getDevices() - Response too short")
+			"serial":       d.Serial,
+			"responseLen":  len(response),
+			"expectedType": fmt.Sprintf("% 2x", dataTypeGetDevices),
+		}).Error("getDevices() - No valid device-list response after retries")
 		return 0
 	}
 
