@@ -339,7 +339,6 @@ var (
 		"probe-temperature",
 		"rain",
 		"rainbow",
-		"openrgbrainbowwave",
 		"pastelrainbow",
 		"rotarystack",
 		"rotator",
@@ -361,7 +360,6 @@ var (
 		"rotarystack",
 		"sequential",
 		"spiralrainbow",
-		"openrgbrainbowwave",
 		"gradient",
 		"pastelrainbow",
 		"pastelspiralrainbow",
@@ -2289,18 +2287,6 @@ func (d *Device) SaveUserProfile(profileName string) uint8 {
 	return 0
 }
 
-// isGlobalFanSpeedTarget reports whether a LINK endpoint should be controlled by
-// the hub-level fan profile selector. Pumps/AIOs, PSUs, VRM coolers and other
-// special speed endpoints keep their own per-device profiles.
-func isGlobalFanSpeedTarget(device *Devices) bool {
-	return device != nil &&
-		device.HasSpeed &&
-		!device.ContainsPump &&
-		!device.AIO &&
-		!device.IsPSU &&
-		!device.IsVrmCooler
-}
-
 // UpdateSpeedProfile will update device channel speed.
 // If channelId is 0, all device channels will be updated
 func (d *Device) UpdateSpeedProfile(channelId int, profile string) uint8 {
@@ -2356,21 +2342,11 @@ func (d *Device) UpdateSpeedProfile(channelId int, profile string) uint8 {
 	}
 
 	if channelId < 0 {
-		// The hub-level selector is a fan profile control, not a controller-wide
-		// speed override. Pumps/AIOs, PSUs and other special speed endpoints keep
-		// their own per-device profiles.
-		updated := false
-		for _, device := range d.Devices {
-			if !isGlobalFanSpeedTarget(device) {
-				continue
-			}
-			d.Devices[device.ChannelId].Profile = profile
-			updated = true
-		}
-		if !updated {
-			return 4
-		}
 		d.DeviceProfile.MultiProfile = profile
+		// All devices
+		for _, device := range d.Devices {
+			d.Devices[device.ChannelId].Profile = profile
+		}
 	} else {
 		// Check if actual channelId exists in the device list
 		if _, ok := d.Devices[channelId]; ok {
@@ -2434,25 +2410,15 @@ func (d *Device) UpdateSpeedProfileBulk(channelIds []int, profile string) uint8 
 	}
 
 	if len(channelIds) > 0 {
-		updated := false
+		d.DeviceProfile.MultiProfile = profile
 		for _, channelId := range channelIds {
-			device, ok := d.Devices[channelId]
-			if !ok {
+			if _, ok := d.Devices[channelId]; ok {
+				// Update channel with new profile
+				d.Devices[channelId].Profile = profile
+			} else {
 				return 0
 			}
-			// Bulk changes originate from the hub-level fan profile selector. Keep
-			// pumps/AIOs, PSUs and other special speed endpoints independent even
-			// when their cards are selected in the UI.
-			if !isGlobalFanSpeedTarget(device) {
-				continue
-			}
-			d.Devices[channelId].Profile = profile
-			updated = true
 		}
-		if !updated {
-			return 4
-		}
-		d.DeviceProfile.MultiProfile = profile
 	} else {
 		return 0
 	}
@@ -2644,8 +2610,6 @@ func (d *Device) UpdateRgbProfileData(profileName string, profile rgb.Profile) u
 	pf.EndColor = profile.EndColor
 	pf.MiddleColor = profile.MiddleColor
 	pf.Speed = profile.Speed
-	pf.RgbDirection = profile.RgbDirection
-	pf.Frequency = profile.Frequency
 	pf.Gradients = profile.Gradients
 	pf.MinTemp = profile.MinTemp
 	pf.MaxTemp = profile.MaxTemp
@@ -3961,50 +3925,18 @@ func (d *Device) getDevices() int {
 	var devices = make(map[int]*Devices)
 	var nonAIOLcdData = lcd.GetNonAioLCDData()
 
-	// LINK hubs can be present on USB before their endpoint firmware is ready
-	// immediately after a cold host boot. Retry the complete enumeration
-	// transaction when no valid get-devices response is returned. Keep this
-	// retry local to discovery so normal HID traffic is not delayed.
-	const maxEnumerationAttempts = 3
-	var response []byte
-	for attempt := 1; attempt <= maxEnumerationAttempts; attempt++ {
-		response = d.readExpected(modeGetDevices, dataTypeGetDevices, false, v2)
-		if len(response) >= 7 && responseMatchSafe(response, dataTypeGetDevices) {
-			if attempt > 1 {
-				logger.Log(logger.Fields{
-					"serial":  d.Serial,
-					"attempt": attempt,
-				}).Info("getDevices() - LINK endpoint became ready after retry")
-			}
-			break
-		}
-
-		if attempt < maxEnumerationAttempts {
-			delay := time.Duration(attempt) * 400 * time.Millisecond
-			logger.Log(logger.Fields{
-				"serial":      d.Serial,
-				"attempt":     attempt,
-				"maxAttempts": maxEnumerationAttempts,
-				"responseLen": len(response),
-				"retryIn":     delay.String(),
-			}).Warn("getDevices() - LINK endpoint not ready, retrying enumeration")
-			time.Sleep(delay)
-		}
-	}
-
+	response := d.read(modeGetDevices, dataTypeGetDevices, false, v2)
 	if d.Debug {
 		logger.Log(logger.Fields{"serial": d.Serial, "data": fmt.Sprintf("% 2x", response)}).Info("getDevices()")
 	}
 
 	// A valid get-devices response must contain the protocol header through the
-	// channel-count byte and must still be the requested endpoint data type.
-	// Never let a stale packet reach the device-list parser.
-	if len(response) < 7 || !responseMatchSafe(response, dataTypeGetDevices) {
+	// channel-count byte. Never index response[6] unless it is present.
+	if len(response) < 7 {
 		logger.Log(logger.Fields{
-			"serial":       d.Serial,
-			"responseLen":  len(response),
-			"expectedType": fmt.Sprintf("% 2x", dataTypeGetDevices),
-		}).Error("getDevices() - No valid device-list response after retries")
+			"serial":      d.Serial,
+			"responseLen": len(response),
+		}).Error("getDevices() - Response too short")
 		return 0
 	}
 
@@ -5130,13 +5062,6 @@ func (d *Device) generateRgbEffect(k int, channels uint8, startTime *time.Time, 
 			r.Rainbow(*startTime)
 			buff = r.Output
 		}
-	case "openrgbrainbowwave":
-		{
-			r.Frequency = profile.Frequency
-			r.RgbDirection = profile.RgbDirection
-			r.RainbowWave(*startTime)
-			buff = r.Output
-		}
 	case "pastelrainbow":
 		{
 			r.PastelRainbow(*startTime)
@@ -5440,9 +5365,7 @@ func (d *Device) getDeviceFirmware() {
 	d.FirmwareInternal = []int{v1, v2, v3}
 }
 
-// read will read data from a device and return data as a byte array.
-// Keep the author's original semantics here because existing callers expect the
-// first endpoint response even when its type does not match bufferType.
+// read will read data from a device and return data as a byte array
 func (d *Device) read(endpoint, bufferType []byte, psu bool, v2 byte) []byte {
 	d.deviceLock.Lock()
 	defer d.deviceLock.Unlock()
@@ -5464,11 +5387,40 @@ func (d *Device) read(endpoint, bufferType []byte, psu bool, v2 byte) []byte {
 		logger.Log(logger.Fields{"error": err}).Error("Unable to read endpoint")
 	}
 
-	if responseMatch(buffer, bufferType) {
+	// getDevices is sensitive to stale or unexpected HID packets because the
+	// parser expects bytes 4:6 to identify the requested data type and byte 6
+	// to contain the device count.  Log the first packet header before deciding
+	// whether a continuation packet belongs to this response.
+	if bytes.Equal(endpoint, modeGetDevices) {
+		headerLen := 16
+		if len(buffer) < headerLen {
+			headerLen = len(buffer)
+		}
+		logger.Log(logger.Fields{
+			"serial":       d.Serial,
+			"responseLen":  len(buffer),
+			"expectedType": fmt.Sprintf("% 2x", bufferType),
+			"header":       fmt.Sprintf("% 2x", buffer[:headerLen]),
+			"typeMatch":    responseMatchSafe(buffer, bufferType),
+		}).Warn("getDevices() - First HID response diagnostic")
+	}
+
+	if responseMatchSafe(buffer, bufferType) {
 		next, e := d.transfer(cmdRead, endpoint, psu, v2)
 		if e != nil {
 			logger.Log(logger.Fields{"error": e}).Error("Unable to read endpoint")
 		} else if len(next) >= 4 {
+			if bytes.Equal(endpoint, modeGetDevices) {
+				headerLen := 16
+				if len(next) < headerLen {
+					headerLen = len(next)
+				}
+				logger.Log(logger.Fields{
+					"serial":      d.Serial,
+					"responseLen": len(next),
+					"header":      fmt.Sprintf("% 2x", next[:headerLen]),
+				}).Warn("getDevices() - Continuation HID response diagnostic")
+			}
 			buffer = append(buffer, next[4:]...)
 		}
 	}
@@ -5478,125 +5430,6 @@ func (d *Device) read(endpoint, bufferType []byte, psu bool, v2 byte) []byte {
 		logger.Log(logger.Fields{"error": err}).Error("Unable to close endpoint")
 	}
 	return buffer
-}
-
-// readExpected is deliberately used only by LINK device enumeration. Unlike
-// read(), getDevices must never parse an unrelated/stale HID response as a
-// device list. Drain a bounded number of responses until the requested data
-// type is observed. Returning nil is safe because getDevices validates the
-// response length before indexing it.
-func (d *Device) readExpected(endpoint, bufferType []byte, psu bool, v2 byte) []byte {
-	d.deviceLock.Lock()
-	defer d.deviceLock.Unlock()
-
-	_, err := d.transfer(cmdCloseEndpoint, endpoint, psu, v2)
-	if err != nil {
-		logger.Log(logger.Fields{"error": err}).Error("Unable to close endpoint")
-	}
-
-	_, err = d.transfer(cmdOpenEndpoint, endpoint, psu, v2)
-	if err != nil {
-		logger.Log(logger.Fields{"error": err}).Error("Unable to open endpoint")
-	}
-
-	defer func() {
-		if _, closeErr := d.transfer(cmdCloseEndpoint, endpoint, psu, v2); closeErr != nil {
-			logger.Log(logger.Fields{"error": closeErr}).Error("Unable to close endpoint")
-		}
-	}()
-
-	// A stale response can occasionally still be queued when the endpoint is
-	// opened. Do not hand an unrelated packet to the device-list parser.
-	const maxResponseAttempts = 4
-	var buffer []byte
-	for attempt := 1; attempt <= maxResponseAttempts; attempt++ {
-		candidate, readErr := d.transfer(cmdRead, endpoint, psu, v2)
-		if readErr != nil {
-			logger.Log(logger.Fields{"error": readErr, "attempt": attempt}).Error("Unable to read expected endpoint response")
-			return nil
-		}
-		if !responseMatchSafe(candidate, bufferType) {
-			if d.Debug {
-				actualType := "short"
-				if len(candidate) >= 6 {
-					actualType = fmt.Sprintf("% 2x", candidate[4:6])
-				}
-				logger.Log(logger.Fields{
-					"serial":       d.Serial,
-					"attempt":      attempt,
-					"expectedType": fmt.Sprintf("% 2x", bufferType),
-					"actualType":   actualType,
-				}).Debug("getDevices() - Skipping unrelated HID endpoint response")
-			}
-			continue
-		}
-		buffer = candidate
-		break
-	}
-
-	if len(buffer) == 0 {
-		logger.Log(logger.Fields{
-			"serial":       d.Serial,
-			"expectedType": fmt.Sprintf("% 2x", bufferType),
-		}).Warn("getDevices() - Expected HID endpoint response not received")
-		return nil
-	}
-
-	// LINK device records are variable length and a populated hub can require
-	// more than two HID reports. Keep collecting 508-byte continuation payloads
-	// until the channel count and all variable-length records are complete.
-	// Eight reports cap the assembled response at 4068 bytes, comfortably above
-	// the protocol's 24-device capacity while preventing unbounded reads.
-	const maxPackets = 8
-	for packet := 1; packet < maxPackets && !getDevicesResponseComplete(buffer); packet++ {
-		next, readErr := d.transfer(cmdRead, endpoint, psu, v2)
-		if readErr != nil {
-			logger.Log(logger.Fields{"error": readErr, "packet": packet + 1}).Error("Unable to read endpoint continuation")
-			return buffer
-		}
-		if len(next) < 4 {
-			logger.Log(logger.Fields{
-				"serial": d.Serial,
-				"packet": packet + 1,
-				"length": len(next),
-			}).Warn("getDevices() - Continuation response too short")
-			return buffer
-		}
-		buffer = append(buffer, next[4:]...)
-	}
-
-	if !getDevicesResponseComplete(buffer) {
-		logger.Log(logger.Fields{
-			"serial":      d.Serial,
-			"responseLen": len(buffer),
-			"maxPackets":  maxPackets,
-		}).Warn("getDevices() - Device list still incomplete after maximum continuation packets")
-	}
-	return buffer
-}
-
-// getDevicesResponseComplete checks only the wire-format record boundaries.
-// It deliberately does not depend on device metadata, profiles, or known model
-// types, so future LINK devices can still be enumerated safely.
-func getDevicesResponseComplete(response []byte) bool {
-	if len(response) < 7 {
-		return false
-	}
-
-	channels := int(response[6])
-	data := response[7:]
-	position := 0
-	for i := 0; i < channels; i++ {
-		if position+8 > len(data) {
-			return false
-		}
-		recordLen := 8 + int(data[position+7])
-		if position+recordLen > len(data) {
-			return false
-		}
-		position += recordLen
-	}
-	return true
 }
 
 // readDeviceData will read data from a device and return data as a byte array
