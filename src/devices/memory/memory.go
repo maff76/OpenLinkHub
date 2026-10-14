@@ -1599,7 +1599,21 @@ func (d *Device) setDeviceColor() {
 						if len(unsupported) > 0 {
 							logger.Log(logger.Fields{"profile": imported.Name, "effects": unsupported}).Debug("Skipped unsupported iCUE memory lighting effects")
 						}
-						buff = append(buff, output...)
+
+						// Imported iCUE profiles bypass the native effect switch below.
+						// Write this DIMM's rendered frame before continuing; otherwise
+						// setDeviceColor() only sends the initial black reset frame.
+						expected := int(d.Devices[k].LedChannels) * 3
+						if len(output) != expected {
+							logger.Log(logger.Fields{
+								"profile":  imported.Name,
+								"device":   k,
+								"expected": expected,
+								"actual":   len(output),
+							}).Warn("Imported iCUE memory frame has invalid length")
+							continue
+						}
+						d.writeColor(output, k)
 						continue
 					}
 					profile := d.GetRgbProfile(d.Devices[k].RGB)
