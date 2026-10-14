@@ -138,10 +138,9 @@ func selectedAt(l Layer, logicalBase, local int) bool {
 	return false
 }
 
-// RenderQX renders one QX fan from an imported LINK profile. Captured QX data
-// establishes 34 physical LEDs in a 42-id logical stride. Layers are composited
-// bottom-to-top (reverse XML order), matching iCUE's layer stack semantics.
-func (p *Profile) RenderQX(fanOrdinal, ledCount int, started time.Time, brightness float64) ([]byte, []string) {
+// RenderFan renders a fan using a device-specific topology supplied by the LINK layer.
+// Layers are composited bottom-to-top (reverse XML order), matching iCUE's layer stack semantics.
+func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, started time.Time, brightness float64) ([]byte, []string) {
 	out := make([]RGB, ledCount)
 	unsupported := map[string]bool{}
 	d := p.LinkDevice()
@@ -155,13 +154,13 @@ func (p *Profile) RenderQX(fanOrdinal, ledCount int, started time.Time, brightne
 		if !l.Enabled {
 			continue
 		}
-		colors, alpha, ok := renderLayer(l, fanOrdinal, ledCount, elapsed, qxSpatialPositions(fanOrdinal, ledCount))
+		colors, alpha, ok := renderLayer(l, deviceOrdinal, ledCount, elapsed, topologyPositions(topology, deviceOrdinal, ledCount))
 		if !ok {
 			unsupported[l.Effect] = true
 			continue
 		}
 		for i := 0; i < ledCount; i++ {
-			if !selected(l, fanOrdinal, i) {
+			if !selectedWithTopology(l, topology, deviceOrdinal, i) {
 				continue
 			}
 			a := alpha[i]
@@ -184,11 +183,17 @@ func (p *Profile) RenderQX(fanOrdinal, ledCount int, started time.Time, brightne
 	return buf, names
 }
 
-func selected(l Layer, fanOrdinal, local int) bool {
+func selectedWithTopology(l Layer, topology LEDTopology, deviceOrdinal, local int) bool {
 	if strings.EqualFold(l.SelectionMode, "AllLeds") || l.SelectionMode == "" {
 		return true
 	}
-	logical := fanOrdinal*42 + local
+	if topology == nil {
+		return false
+	}
+	logical, ok := topology.LogicalLED(deviceOrdinal, local)
+	if !ok {
+		return false
+	}
 	for _, key := range l.LEDs {
 		m := ledNumber.FindStringSubmatch(strings.TrimSpace(key))
 		if len(m) != 2 {
@@ -330,29 +335,19 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 	}
 }
 
-// qxSpatialPositions returns Corsair's SDK logical X positions in roughly one
-// 20-unit LED pitch.  A QX exposes 34 controllable LEDs, while adjacent fans
-// are separated by 365 logical X units in the captured LINK layout.  Keeping
-// the absolute fan offset makes spatial effects continuous across a QX chain.
-//
-// This is device topology, not Halo-specific profile data, so every imported
-// profile using a spatial renderer can reuse it.  If a future QX variant has a
-// different LED count we return nil and the renderer falls back safely.
-func qxSpatialPositions(fanOrdinal, ledCount int) []float64 {
-	if ledCount != 34 {
+// topologyPositions asks the device topology for spatial coordinates. Unknown
+// hardware returns nil, which keeps spatial effects on the safe sequential fallback.
+func topologyPositions(topology LEDTopology, deviceOrdinal, ledCount int) []float64 {
+	if topology == nil || topology.LEDCount() != ledCount {
 		return nil
 	}
-	localX := [...]float64{
-		10, 30, 50, 70, 90, 110, 130, 150, 170, 190, 210, 230,
-		50, 30, 10, 230, 210, 190, 170, 150, 130, 110, 90, 70,
-		270, 280, 290, 310, 320, 330, 260, 320, 300, 280,
-	}
-	const fanPitch = 365.0
-	const ledPitch = 20.0
-	out := make([]float64, len(localX))
-	base := float64(fanOrdinal) * fanPitch
-	for i, x := range localX {
-		out[i] = (base + x) / ledPitch
+	out := make([]float64, ledCount)
+	for i := 0; i < ledCount; i++ {
+		pos, ok := topology.Position(deviceOrdinal, i)
+		if !ok {
+			return nil
+		}
+		out[i] = pos
 	}
 	return out
 }

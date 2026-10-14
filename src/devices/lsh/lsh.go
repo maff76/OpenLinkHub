@@ -4999,14 +4999,15 @@ func (d *Device) generateRgbEffect(k int, channels uint8, startTime *time.Time, 
 			return make([]byte, int(channels)*3)
 		}
 		ordinal := d.qxOrdinal(k)
+		topology := icueprofile.TopologyForDevice(d.Devices[k].Name, int(channels))
 		brightness := rgb.GetBrightnessValueFloat(*d.DeviceProfile.BrightnessSlider)
 		if d.GlobalBrightness != 0 {
 			brightness = d.GlobalBrightness
 		}
 		var output []byte
 		var unsupported []string
-		if ordinal >= 0 {
-			output, unsupported = profile.RenderQX(ordinal, int(channels), *startTime, brightness)
+		if topology != nil && ordinal >= 0 {
+			output, unsupported = profile.RenderFan(topology, ordinal, int(channels), *startTime, brightness)
 		} else {
 			// Non-QX LINK hardware (for example TITAN pump lighting) still gets
 			// portable AllLeds layers. Concrete selections are skipped until a
