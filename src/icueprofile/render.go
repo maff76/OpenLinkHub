@@ -89,7 +89,7 @@ func renderCanvas(layers []Layer, logicalBase, ledCount, ordinal int, started ti
 		if !l.Enabled {
 			continue
 		}
-		colors, alpha, ok := renderLayer(l, ordinal, ledCount, elapsed)
+		colors, alpha, ok := renderLayer(l, ordinal, ledCount, elapsed, nil)
 		if !ok {
 			unsupported[l.Effect] = true
 			continue
@@ -155,7 +155,7 @@ func (p *Profile) RenderQX(fanOrdinal, ledCount int, started time.Time, brightne
 		if !l.Enabled {
 			continue
 		}
-		colors, alpha, ok := renderLayer(l, fanOrdinal, ledCount, elapsed)
+		colors, alpha, ok := renderLayer(l, fanOrdinal, ledCount, elapsed, qxSpatialPositions(fanOrdinal, ledCount))
 		if !ok {
 			unsupported[l.Effect] = true
 			continue
@@ -202,7 +202,7 @@ func selected(l Layer, fanOrdinal, local int) bool {
 	return false
 }
 
-func renderLayer(l Layer, fanOrdinal, n int, elapsed float64) ([]RGB, []float64, bool) {
+func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64) ([]RGB, []float64, bool) {
 	c := make([]RGB, n)
 	a := make([]float64, n)
 	for i := range a {
@@ -267,12 +267,24 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64) ([]RGB, []float64,
 				}
 				intensity = 0.25 + 0.75*hash(slot, i+17)
 			} else {
-				// Deterministic rain: narrow bright head with a short fading tail.
-				pos := math.Mod(float64(i)+phase*4+float64(fanOrdinal*3), float64(maxInt(n, 1)))
-				if pos < 0 {
-					pos += float64(maxInt(n, 1))
+				// Deterministic rain follows the device's logical spatial layout when
+				// one is known.  QX LED numbering doubles back across lighting zones,
+				// so raw LED index order produces the wrong motion.  The SDK-captured
+				// QX positions below preserve Corsair's logical X ordering.  Other
+				// devices deliberately retain the previous index-based fallback.
+				coord := float64(i) + float64(fanOrdinal*3)
+				period := float64(maxInt(n, 1))
+				if len(spatial) == n {
+					coord = spatial[i]
+					// Repeat the rain field at a compact wavelength while keeping one
+					// continuous coordinate system across adjacent QX fans.
+					period = 17.0
 				}
-				d := math.Min(pos, float64(maxInt(n, 1))-pos)
+				pos := math.Mod(coord+phase*4, period)
+				if pos < 0 {
+					pos += period
+				}
+				d := math.Min(pos, period-pos)
 				if d > 3.5 {
 					a[i] = 0
 					continue
@@ -316,6 +328,33 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64) ([]RGB, []float64,
 	default:
 		return c, a, false
 	}
+}
+
+// qxSpatialPositions returns Corsair's SDK logical X positions in roughly one
+// 20-unit LED pitch.  A QX exposes 34 controllable LEDs, while adjacent fans
+// are separated by 365 logical X units in the captured LINK layout.  Keeping
+// the absolute fan offset makes spatial effects continuous across a QX chain.
+//
+// This is device topology, not Halo-specific profile data, so every imported
+// profile using a spatial renderer can reuse it.  If a future QX variant has a
+// different LED count we return nil and the renderer falls back safely.
+func qxSpatialPositions(fanOrdinal, ledCount int) []float64 {
+	if ledCount != 34 {
+		return nil
+	}
+	localX := [...]float64{
+		10, 30, 50, 70, 90, 110, 130, 150, 170, 190, 210, 230,
+		50, 30, 10, 230, 210, 190, 170, 150, 130, 110, 90, 70,
+		270, 280, 290, 310, 320, 330, 260, 320, 300, 280,
+	}
+	const fanPitch = 365.0
+	const ledPitch = 20.0
+	out := make([]float64, len(localX))
+	base := float64(fanOrdinal) * fanPitch
+	for i, x := range localX {
+		out[i] = (base + x) / ledPitch
+	}
+	return out
 }
 
 func applyLayerOpacity(l Layer, alpha []float64) {
