@@ -46,10 +46,11 @@ func (n *Node) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
 }
 
 type Profile struct {
-	Name    string   `json:"name"`
-	ID      string   `json:"id,omitempty"`
-	Devices []Device `json:"devices"`
-	Summary Summary  `json:"summary"`
+	Name               string   `json:"name"`
+	ID                 string   `json:"id,omitempty"`
+	Devices            []Device `json:"devices"`
+	Summary            Summary  `json:"summary"`
+	LightingLinkLayers []Layer  `json:"-"`
 }
 
 type Device struct {
@@ -114,6 +115,29 @@ func Parse(r io.Reader) (*Profile, error) {
 		ID:      childText(profileNode, "id"),
 		Summary: Summary{Effects: map[string]int{}, LEDSelections: map[string]int{}},
 	}
+
+	// Lighting Link is serialized as a profile-level LightingLinkProperty.
+	// Device layers contain a LightingLink wrapper that references this shared
+	// property. Capture the authored linked lighting here so playback can resolve
+	// the wrapper without inventing a separate animation.
+	walk(profileNode, func(n *Node) {
+		if childText(n, "polymorphic_name") != "LightingLinkProperty" {
+			return
+		}
+		data := firstPath(n, "ptr_wrapper", "data")
+		if data == nil {
+			return
+		}
+		layers := directChild(data, "layers")
+		if layers == nil {
+			return
+		}
+		for _, entry := range layers.Children {
+			if l := parseLightingLinkPropertyLayer(entry, typeNames); l != nil {
+				out.LightingLinkLayers = append(out.LightingLinkLayers, *l)
+			}
+		}
+	})
 
 	walk(profileNode, func(n *Node) {
 		key := directChild(n, "key")
@@ -230,11 +254,41 @@ func parseLayer(entry *Node, typeNames map[int]string) *Layer {
 	return l
 }
 
+func parseLightingLinkPropertyLayer(entry *Node, typeNames map[int]string) *Layer {
+	data := firstPath(entry, "ptr_wrapper", "data")
+	if data == nil {
+		return nil
+	}
+	lighting := directChild(data, "lighting")
+	if lighting == nil {
+		return nil
+	}
+	l := &Layer{Enabled: true, SelectionMode: "AllLeds"}
+	l.Effect = childText(lighting, "polymorphic_name")
+	if l.Effect == "" {
+		l.Effect = typeNames[polymorphicTypeID(childText(lighting, "polymorphic_id"))]
+	}
+	effectData := firstPath(lighting, "ptr_wrapper", "data")
+	if effectData == nil {
+		return nil
+	}
+	l.EffectName = findFirstField(effectData, "name")
+	l.Parameters = extractParameters(effectData)
+	if l.Effect == "" {
+		l.Effect = "UnknownLighting"
+	}
+	return l
+}
+
 func extractParameters(effect *Node) map[string]any {
 	wanted := map[string]bool{
 		"duration": true, "brightness": true, "opacity": true, "speed": true,
 		"direction": true, "clockwise": true, "random": true, "color": true,
 		"colors": true, "transitions": true,
+		// Captured iCUE WaveLighting fields. Preserve these even before the
+		// renderer claims playback support; this keeps imported profile data
+		// intact without inventing unverified animation semantics.
+		"velocity": true, "tailLength": true, "isDoublesided": true, "angle": true,
 	}
 	result := map[string]any{}
 	for key := range wanted {

@@ -70,7 +70,7 @@ func (p *Profile) RenderDRAM(moduleOrdinal, ledCount int, started time.Time, bri
 	if d == nil || len(d.Channels) == 0 {
 		return make([]byte, ledCount*3), []string{"DRAM device entry missing"}
 	}
-	return renderCanvas(d.Channels[0].Layers, moduleOrdinal*ledCount, ledCount, moduleOrdinal, started, brightness)
+	return renderCanvas(p.expandLightingLinks(d.Channels[0].Layers), moduleOrdinal*ledCount, ledCount, moduleOrdinal, started, brightness)
 }
 
 // RenderLINKDevice renders a non-QX LINK device. AllLeds layers are exact and
@@ -82,7 +82,31 @@ func (p *Profile) RenderLINKDevice(logicalBase, deviceOrdinal, ledCount int, sta
 	if d == nil || len(d.Channels) == 0 {
 		return make([]byte, ledCount*3), []string{"LINK device entry missing"}
 	}
-	return renderCanvas(d.Channels[0].Layers, logicalBase, ledCount, deviceOrdinal, started, brightness)
+	return renderCanvas(p.expandLightingLinks(d.Channels[0].Layers), logicalBase, ledCount, deviceOrdinal, started, brightness)
+}
+
+func (p *Profile) expandLightingLinks(layers []Layer) []Layer {
+	if len(p.LightingLinkLayers) == 0 {
+		return layers
+	}
+	out := make([]Layer, 0, len(layers)+len(p.LightingLinkLayers))
+	for _, l := range layers {
+		if !strings.EqualFold(l.Effect, "LightingLink") {
+			out = append(out, l)
+			continue
+		}
+		// The device LightingLink layer is a wrapper around the profile-level
+		// LightingLinkProperty. The captured Sci-Fi profile references that shared
+		// property rather than serializing another independent effect here.
+		for _, linked := range p.LightingLinkLayers {
+			copyLayer := linked
+			copyLayer.Enabled = l.Enabled && linked.Enabled
+			copyLayer.SelectionMode = l.SelectionMode
+			copyLayer.LEDs = append([]string(nil), l.LEDs...)
+			out = append(out, copyLayer)
+		}
+	}
+	return out
 }
 
 func renderCanvas(layers []Layer, logicalBase, ledCount, ordinal int, started time.Time, brightness float64) ([]byte, []string) {
@@ -152,7 +176,7 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 	if d == nil || len(d.Channels) == 0 {
 		return make([]byte, ledCount*3), []string{"LINK device entry missing"}
 	}
-	layers := d.Channels[0].Layers
+	layers := p.expandLightingLinks(d.Channels[0].Layers)
 	elapsed := time.Since(started).Seconds()
 	for li := len(layers) - 1; li >= 0; li-- {
 		l := layers[li]
@@ -307,6 +331,108 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		}
 		applyLayerOpacity(l, a)
 		return c, a, true
+	case "colorwavelighting":
+		// Captured iCUE semantics: speed is the discrete 1..3 slow/normal/fast
+		// control and direction 2=Left, 1=Right. Alternating mode serializes two
+		// authored colours with random=false. Use the device topology coordinate
+		// when available so the wave crosses the QX chain in physical order.
+		c1, c2 := effectColors(l, RGB{R: 255}, RGB{B: 255})
+		speed := number(l.Parameters["speed"], 2)
+		if speed < 1 {
+			speed = 1
+		}
+		if speed > 3 {
+			speed = 3
+		}
+		direction := int(number(l.Parameters["direction"], 2))
+		sign := 1.0
+		if direction == 2 {
+			sign = -1
+		}
+		// One colour-wave cycle per 4/2/1 seconds for speed 1/2/3. The capture
+		// proves ordering and direction; this continuous interpolation avoids
+		// frame-step artefacts while preserving those authored semantics.
+		periodSeconds := 4.0 / math.Pow(2, speed-1)
+		phase := sign * elapsed / periodSeconds
+		for i := 0; i < n; i++ {
+			coord := float64(i)
+			span := float64(maxInt(n, 1))
+			if len(spatial) == n {
+				coord = spatial[i]
+				span = 17.0
+			}
+			t := math.Mod(coord/span+phase, 1)
+			if t < 0 {
+				t += 1
+			}
+			// Triangle interpolation gives an alternating A→B→A travelling wave.
+			mix := 1 - math.Abs(2*t-1)
+			c[i] = mixRGB(c1, c2, mix)
+		}
+		applyLayerOpacity(l, a)
+		return c, a, true
+	case "wavelighting":
+		// Wave's UI maps directly to velocity (lights/sec), tailLength (lights),
+		// and isDoublesided. Captured profiles also carry an authored transition
+		// curve. Render that curve along the moving tail. Angle is retained by the
+		// parser but is intentionally not interpreted on the 1-D LINK topology.
+		velocity := number(l.Parameters["velocity"], 100)
+		if velocity == 0 {
+			velocity = 100
+		}
+		tail := number(l.Parameters["tailLength"], 4)
+		if tail <= 0 {
+			tail = 1
+		}
+		doubleSided := boolParam(l.Parameters["isDoublesided"], false)
+		stops := transitionStops(l)
+		if len(stops) == 0 {
+			stops = []transitionStop{{0, RGB{R: 255, G: 255, B: 255}, 0}, {1, RGB{R: 255, G: 255, B: 255}, 1}}
+		}
+		coords := spatial
+		if len(coords) != n {
+			coords = make([]float64, n)
+			for i := range coords {
+				coords[i] = float64(i)
+			}
+		}
+		minC, maxC := coords[0], coords[0]
+		for _, x := range coords[1:] {
+			if x < minC {
+				minC = x
+			}
+			if x > maxC {
+				maxC = x
+			}
+		}
+		span := maxC - minC + 1
+		head := math.Mod(elapsed*velocity, span+tail)
+		for i, x := range coords {
+			d := head - (x - minC)
+			for d < 0 {
+				d += span + tail
+			}
+			if d > tail {
+				if doubleSided {
+					d2 := (span + tail) - d
+					if d2 >= 0 && d2 <= tail {
+						d = d2
+					} else {
+						a[i] = 0
+						continue
+					}
+				} else {
+					a[i] = 0
+					continue
+				}
+			}
+			t := d / tail
+			col, alpha := sampleTransitionStops(stops, t)
+			c[i] = col
+			a[i] *= alpha
+		}
+		applyLayerOpacity(l, a)
+		return c, a, true
 	case "spiralrainbowlighting":
 		speed := number(l.Parameters["speed"], 2)
 		if speed <= 0 {
@@ -338,6 +464,101 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 	default:
 		return c, a, false
 	}
+}
+
+type transitionStop struct {
+	T float64
+	C RGB
+	A float64
+}
+
+func transitionStops(l Layer) []transitionStop {
+	v, ok := l.Parameters["transitions"]
+	if !ok {
+		return nil
+	}
+	xs, ok := v.([]string)
+	if !ok {
+		return nil
+	}
+	var out []transitionStop
+	var t float64
+	var haveT bool
+	for _, raw := range xs {
+		s := strings.TrimSpace(raw)
+		if strings.HasPrefix(strings.ToLower(s), "time=") {
+			if f, err := strconv.ParseFloat(strings.TrimSpace(strings.SplitN(s, "=", 2)[1]), 64); err == nil {
+				t = f
+				haveT = true
+			}
+			continue
+		}
+		if strings.HasPrefix(strings.ToLower(s), "color=") {
+			if col, alpha, ok := parseTransitionColor(strings.TrimSpace(strings.SplitN(s, "=", 2)[1])); ok {
+				if !haveT {
+					t = float64(len(out))
+				}
+				out = append(out, transitionStop{T: t, C: col, A: alpha})
+				haveT = false
+			}
+		}
+	}
+	if len(out) < 2 {
+		return out
+	}
+	maxT := out[len(out)-1].T
+	if maxT <= 0 {
+		maxT = 1
+	}
+	for i := range out {
+		out[i].T /= maxT
+	}
+	return out
+}
+
+func parseTransitionColor(s string) (RGB, float64, bool) {
+	low := strings.ToLower(strings.TrimSpace(s))
+	if !strings.HasPrefix(low, "rgba(") {
+		if c, ok := parseColor(s); ok {
+			return c, 1, true
+		}
+		return RGB{}, 0, false
+	}
+	inside := strings.TrimSuffix(strings.TrimPrefix(low, "rgba("), ")")
+	parts := strings.Fields(inside)
+	if len(parts) != 4 {
+		return RGB{}, 0, false
+	}
+	vals := make([]float64, 4)
+	for i := range vals {
+		f, e := strconv.ParseFloat(parts[i], 64)
+		if e != nil {
+			return RGB{}, 0, false
+		}
+		vals[i] = f
+	}
+	return RGB{vals[0] * 255, vals[1] * 255, vals[2] * 255}, vals[3], true
+}
+
+func sampleTransitionStops(stops []transitionStop, t float64) (RGB, float64) {
+	if len(stops) == 0 {
+		return RGB{}, 0
+	}
+	if t <= stops[0].T {
+		return stops[0].C, stops[0].A
+	}
+	for i := 1; i < len(stops); i++ {
+		if t <= stops[i].T {
+			a, b := stops[i-1], stops[i]
+			u := 0.0
+			if b.T > a.T {
+				u = (t - a.T) / (b.T - a.T)
+			}
+			return mixRGB(a.C, b.C, u), a.A + (b.A-a.A)*u
+		}
+	}
+	last := stops[len(stops)-1]
+	return last.C, last.A
 }
 
 // topologyPositions asks the device topology for spatial coordinates. Unknown

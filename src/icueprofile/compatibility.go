@@ -31,7 +31,10 @@ func IsSupportedEffect(effect string) bool {
 		"blinklighting",
 		"rainlighting",
 		"spiralrainbowlighting",
-		"gradientlighting":
+		"gradientlighting",
+		"colorwavelighting",
+		"wavelighting",
+		"lightinglink":
 		return true
 	default:
 		return false
