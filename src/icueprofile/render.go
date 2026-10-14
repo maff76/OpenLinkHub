@@ -212,49 +212,6 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 	return buf, names
 }
 
-// LayerTrace describes one expanded iCUE layer for runtime diagnostics.
-// It is intentionally renderer-facing: LightingLink wrappers are reported after
-// resolution so the log shows what actually reaches compositing.
-type LayerTrace struct {
-	Index         int
-	Name          string
-	Effect        string
-	SelectionMode string
-	SelectedLEDs  int
-	Enabled       bool
-	Supported     bool
-}
-
-// TraceFan reports the exact expanded layer stack that RenderFan will composite
-// for one physical device. It does not alter playback state.
-func (p *Profile) TraceFan(topology LEDTopology, deviceOrdinal, ledCount int) []LayerTrace {
-	d := p.LinkDevice()
-	if d == nil || len(d.Channels) == 0 {
-		return nil
-	}
-	layers := p.expandLightingLinks(d.Channels[0].Layers)
-	trace := make([]LayerTrace, 0, len(layers))
-	spatial := topologyPositions(topology, deviceOrdinal, ledCount)
-	for idx, l := range layers {
-		_, _, supported := renderLayer(l, deviceOrdinal, ledCount, 0, spatial)
-		selected := 0
-		for local := 0; local < ledCount; local++ {
-			if selectedWithTopology(l, topology, deviceOrdinal, local) {
-				selected++
-			}
-		}
-		name := l.Name
-		if name == "" {
-			name = "[resolved shared layer]"
-		}
-		trace = append(trace, LayerTrace{
-			Index: idx, Name: name, Effect: l.Effect, SelectionMode: l.SelectionMode,
-			SelectedLEDs: selected, Enabled: l.Enabled, Supported: supported,
-		})
-	}
-	return trace
-}
-
 func selectedWithTopology(l Layer, topology LEDTopology, deviceOrdinal, local int) bool {
 	if strings.EqualFold(l.SelectionMode, "AllLeds") || l.SelectionMode == "" {
 		return true

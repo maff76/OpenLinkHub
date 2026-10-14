@@ -40,17 +40,16 @@ var qxLocalX = [...]float64{
 	270, 280, 290, 310, 320, 330, 260, 320, 300, 280,
 }
 
-// titan280Topology is the verified active-LED geometry from the iCUE SDK
-// capture for the user's iCUE LINK TITAN 280. The SDK exposes the TITAN as
-// the final 20 active LEDs after nine 34-LED QX blocks. The coordinates below
-// are normalized from the captured LINK-strip X positions so motion effects
-// preserve Corsair's logical ordering without depending on the hub's absolute
-// chain offset.
+// titan280Topology is the verified active-LED geometry and .cueprofile
+// ConcreteLeds mapping for the iCUE LINK TITAN 280. The SDK capture exposes
+// the TITAN as the final 20 active LEDs after nine 34-LED QX blocks. Controlled
+// iCUE exports account for the same 20 physical zones exactly once as
+// Led_Cmd_Led756 through Led_Cmd_Led775.
 //
-// The corresponding .cueprofile ConcreteLeds IDs are not yet proven, so
-// LogicalLED deliberately returns false. AllLeds layers (including Halo Green
-// and Halo Rain) still render with the verified TITAN spatial topology, while
-// ConcreteLeds layers such as Halo Visor remain safely skipped on the TITAN.
+// The SDK/local output order and the ConcreteLeds order are the same device
+// order: local LED 0..19 maps to logical LED 756..775. Independent zone
+// captures provide the physical cross-check: 756..766 are UI zones 6..16,
+// 767..771 are zones 1..5, and 772..775 are zones 17..20.
 type titan280Topology struct{}
 
 func (titan280Topology) Name() string  { return "TITAN 280" }
@@ -65,7 +64,10 @@ func (titan280Topology) Position(deviceOrdinal, localLED int) (float64, bool) {
 }
 
 func (titan280Topology) LogicalLED(deviceOrdinal, localLED int) (int, bool) {
-	return 0, false
+	if localLED < 0 || localLED >= len(titan280LocalX) {
+		return 0, false
+	}
+	return 756 + localLED, true
 }
 
 // Captured SDK order 306..325, normalized by subtracting the minimum X (3315).
