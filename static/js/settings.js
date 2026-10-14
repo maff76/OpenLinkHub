@@ -742,10 +742,34 @@ function refreshICUEProfiles() {
                 const effects = Object.keys(profile.effects || {}).sort().join(', ');
                 const detail = profile.layers + ' layers • ' + profile.channels + ' channels • ' + profile.deviceEntries + ' device entries' +
                     (effects ? ' • ' + effects : '');
+                const compatibility = profile.compatibility || {};
+                const supported = (compatibility.supported || []).map(function (item) {
+                    return item.effect + ' (' + item.layers + ')';
+                });
+                const unsupported = (compatibility.unsupported || []).map(function (item) {
+                    return item.effect + ' (' + item.layers + ')';
+                });
+                let compatibilityText = 'Compatibility: unknown';
+                if (compatibility.status === 'fully_supported') {
+                    compatibilityText = 'Compatibility: Fully supported';
+                } else if (compatibility.status === 'partially_supported') {
+                    compatibilityText = 'Compatibility: Partially supported — ' +
+                        compatibility.supportedLayers + '/' + compatibility.totalLayers + ' effect layers supported';
+                } else if (compatibility.status === 'unsupported') {
+                    compatibilityText = 'Compatibility: Unsupported';
+                }
+
                 const row = $('<div>', { class: 'settings-row' });
                 const text = $('<div>', { class: 'text-left' });
                 text.append($('<div>', { text: profile.name || profile.fileName }));
                 text.append($('<small>', { text: detail }));
+                text.append($('<div>', { text: compatibilityText, style: 'margin-top: 4px;' }));
+                if (supported.length) {
+                    text.append($('<small>', { text: 'Supported: ' + supported.join(', ') }));
+                }
+                if (unsupported.length) {
+                    text.append($('<small>', { text: 'Not yet supported: ' + unsupported.join(', ') }));
+                }
                 row.append(text);
                 list.append(row);
             });

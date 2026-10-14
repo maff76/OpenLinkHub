@@ -19,6 +19,7 @@ type ImportedProfile struct {
 	Layers        int            `json:"layers"`
 	EnabledLayers int            `json:"enabledLayers"`
 	Effects       map[string]int `json:"effects"`
+	Compatibility Compatibility  `json:"compatibility"`
 }
 
 func Directory(configPath string) string {
@@ -61,7 +62,7 @@ func Scan(configPath string) ([]ImportedProfile, map[string]string, error) {
 			FileName: entry.Name(), Name: p.Name, ID: p.ID,
 			DeviceEntries: p.Summary.DeviceEntries, Channels: p.Summary.Channels,
 			Layers: p.Summary.Layers, EnabledLayers: p.Summary.EnabledLayers,
-			Effects: p.Summary.Effects,
+			Effects: p.Summary.Effects, Compatibility: BuildCompatibility(p.Summary.Effects),
 		})
 	}
 	sort.Slice(profiles, func(i, j int) bool {
