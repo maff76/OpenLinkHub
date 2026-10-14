@@ -5006,12 +5006,18 @@ func (d *Device) generateRgbEffect(k int, channels uint8, startTime *time.Time, 
 		}
 		var output []byte
 		var unsupported []string
-		if topology != nil && ordinal >= 0 {
-			output, unsupported = profile.RenderFan(topology, ordinal, int(channels), *startTime, brightness)
+		if topology != nil {
+			// QX uses its verified fan ordinal for the 42-id ConcreteLeds stride.
+			// Other verified topologies (currently TITAN 280) can render spatial
+			// AllLeds effects even when their ConcreteLeds base is not yet known.
+			renderOrdinal := ordinal
+			if renderOrdinal < 0 {
+				renderOrdinal = 0
+			}
+			output, unsupported = profile.RenderFan(topology, renderOrdinal, int(channels), *startTime, brightness)
 		} else {
-			// Non-QX LINK hardware (for example TITAN pump lighting) still gets
-			// portable AllLeds layers. Concrete selections are skipped until a
-			// captured topology gives us a trustworthy logical LED base.
+			// Unknown LINK hardware gets portable AllLeds layers only. Concrete
+			// selections remain skipped until a trustworthy topology is captured.
 			output, unsupported = profile.RenderLINKDevice(-1, k, int(channels), *startTime, brightness)
 		}
 		if len(unsupported) > 0 {

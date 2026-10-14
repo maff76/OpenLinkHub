@@ -40,6 +40,41 @@ var qxLocalX = [...]float64{
 	270, 280, 290, 310, 320, 330, 260, 320, 300, 280,
 }
 
+// titan280Topology is the verified active-LED geometry from the iCUE SDK
+// capture for the user's iCUE LINK TITAN 280. The SDK exposes the TITAN as
+// the final 20 active LEDs after nine 34-LED QX blocks. The coordinates below
+// are normalized from the captured LINK-strip X positions so motion effects
+// preserve Corsair's logical ordering without depending on the hub's absolute
+// chain offset.
+//
+// The corresponding .cueprofile ConcreteLeds IDs are not yet proven, so
+// LogicalLED deliberately returns false. AllLeds layers (including Halo Green
+// and Halo Rain) still render with the verified TITAN spatial topology, while
+// ConcreteLeds layers such as Halo Visor remain safely skipped on the TITAN.
+type titan280Topology struct{}
+
+func (titan280Topology) Name() string  { return "TITAN 280" }
+func (titan280Topology) LEDCount() int { return 20 }
+
+func (titan280Topology) Position(deviceOrdinal, localLED int) (float64, bool) {
+	if localLED < 0 || localLED >= len(titan280LocalX) {
+		return 0, false
+	}
+	const ledPitch = 20.0
+	return titan280LocalX[localLED] / ledPitch, true
+}
+
+func (titan280Topology) LogicalLED(deviceOrdinal, localLED int) (int, bool) {
+	return 0, false
+}
+
+// Captured SDK order 306..325, normalized by subtracting the minimum X (3315).
+var titan280LocalX = [...]float64{
+	80, 100, 120, 140, 160, 180, 200, 220, 240, 260, 280, 300,
+	0, 20, 40, 60,
+	380, 320, 340, 360,
+}
+
 // TopologyForDevice returns only verified topology maps. Unknown families such
 // as RX/LX deliberately return nil until captured, preventing a QX map from
 // being applied to different hardware.
@@ -47,6 +82,9 @@ func TopologyForDevice(deviceName string, ledCount int) LEDTopology {
 	name := strings.ToLower(deviceName)
 	if strings.Contains(name, "qx") && ledCount == 34 {
 		return qxTopology{}
+	}
+	if strings.Contains(name, "titan") && ledCount == 20 {
+		return titan280Topology{}
 	}
 	return nil
 }
