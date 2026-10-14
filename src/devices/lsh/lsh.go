@@ -4989,6 +4989,8 @@ func (d *Device) setDeviceColor() {
 	}()
 }
 
+var icueLayerTraceLogged sync.Map
+
 // generateRgbEffect will generate RGB effect for given device index
 func (d *Device) generateRgbEffect(k int, channels uint8, startTime *time.Time, rgbProfile string, subDeviceId int) []byte {
 	buff := make([]byte, 0)
@@ -5004,6 +5006,21 @@ func (d *Device) generateRgbEffect(k int, channels uint8, startTime *time.Time, 
 		if d.GlobalBrightness != 0 {
 			brightness = d.GlobalBrightness
 		}
+
+		// Log the expanded imported-layer stack once per profile/device. This is
+		// deliberately one-shot so the 20 ms RGB loop cannot flood the log.
+		traceKey := fmt.Sprintf("%s:%d:%s:%d", rgbProfile, k, d.Devices[k].Name, channels)
+		if _, loaded := icueLayerTraceLogged.LoadOrStore(traceKey, true); !loaded && topology != nil {
+			for _, layer := range profile.TraceFan(topology, max(ordinal, 0), int(channels)) {
+				logger.Log(logger.Fields{
+					"profile": profile.Name, "device": d.Devices[k].Name, "deviceIndex": k,
+					"layerIndex": layer.Index, "layer": layer.Name, "effect": layer.Effect,
+					"selection": layer.SelectionMode, "selectedLEDs": layer.SelectedLEDs,
+					"enabled": layer.Enabled, "supported": layer.Supported,
+				}).Info("iCUE imported layer trace")
+			}
+		}
+
 		var output []byte
 		var unsupported []string
 		if topology != nil {
