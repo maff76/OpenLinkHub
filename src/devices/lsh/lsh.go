@@ -4999,14 +4999,20 @@ func (d *Device) generateRgbEffect(k int, channels uint8, startTime *time.Time, 
 			return make([]byte, int(channels)*3)
 		}
 		ordinal := d.qxOrdinal(k)
-		if ordinal < 0 {
-			return make([]byte, int(channels)*3)
-		}
 		brightness := rgb.GetBrightnessValueFloat(*d.DeviceProfile.BrightnessSlider)
 		if d.GlobalBrightness != 0 {
 			brightness = d.GlobalBrightness
 		}
-		output, unsupported := profile.RenderQX(ordinal, int(channels), *startTime, brightness)
+		var output []byte
+		var unsupported []string
+		if ordinal >= 0 {
+			output, unsupported = profile.RenderQX(ordinal, int(channels), *startTime, brightness)
+		} else {
+			// Non-QX LINK hardware (for example TITAN pump lighting) still gets
+			// portable AllLeds layers. Concrete selections are skipped until a
+			// captured topology gives us a trustworthy logical LED base.
+			output, unsupported = profile.RenderLINKDevice(-1, k, int(channels), *startTime, brightness)
+		}
 		if len(unsupported) > 0 {
 			logger.Log(logger.Fields{"profile": profile.Name, "effects": unsupported}).Debug("Skipped unsupported iCUE lighting effects")
 		}

@@ -9,6 +9,7 @@ import (
 	"OpenLinkHub/src/common"
 	"OpenLinkHub/src/config"
 	"OpenLinkHub/src/dashboard"
+	"OpenLinkHub/src/icueprofile"
 	"OpenLinkHub/src/logger"
 	"OpenLinkHub/src/openrgb"
 	"OpenLinkHub/src/rgb"
@@ -289,6 +290,7 @@ func Init(_, _ uint16, _, path string) *common.Device {
 	d.getDebugMode()       // Debug mode
 	d.loadDeviceMetadata() // Metadata
 	d.loadRgb()            // Load RGB
+	d.loadICUEProfiles()   // Imported iCUE profiles
 	d.loadDeviceProfiles() // Load all device profiles
 	count := d.getDevices()
 	if count == 0 {
@@ -334,7 +336,7 @@ func (d *Device) GetRgbProfiles() interface{} {
 	// Filter unsupported modes out
 	profiles := make(map[string]rgb.Profile, len(tmp.Profiles))
 	for key, value := range tmp.Profiles {
-		if slices.Contains(rgbModes, key) {
+		if slices.Contains(d.RGBModes, key) {
 			profiles[key] = value
 		}
 	}
@@ -452,6 +454,25 @@ func (d *Device) getHwMonTemperatureFiles(driver string) []string {
 	}
 
 	return files
+}
+
+// loadICUEProfiles exposes validated imported iCUE profiles to memory RGB.
+// The same imported profile key can therefore be selected on LINK hardware
+// and RGB DIMMs without converting the Corsair profile into native effects.
+func (d *Device) loadICUEProfiles() {
+	if d.Rgb == nil {
+		return
+	}
+	modes := icueprofile.Modes(pwd)
+	for key, label := range modes {
+		if !slices.Contains(d.RGBModes, key) {
+			d.RGBModes = append(d.RGBModes, key)
+		}
+		if _, ok := d.Rgb.Profiles[key]; !ok {
+			d.Rgb.Profiles[key] = rgb.Profile{ProfileName: label, Speed: 1, Brightness: 1, Version: 1}
+		}
+	}
+	sort.Strings(d.RGBModes)
 }
 
 // loadRgb will load RGB file if found, or create the default.
@@ -1432,6 +1453,24 @@ func (d *Device) ControlDeviceRgb(value bool) {
 	d.setDeviceColor()
 }
 
+// rgbModuleOrdinal returns the zero-based RGB DIMM order used by iCUE's
+// software-DRAM canvas. Non-RGB DIMMs do not consume canvas positions.
+func (d *Device) rgbModuleOrdinal(channel int) int {
+	keys := make([]int, 0)
+	for k, dev := range d.Devices {
+		if dev.LedChannels > 0 {
+			keys = append(keys, k)
+		}
+	}
+	sort.Ints(keys)
+	for i, k := range keys {
+		if k == channel {
+			return i
+		}
+	}
+	return -1
+}
+
 // setDeviceColor will activate and set device RGB
 func (d *Device) setDeviceColor() {
 	// Release existing queue
@@ -1543,6 +1582,26 @@ func (d *Device) setDeviceColor() {
 				buff := make([]byte, 0)
 				for _, k := range keys {
 					rgbCustomColor := true
+					if strings.HasPrefix(d.Devices[k].RGB, "icue-") {
+						imported, _, err := icueprofile.LoadByKey(pwd, d.Devices[k].RGB)
+						if err != nil {
+							logger.Log(logger.Fields{"error": err, "profile": d.Devices[k].RGB}).Warn("Unable to load imported iCUE memory profile")
+							for i := 0; i < int(d.Devices[k].LedChannels); i++ {
+								buff = append(buff, 0, 0, 0)
+							}
+							continue
+						}
+						brightness := rgb.GetBrightnessValueFloat(*d.DeviceProfile.BrightnessSlider)
+						if d.GlobalBrightness != 0 {
+							brightness = d.GlobalBrightness
+						}
+						output, unsupported := imported.RenderDRAM(d.rgbModuleOrdinal(k), int(d.Devices[k].LedChannels), startTime, brightness)
+						if len(unsupported) > 0 {
+							logger.Log(logger.Fields{"profile": imported.Name, "effects": unsupported}).Debug("Skipped unsupported iCUE memory lighting effects")
+						}
+						buff = append(buff, output...)
+						continue
+					}
 					profile := d.GetRgbProfile(d.Devices[k].RGB)
 					if profile == nil {
 						for i := 0; i < int(d.Devices[k].LedChannels); i++ {

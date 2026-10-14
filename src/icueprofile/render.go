@@ -23,6 +23,121 @@ func (p *Profile) LinkDevice() *Device {
 	return nil
 }
 
+// DRAMDevice returns the most compact software-DRAM layout in the profile.
+// iCUE exports several compatibility layouts; the smallest Led_Cmd canvas is
+// the best match for current OpenLinkHub DIMMs and avoids applying large
+// Dominator compatibility canvases to Vengeance modules.
+func (p *Profile) DRAMDevice() *Device {
+	var best *Device
+	bestMax := int(^uint(0) >> 1)
+	for i := range p.Devices {
+		d := &p.Devices[i]
+		if !strings.EqualFold(d.HIDCaps, "DramSoftware") || len(d.Channels) == 0 {
+			continue
+		}
+		maxID := -1
+		for _, ch := range d.Channels {
+			for _, l := range ch.Layers {
+				for _, key := range l.LEDs {
+					m := ledNumber.FindStringSubmatch(strings.TrimSpace(key))
+					if len(m) == 2 {
+						n, _ := strconv.Atoi(m[1])
+						if n > maxID {
+							maxID = n
+						}
+					}
+				}
+			}
+		}
+		if maxID >= 0 && maxID < bestMax {
+			best, bestMax = d, maxID
+		}
+	}
+	return best
+}
+
+// RenderDRAM renders one physical DIMM against the imported software-DRAM
+// canvas. DIMMs are packed by their actual OpenLinkHub LED count; this makes
+// Vengeance RGB RS (6 LEDs/DIMM) participate in imported iCUE profiles while
+// retaining ConcreteLeds selections such as Halo's visor/rain masks.
+func (p *Profile) RenderDRAM(moduleOrdinal, ledCount int, started time.Time, brightness float64) ([]byte, []string) {
+	d := p.DRAMDevice()
+	if d == nil || len(d.Channels) == 0 {
+		return make([]byte, ledCount*3), []string{"DRAM device entry missing"}
+	}
+	return renderCanvas(d.Channels[0].Layers, moduleOrdinal*ledCount, ledCount, moduleOrdinal, started, brightness)
+}
+
+// RenderLINKDevice renders a non-QX LINK device. AllLeds layers are exact and
+// therefore safely portable (Halo green + rain). ConcreteLeds are applied only
+// when a known logical base is supplied; callers can pass -1 when the source
+// profile's topology cannot be mapped reliably to the local device.
+func (p *Profile) RenderLINKDevice(logicalBase, deviceOrdinal, ledCount int, started time.Time, brightness float64) ([]byte, []string) {
+	d := p.LinkDevice()
+	if d == nil || len(d.Channels) == 0 {
+		return make([]byte, ledCount*3), []string{"LINK device entry missing"}
+	}
+	return renderCanvas(d.Channels[0].Layers, logicalBase, ledCount, deviceOrdinal, started, brightness)
+}
+
+func renderCanvas(layers []Layer, logicalBase, ledCount, ordinal int, started time.Time, brightness float64) ([]byte, []string) {
+	out := make([]RGB, ledCount)
+	unsupported := map[string]bool{}
+	elapsed := time.Since(started).Seconds()
+	for li := len(layers) - 1; li >= 0; li-- {
+		l := layers[li]
+		if !l.Enabled {
+			continue
+		}
+		colors, alpha, ok := renderLayer(l, ordinal, ledCount, elapsed)
+		if !ok {
+			unsupported[l.Effect] = true
+			continue
+		}
+		for i := 0; i < ledCount; i++ {
+			if !selectedAt(l, logicalBase, i) {
+				continue
+			}
+			a := alpha[i]
+			out[i].R = out[i].R*(1-a) + colors[i].R*a
+			out[i].G = out[i].G*(1-a) + colors[i].G*a
+			out[i].B = out[i].B*(1-a) + colors[i].B*a
+		}
+	}
+	if brightness <= 0 {
+		brightness = 1
+	}
+	buf := make([]byte, 0, ledCount*3)
+	for _, c := range out {
+		buf = append(buf, byte(clamp(c.R*brightness)), byte(clamp(c.G*brightness)), byte(clamp(c.B*brightness)))
+	}
+	names := make([]string, 0, len(unsupported))
+	for n := range unsupported {
+		names = append(names, n)
+	}
+	return buf, names
+}
+
+func selectedAt(l Layer, logicalBase, local int) bool {
+	if strings.EqualFold(l.SelectionMode, "AllLeds") || l.SelectionMode == "" {
+		return true
+	}
+	if logicalBase < 0 {
+		return false
+	}
+	logical := logicalBase + local
+	for _, key := range l.LEDs {
+		m := ledNumber.FindStringSubmatch(strings.TrimSpace(key))
+		if len(m) == 2 {
+			n, _ := strconv.Atoi(m[1])
+			if n == logical {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // RenderQX renders one QX fan from an imported LINK profile. Captured QX data
 // establishes 34 physical LEDs in a 42-id logical stride. Layers are composited
 // bottom-to-top (reverse XML order), matching iCUE's layer stack semantics.
@@ -175,7 +290,11 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64) ([]RGB, []float64,
 }
 
 func layerColor(l Layer, fallback RGB) RGB {
-	for _, key := range []string{"color", "colors"} {
+	// StaticLighting in exported iCUE profiles normally stores its colour in
+	// the first transition rather than a top-level color field. Prefer that
+	// source so imported profiles keep their authored colours (for example
+	// Halo's amber visor and dark-green base).
+	for _, key := range []string{"transitions", "color", "colors"} {
 		if v, ok := l.Parameters[key]; ok {
 			if c, ok := parseColor(v); ok {
 				return c
@@ -206,10 +325,24 @@ func parseColor(v any) (RGB, bool) {
 	if s == "" {
 		return RGB{}, false
 	}
-	// Accept #RRGGBB and 0xRRGGBB/ARGB values.
-	if strings.HasPrefix(s, "#") && len(s) >= 7 {
-		if x, e := strconv.ParseUint(s[1:7], 16, 32); e == nil {
-			return RGB{float64(x >> 16 & 255), float64(x >> 8 & 255), float64(x & 255)}, true
+	// Corsair transitions are collected as strings such as
+	// "time=0 color=#ffcc8815". Find an embedded hash colour and accept both
+	// #RRGGBB and iCUE's common #AARRGGBB form (discarding alpha here because
+	// layer opacity is composited separately).
+	if i := strings.Index(s, "#"); i >= 0 {
+		hex := s[i+1:]
+		end := 0
+		for end < len(hex) && ((hex[end] >= '0' && hex[end] <= '9') || (hex[end] >= 'a' && hex[end] <= 'f')) {
+			end++
+		}
+		hex = hex[:end]
+		if len(hex) >= 8 {
+			hex = hex[len(hex)-6:]
+		}
+		if len(hex) >= 6 {
+			if x, e := strconv.ParseUint(hex[:6], 16, 32); e == nil {
+				return RGB{float64(x >> 16 & 255), float64(x >> 8 & 255), float64(x & 255)}, true
+			}
 		}
 	}
 	if strings.HasPrefix(s, "0x") {
