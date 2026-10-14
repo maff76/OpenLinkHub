@@ -220,6 +220,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64) ([]RGB, []float64,
 		for i := range c {
 			c[i] = col
 		}
+		applyLayerOpacity(l, a)
 		return c, a, true
 	case "blinklighting":
 		col := layerColor(l, RGB{R: 255, G: 255, B: 255})
@@ -239,22 +240,50 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64) ([]RGB, []float64,
 		}
 		return c, a, true
 	case "rainlighting":
-		col := layerColor(l, RGB{R: 30, G: 220, B: 70})
+		// iCUE RainLighting carries two authored colours.  In cereal exports
+		// these are usually packed ARGB integers under colors/first+second.
+		// Preserve those colours instead of using a generic fallback.
+		c1, c2 := effectColors(l, RGB{R: 25, G: 47, B: 9}, RGB{R: 100, G: 169, B: 45})
 		speed := number(l.Parameters["speed"], 1)
 		if speed <= 0 {
 			speed = 1
 		}
-		slotDur := 0.12 / speed
-		slot := int(elapsed / slotDur)
-		for i := 0; i < n; i++ {
-			h := hash(slot-i*2, fanOrdinal*42+i)
-			if h > 0.76 {
-				intensity := 0.35 + 0.65*hash(slot, i+17)
-				c[i] = RGB{col.R * intensity, col.G * intensity, col.B * intensity}
-			} else {
-				a[i] = 0
-			}
+		random := boolParam(l.Parameters["random"], false)
+		direction := int(number(l.Parameters["direction"], 0))
+		// Speed 1 is deliberately fairly slow.  Random=false profiles (Halo)
+		// use a stable travelling field rather than sparkle noise.
+		phase := elapsed * (2.0 * speed)
+		if direction == 1 || direction == 3 {
+			phase = -phase
 		}
+		for i := 0; i < n; i++ {
+			var intensity float64
+			if random {
+				slot := int(phase * 4)
+				h := hash(slot-i*2, fanOrdinal*42+i)
+				if h <= 0.76 {
+					a[i] = 0
+					continue
+				}
+				intensity = 0.25 + 0.75*hash(slot, i+17)
+			} else {
+				// Deterministic rain: narrow bright head with a short fading tail.
+				pos := math.Mod(float64(i)+phase*4+float64(fanOrdinal*3), float64(maxInt(n, 1)))
+				if pos < 0 {
+					pos += float64(maxInt(n, 1))
+				}
+				d := math.Min(pos, float64(maxInt(n, 1))-pos)
+				if d > 3.5 {
+					a[i] = 0
+					continue
+				}
+				intensity = 1 - d/3.5
+			}
+			c[i] = mixRGB(c1, c2, intensity)
+			// Keep rain as an overlay so the authored green base remains visible.
+			a[i] *= 0.35 + 0.65*intensity
+		}
+		applyLayerOpacity(l, a)
 		return c, a, true
 	case "spiralrainbowlighting":
 		speed := number(l.Parameters["speed"], 2)
@@ -287,6 +316,64 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64) ([]RGB, []float64,
 	default:
 		return c, a, false
 	}
+}
+
+func applyLayerOpacity(l Layer, alpha []float64) {
+	opacity := number(l.Parameters["opacity"], 255)
+	if opacity > 1 {
+		opacity /= 255
+	}
+	if opacity < 0 {
+		opacity = 0
+	}
+	if opacity > 1 {
+		opacity = 1
+	}
+	for i := range alpha {
+		alpha[i] *= opacity
+	}
+}
+
+func effectColors(l Layer, fallback1, fallback2 RGB) (RGB, RGB) {
+	if v, ok := l.Parameters["colors"]; ok {
+		var found []RGB
+		switch xs := v.(type) {
+		case []string:
+			for _, x := range xs {
+				if c, ok := parseColor(x); ok {
+					found = append(found, c)
+				}
+			}
+		default:
+			if c, ok := parseColor(v); ok {
+				found = append(found, c)
+			}
+		}
+		if len(found) >= 2 {
+			return found[0], found[1]
+		}
+		if len(found) == 1 {
+			return found[0], found[0]
+		}
+	}
+	return fallback1, fallback2
+}
+
+func mixRGB(a, b RGB, t float64) RGB {
+	if t < 0 {
+		t = 0
+	}
+	if t > 1 {
+		t = 1
+	}
+	return RGB{a.R + (b.R-a.R)*t, a.G + (b.G-a.G)*t, a.B + (b.B-a.B)*t}
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func layerColor(l Layer, fallback RGB) RGB {
@@ -324,6 +411,14 @@ func parseColor(v any) (RGB, bool) {
 	s := strings.ToLower(strings.TrimSpace(toString(v)))
 	if s == "" {
 		return RGB{}, false
+	}
+	// Leaf collections use strings such as first=4279840521.  Accept the
+	// value side as packed ARGB/RGB while ignoring the alpha byte.
+	if eq := strings.LastIndex(s, "="); eq >= 0 && eq+1 < len(s) {
+		raw := strings.TrimSpace(s[eq+1:])
+		if x, e := strconv.ParseUint(raw, 10, 32); e == nil && x > 255 {
+			return RGB{float64(x >> 16 & 255), float64(x >> 8 & 255), float64(x & 255)}, true
+		}
 	}
 	// Corsair transitions are collected as strings such as
 	// "time=0 color=#ffcc8815". Find an embedded hash colour and accept both
