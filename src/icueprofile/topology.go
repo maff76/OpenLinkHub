@@ -75,6 +75,48 @@ var titan280LocalX = [...]float64{
 	380, 320, 340, 360,
 }
 
+// dram6Topology describes the 6-LED software-DRAM layout exported by iCUE as
+// Dram1030. OpenLinkHub identifies VENGEANCE RGB RS DDR5 as a 6-LED DIMM, so
+// this is the exact compatibility layout for that family rather than the old
+// "smallest DRAM canvas" heuristic.
+//
+// Halo's Dram1030 entry proves the first two module ranges as 0..5 and 6..11:
+// its Green layer selects both full ranges, while Rain 1 / Rain 2 split them
+// into complementary even/odd masks. That is enough to map the user's two
+// physical DIMMs without inventing any Windows-SDK dependency.
+type dram6Topology struct{}
+
+func (dram6Topology) Name() string  { return "DRAM 6 LED (Dram1030)" }
+func (dram6Topology) LEDCount() int { return 6 }
+
+func (dram6Topology) Position(deviceOrdinal, localLED int) (float64, bool) {
+	if localLED < 0 || localLED >= 6 {
+		return 0, false
+	}
+	// Keep modules contiguous in iCUE's software-DRAM canvas. Spatial effects
+	// therefore continue naturally from DIMM 0 into DIMM 1.
+	return float64(deviceOrdinal*6 + localLED), true
+}
+
+func (dram6Topology) LogicalLED(deviceOrdinal, localLED int) (int, bool) {
+	if deviceOrdinal < 0 || localLED < 0 || localLED >= 6 {
+		return 0, false
+	}
+	return deviceOrdinal*6 + localLED, true
+}
+
+// DRAMTopologyForLEDCount returns only DRAM layouts whose per-module LED count
+// is known. Additional Corsair memory families can be added here as their iCUE
+// software layouts are verified.
+func DRAMTopologyForLEDCount(ledCount int) LEDTopology {
+	switch ledCount {
+	case 6:
+		return dram6Topology{}
+	default:
+		return nil
+	}
+}
+
 // TopologyForDevice returns only verified topology maps. Unknown families such
 // as RX/LX deliberately return nil until captured, preventing a QX map from
 // being applied to different hardware.
