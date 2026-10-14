@@ -23,46 +23,10 @@ func (p *Profile) LinkDevice() *Device {
 	return nil
 }
 
-// DRAMDeviceForLEDCount returns the iCUE software-DRAM compatibility layout
-// that matches the physical DIMM LED count. Corsair profiles can contain
-// several DRAM layouts at once; choosing by LED count is deterministic and
-// avoids applying Dominator/10-LED masks to a 6-LED Vengeance module.
-func (p *Profile) DRAMDeviceForLEDCount(ledCount int) *Device {
-	wanted := ""
-	switch ledCount {
-	case 6:
-		wanted = "Dram1030"
-	case 12:
-		wanted = "Dominator"
-	}
-	if wanted != "" {
-		for i := range p.Devices {
-			d := &p.Devices[i]
-			if strings.EqualFold(d.HIDCaps, "DramSoftware") &&
-				strings.EqualFold(d.DeviceLightingType, wanted) && len(d.Channels) > 0 {
-				return d
-			}
-		}
-	}
-
-	// Ten-LED profiles are exported as Default and/or Dram1031. Prefer
-	// Dram1031 when present because it is explicitly typed, then Default.
-	if ledCount == 10 {
-		for _, wanted = range []string{"Dram1031", "Default"} {
-			for i := range p.Devices {
-				d := &p.Devices[i]
-				if strings.EqualFold(d.HIDCaps, "DramSoftware") &&
-					strings.EqualFold(d.DeviceLightingType, wanted) && len(d.Channels) > 0 {
-					return d
-				}
-			}
-		}
-	}
-	return nil
-}
-
-// DRAMDevice keeps the old API as a conservative fallback for callers that do
-// not know their LED count. New rendering code should use DRAMDeviceForLEDCount.
+// DRAMDevice returns the most compact software-DRAM layout in the profile.
+// iCUE exports several compatibility layouts; the smallest Led_Cmd canvas is
+// the best match for current OpenLinkHub DIMMs and avoids applying large
+// Dominator compatibility canvases to Vengeance modules.
 func (p *Profile) DRAMDevice() *Device {
 	var best *Device
 	bestMax := int(^uint(0) >> 1)
@@ -92,63 +56,21 @@ func (p *Profile) DRAMDevice() *Device {
 	return best
 }
 
-// RenderDRAM renders one physical DIMM using the verified software-DRAM
-// topology for that memory family. For VENGEANCE RGB RS DDR5 (6 LEDs) Halo's
-// Dram1030 masks are now honoured exactly: Green covers all six LEDs, Rain 1
-// and Rain 2 use their authored complementary masks, and the Visor uses its
-// ConcreteLeds selection instead of a packed-canvas approximation.
+// RenderDRAM renders one physical DIMM against the imported software-DRAM
+// canvas. OpenLinkHub reports VENGEANCE RGB RS DDR5 as six LEDs per DIMM.
+// Halo's compact DRAM compatibility entry spans 0..17 in six-LED groups, so
+// moduleOrdinal*ledCount is the proven selection mapping for this kit.
+//
+// Keep rendering on the established canvas path for now. The v10 experiment
+// moved DRAM through spatial topology rendering and caused the physical RGB
+// output to go black; that path is intentionally removed until its behaviour
+// can be isolated independently from the logical LED mapping.
 func (p *Profile) RenderDRAM(moduleOrdinal, ledCount int, started time.Time, brightness float64) ([]byte, []string) {
-	d := p.DRAMDeviceForLEDCount(ledCount)
-	topology := DRAMTopologyForLEDCount(ledCount)
+	d := p.DRAMDevice()
 	if d == nil || len(d.Channels) == 0 {
-		// Preserve v4-v9 behaviour for an unknown memory family rather than
-		// making imported profiles stop working entirely.
-		d = p.DRAMDevice()
-		if d == nil || len(d.Channels) == 0 {
-			return make([]byte, ledCount*3), []string{"DRAM device entry missing"}
-		}
-		return renderCanvas(d.Channels[0].Layers, moduleOrdinal*ledCount, ledCount, moduleOrdinal, started, brightness)
+		return make([]byte, ledCount*3), []string{"DRAM device entry missing"}
 	}
-	if topology == nil {
-		return renderCanvas(d.Channels[0].Layers, moduleOrdinal*ledCount, ledCount, moduleOrdinal, started, brightness)
-	}
-
-	out := make([]RGB, ledCount)
-	unsupported := map[string]bool{}
-	elapsed := time.Since(started).Seconds()
-	positions := topologyPositions(topology, moduleOrdinal, ledCount)
-	for li := len(d.Channels[0].Layers) - 1; li >= 0; li-- {
-		l := d.Channels[0].Layers[li]
-		if !l.Enabled {
-			continue
-		}
-		colors, alpha, ok := renderLayer(l, moduleOrdinal, ledCount, elapsed, positions)
-		if !ok {
-			unsupported[l.Effect] = true
-			continue
-		}
-		for i := 0; i < ledCount; i++ {
-			if !selectedWithTopology(l, topology, moduleOrdinal, i) {
-				continue
-			}
-			a := alpha[i]
-			out[i].R = out[i].R*(1-a) + colors[i].R*a
-			out[i].G = out[i].G*(1-a) + colors[i].G*a
-			out[i].B = out[i].B*(1-a) + colors[i].B*a
-		}
-	}
-	if brightness <= 0 {
-		brightness = 1
-	}
-	buf := make([]byte, 0, ledCount*3)
-	for _, c := range out {
-		buf = append(buf, byte(clamp(c.R*brightness)), byte(clamp(c.G*brightness)), byte(clamp(c.B*brightness)))
-	}
-	names := make([]string, 0, len(unsupported))
-	for n := range unsupported {
-		names = append(names, n)
-	}
-	return buf, names
+	return renderCanvas(d.Channels[0].Layers, moduleOrdinal*ledCount, ledCount, moduleOrdinal, started, brightness)
 }
 
 // RenderLINKDevice renders a non-QX LINK device. AllLeds layers are exact and
