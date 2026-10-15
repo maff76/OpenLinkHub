@@ -110,6 +110,9 @@ func (p *Profile) expandLightingLinks(layers []Layer) []Layer {
 }
 
 func renderCanvas(layers []Layer, logicalBase, ledCount, ordinal int, started time.Time, brightness float64) ([]byte, []string) {
+	if ledCount <= 0 {
+		return []byte{}, nil
+	}
 	out := make([]RGB, ledCount)
 	unsupported := map[string]bool{}
 	elapsed := time.Since(started).Seconds()
@@ -237,6 +240,9 @@ func selectedWithTopology(l Layer, topology LEDTopology, deviceOrdinal, local in
 }
 
 func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64) ([]RGB, []float64, bool) {
+	if n <= 0 {
+		return []RGB{}, []float64{}, true
+	}
 	c := make([]RGB, n)
 	a := make([]float64, n)
 	for i := range a {
