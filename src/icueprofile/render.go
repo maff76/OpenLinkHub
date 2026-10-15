@@ -450,10 +450,12 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		if direction == 2 {
 			sign = -1
 		}
-		// One colour-wave cycle per 4/2/1 seconds for speed 1/2/3. The capture
-		// proves ordering and direction; this continuous interpolation avoids
-		// frame-step artefacts while preserving those authored semantics.
-		periodSeconds := capturedPeriod(l, 4.0/math.Pow(2, speed-1))
+		// iCUE exposes Color Wave with a Speed slider, not a Lighting Time field.
+		// Do not reuse the serialized duration as a Gradient-style period. Treat
+		// the captured discrete speed as wave cycles per second: 1/2/3 gives
+		// 1.0/0.5/0.333 s per cycle. This keeps Color Wave timing independent
+		// from Gradient Lighting Time, matching the controls exposed by iCUE.
+		periodSeconds := 1.0 / speed
 		phase := sign * elapsed / periodSeconds
 		for i := 0; i < n; i++ {
 			coord := float64(i)
@@ -698,20 +700,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 			dur = 1
 		}
 		if stops := transitionStops(l); len(stops) >= 2 {
-			// iCUE custom Gradient curves describe a sequence of transition
-			// intervals.  A closed curve repeats its first colour at the final
-			// stop, so the useful transition count is len(stops)-1.  Advance the
-			// normalized curve by that interval count instead of treating the
-			// captured duration as one traversal of the entire multi-stop curve.
-			// This keeps two-stop gradients unchanged while making multi-stop
-			// electrical/flicker curves progress at their authored transition
-			// cadence rather than stretching them across one long fade.
-			transitionCount := len(stops) - 1
-			if transitionCount < 1 {
-				transitionCount = 1
-			}
-			effectiveDur := dur / float64(transitionCount)
-			t := math.Mod(elapsed/effectiveDur, 1)
+			t := math.Mod(elapsed/dur, 1)
 			if t < 0 {
 				t += 1
 			}
