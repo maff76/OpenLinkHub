@@ -116,7 +116,7 @@ func renderCanvas(layers []Layer, logicalBase, ledCount, ordinal int, started ti
 	out := make([]RGB, ledCount)
 	unsupported := map[string]bool{}
 	elapsed := time.Since(started).Seconds()
-	for li := len(layers) - 1; li >= 0; li-- {
+	for li := 0; li < len(layers); li++ {
 		l := layers[li]
 		if !l.Enabled {
 			continue
@@ -171,7 +171,7 @@ func selectedAt(l Layer, logicalBase, local int) bool {
 }
 
 // RenderFan renders a fan using a device-specific topology supplied by the LINK layer.
-// Layers are composited bottom-to-top (reverse XML order), matching iCUE's layer stack semantics.
+// TEST BUILD: composite in XML order to verify whether exported layer order maps directly to iCUE bottom-to-top priority.
 func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, started time.Time, brightness float64) ([]byte, []string) {
 	out := make([]RGB, ledCount)
 	unsupported := map[string]bool{}
@@ -188,7 +188,7 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 	// portable without inventing colours, timings, or per-profile rules.
 	sourceDeviceCount := sourceQXFanCount(layers, topology)
 	elapsed := time.Since(started).Seconds()
-	for li := len(layers) - 1; li >= 0; li-- {
+	for li := 0; li < len(layers); li++ {
 		l := layers[li]
 		if !l.Enabled {
 			continue
@@ -450,12 +450,12 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		if direction == 2 {
 			sign = -1
 		}
-		// iCUE serializes speed as a discrete speed level, not cycles/second.
-		// Electricity also carries a 1683 ms duration on both Medium (speed=2)
-		// Color Wave layers. Prefer that captured timing instead of inventing a
-		// frequency from the speed index; retain the old discrete fallback only
-		// for profiles that omit duration.
-		periodSeconds := capturedPeriod(l, 4.0/math.Pow(2, speed-1))
+		// iCUE exposes Color Wave with a Speed slider, not a Lighting Time field.
+		// Do not reuse the serialized duration as a Gradient-style period. Treat
+		// the captured discrete speed as wave cycles per second: 1/2/3 gives
+		// 1.0/0.5/0.333 s per cycle. This keeps Color Wave timing independent
+		// from Gradient Lighting Time, matching the controls exposed by iCUE.
+		periodSeconds := 1.0 / speed
 		phase := sign * elapsed / periodSeconds
 		for i := 0; i < n; i++ {
 			coord := float64(i)
@@ -720,22 +720,9 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 				t += 1
 			}
 			col, alpha := sampleTransitionStops(stops, t)
-			// iCUE lighting layers can reveal effects beneath them through their
-			// unlit portion. Preserve the authored transition alpha, but also let
-			// a Gradient's actual light output determine coverage: full-bright
-			// colours remain opaque, authored black becomes transparent, and the
-			// near-black part of Electricity naturally exposes its Color Waves.
-			// This is continuous (no threshold), so it cannot introduce stepping.
-			coverage := math.Max(col.R, math.Max(col.G, col.B)) / 255.0
-			if coverage < 0 {
-				coverage = 0
-			}
-			if coverage > 1 {
-				coverage = 1
-			}
 			for i := range c {
 				c[i] = col
-				a[i] *= alpha * coverage
+				a[i] *= alpha
 			}
 			applyLayerOpacity(l, a)
 			return c, a, true
