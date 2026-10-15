@@ -121,7 +121,7 @@ func renderCanvas(layers []Layer, logicalBase, ledCount, ordinal int, started ti
 		if !l.Enabled {
 			continue
 		}
-		colors, alpha, ok := renderLayer(l, ordinal, ledCount, elapsed, nil, selectionPhases(ledCount, func(i int) bool { return selectedAt(l, logicalBase, i) }))
+		colors, alpha, ok := renderLayer(l, ordinal, ledCount, elapsed, nil)
 		if !ok {
 			unsupported[l.Effect] = true
 			continue
@@ -193,7 +193,7 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 		if !l.Enabled {
 			continue
 		}
-		colors, alpha, ok := renderLayer(l, deviceOrdinal, ledCount, elapsed, topologyPositions(topology, deviceOrdinal, ledCount), selectionPhases(ledCount, func(i int) bool { return selectedWithTopology(l, topology, deviceOrdinal, i, sourceDeviceCount) }))
+		colors, alpha, ok := renderLayer(l, deviceOrdinal, ledCount, elapsed, topologyPositions(topology, deviceOrdinal, ledCount))
 		if !ok {
 			unsupported[l.Effect] = true
 			continue
@@ -293,30 +293,7 @@ func sourceQXFanCount(layers []Layer, topology LEDTopology) int {
 	return count
 }
 
-func selectionPhases(n int, selected func(int) bool) []float64 {
-	phases := make([]float64, n)
-	for i := range phases {
-		phases[i] = -1
-	}
-	indices := make([]int, 0, n)
-	for i := 0; i < n; i++ {
-		if selected(i) {
-			indices = append(indices, i)
-		}
-	}
-	if len(indices) == 1 {
-		phases[indices[0]] = 0
-		return phases
-	}
-	if len(indices) > 1 {
-		for rank, i := range indices {
-			phases[i] = float64(rank) / float64(len(indices))
-		}
-	}
-	return phases
-}
-
-func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64, selectionPhase []float64) ([]RGB, []float64, bool) {
+func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64) ([]RGB, []float64, bool) {
 	if n <= 0 {
 		return []RGB{}, []float64{}, true
 	}
@@ -742,18 +719,25 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64,
 			if t < 0 {
 				t += 1
 			}
-			// iCUE's Gradient preview can show different colours from the same
-			// authored curve on selected LEDs at the same instant. Keep the exact
-			// authored stop timestamps, but phase each selected LED through that
-			// curve instead of sampling one global colour for the entire selection.
-			for i := range c {
-				ledT := t
-				if len(selectionPhase) == n && selectionPhase[i] >= 0 {
-					ledT = math.Mod(t-selectionPhase[i]+1, 1)
+
+			// Treat the first authored transition interval as the visible flash
+			// lifetime.  Once the next transition boundary is reached this layer
+			// becomes transparent for the rest of its cycle, allowing independently
+			// timed Electricity layers underneath to contribute instead of leaving
+			// this LED illuminated for most of the 1-2 second layer duration.
+			flashEnd := stops[1].T
+			if flashEnd > stops[0].T && t >= stops[0].T && t < flashEnd {
+				u := (t - stops[0].T) / (flashEnd - stops[0].T)
+				col := mixRGB(stops[0].C, stops[1].C, u)
+				alpha := stops[0].A + (stops[1].A-stops[0].A)*u
+				for i := range c {
+					c[i] = col
+					a[i] *= alpha
 				}
-				col, alpha := sampleTransitionStops(stops, ledT)
-				c[i] = col
-				a[i] *= alpha
+			} else {
+				for i := range a {
+					a[i] = 0
+				}
 			}
 			applyLayerOpacity(l, a)
 			return c, a, true
