@@ -110,12 +110,6 @@ func (p *Profile) expandLightingLinks(layers []Layer) []Layer {
 }
 
 func renderCanvas(layers []Layer, logicalBase, ledCount, ordinal int, started time.Time, brightness float64) ([]byte, []string) {
-	// Some LINK devices report zero RGB channels. They have no LED canvas to
-	// render, so return cleanly instead of passing an empty coordinate slice to
-	// spatial effects such as WaveLighting.
-	if ledCount <= 0 {
-		return []byte{}, nil
-	}
 	out := make([]RGB, ledCount)
 	unsupported := map[string]bool{}
 	elapsed := time.Since(started).Seconds()
@@ -243,10 +237,6 @@ func selectedWithTopology(l Layer, topology LEDTopology, deviceOrdinal, local in
 }
 
 func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64) ([]RGB, []float64, bool) {
-	// Defensive guard for callers/render paths with no physical LEDs.
-	if n <= 0 {
-		return []RGB{}, []float64{}, true
-	}
 	c := make([]RGB, n)
 	a := make([]float64, n)
 	for i := range a {
@@ -282,6 +272,21 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 				a[i] = 0
 			}
 		}
+		return c, a, true
+	case "breathelighting":
+		// iCUE Breathe stores a single authored colour and an exact cycle duration.
+		// Fade the layer alpha 0->1->0 while preserving the authored colour.
+		col := layerColor(l, RGB{R: 255, G: 255, B: 255})
+		dur := number(l.Parameters["duration"], 2000) / 1000
+		if dur <= 0 {
+			dur = 2
+		}
+		pulse := 0.5 - 0.5*math.Cos(elapsed/dur*2*math.Pi)
+		for i := range c {
+			c[i] = col
+			a[i] *= pulse
+		}
+		applyLayerOpacity(l, a)
 		return c, a, true
 	case "rainlighting":
 		// iCUE RainLighting carries two authored colours.  In cereal exports
@@ -362,7 +367,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		// One colour-wave cycle per 4/2/1 seconds for speed 1/2/3. The capture
 		// proves ordering and direction; this continuous interpolation avoids
 		// frame-step artefacts while preserving those authored semantics.
-		periodSeconds := 4.0 / math.Pow(2, speed-1)
+		periodSeconds := capturedPeriod(l, 4.0/math.Pow(2, speed-1))
 		phase := sign * elapsed / periodSeconds
 		for i := 0; i < n; i++ {
 			coord := float64(i)
@@ -449,7 +454,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		// spatial wave, so every selected LED receives the same interpolated colour.
 		c1, c2 := effectColors(l, RGB{R: 255}, RGB{B: 255})
 		speed := discreteSpeed(l)
-		period := 4.0 / math.Pow(2, speed-1)
+		period := capturedPeriod(l, 4.0/math.Pow(2, speed-1))
 		t := (math.Sin(elapsed/period*2*math.Pi-math.Pi/2) + 1) / 2
 		col := mixRGB(c1, c2, t)
 		for i := range c {
@@ -463,7 +468,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		// peak colour through a cosine intensity curve rather than moving spatially.
 		c1, c2 := effectColors(l, RGB{R: 255}, RGB{B: 255})
 		speed := discreteSpeed(l)
-		period := 4.0 / math.Pow(2, speed-1)
+		period := capturedPeriod(l, 4.0/math.Pow(2, speed-1))
 		pulse := 0.5 - 0.5*math.Cos(elapsed/period*2*math.Pi)
 		col := mixRGB(c1, c2, pulse)
 		for i := range c {
@@ -475,7 +480,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		// Captures expose speed and direction only. Use the known topology
 		// coordinate where available and retain a sequential fallback elsewhere.
 		speed := discreteSpeed(l)
-		period := 4.0 / math.Pow(2, speed-1)
+		period := capturedPeriod(l, 4.0/math.Pow(2, speed-1))
 		direction := int(number(l.Parameters["direction"], 0))
 		sign := 1.0
 		if direction == 1 || direction == 3 {
@@ -520,7 +525,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 	case "rainbowlighting":
 		// Rainbow is a whole-selection hue cycle (no direction field in captures).
 		speed := discreteSpeed(l)
-		period := 4.0 / math.Pow(2, speed-1)
+		period := capturedPeriod(l, 4.0/math.Pow(2, speed-1))
 		col := hsv(elapsed/period, 1, 1)
 		for i := range c {
 			c[i] = col
@@ -531,7 +536,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		// Rainbow Channel carries speed+direction and distributes the spectrum
 		// across the channel, so it shares Rainbow Wave's spatial basis.
 		speed := discreteSpeed(l)
-		period := 4.0 / math.Pow(2, speed-1)
+		period := capturedPeriod(l, 4.0/math.Pow(2, speed-1))
 		direction := int(number(l.Parameters["direction"], 0))
 		sign := 1.0
 		if direction == 1 || direction == 3 {
@@ -574,28 +579,60 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		if speed <= 0 {
 			speed = 2
 		}
-		period := 2.0 * math.Pow(2, 2-speed)
+		period := capturedPeriod(l, 2.0*math.Pow(2, 2-speed))
 		phase := elapsed / period
 		clockwise := boolParam(l.Parameters["clockwise"], true)
 		if !clockwise {
 			phase = -phase
 		}
 		for i := 0; i < n; i++ {
-			hue := math.Mod(float64(fanOrdinal*42+i)/42.0+phase, 1)
+			coord := float64(i)
+			span := float64(maxInt(n, 1))
+			if len(spatial) == n {
+				coord = spatial[i]
+				span = 17.0
+			}
+			hue := math.Mod(coord/span+phase, 1)
+			if hue < 0 {
+				hue += 1
+			}
 			c[i] = hsv(hue, 1, 1)
 		}
+		applyLayerOpacity(l, a)
 		return c, a, true
 	case "gradientlighting":
-		c1, c2 := gradientColors(l)
+		// GradientLighting carries an authored transition curve.  Electricity, for
+		// example, uses cyan -> pale blue -> very dark blue -> black -> cyan.
+		// Falling back to the old generic green/orange endpoints made those layers
+		// visibly green/yellow on LINK fans even though those colours do not exist
+		// in the profile.  Follow the captured stops directly when present.
 		dur := number(l.Parameters["duration"], 1000) / 1000
 		if dur <= 0 {
 			dur = 1
 		}
+		if stops := transitionStops(l); len(stops) >= 2 {
+			t := math.Mod(elapsed/dur, 1)
+			if t < 0 {
+				t += 1
+			}
+			col, alpha := sampleTransitionStops(stops, t)
+			for i := range c {
+				c[i] = col
+				a[i] *= alpha
+			}
+			applyLayerOpacity(l, a)
+			return c, a, true
+		}
+
+		// Retain the legacy two-colour fallback for older profiles that do not
+		// serialize a transition curve.
+		c1, c2 := gradientColors(l)
 		t := (math.Sin(elapsed/dur*2*math.Pi) + 1) / 2
-		col := RGB{c1.R + (c2.R-c1.R)*t, c1.G + (c2.G-c1.G)*t, c1.B + (c2.B-c1.B)*t}
+		col := mixRGB(c1, c2, t)
 		for i := range c {
 			c[i] = col
 		}
+		applyLayerOpacity(l, a)
 		return c, a, true
 	default:
 		return c, a, false
@@ -654,26 +691,40 @@ func transitionStops(l Layer) []transitionStop {
 
 func parseTransitionColor(s string) (RGB, float64, bool) {
 	low := strings.ToLower(strings.TrimSpace(s))
-	if !strings.HasPrefix(low, "rgba(") {
-		if c, ok := parseColor(s); ok {
-			return c, 1, true
+	// Captured iCUE gradients use both rgb(r g b) and rgba(r g b a), with
+	// normalized 0..1 components.  Parse both forms before the generic colour
+	// decoder so GradientLighting can consume its real transition palette.
+	if strings.HasPrefix(low, "rgb(") || strings.HasPrefix(low, "rgba(") {
+		isRGBA := strings.HasPrefix(low, "rgba(")
+		prefix := "rgb("
+		want := 3
+		if isRGBA {
+			prefix = "rgba("
+			want = 4
 		}
-		return RGB{}, 0, false
-	}
-	inside := strings.TrimSuffix(strings.TrimPrefix(low, "rgba("), ")")
-	parts := strings.Fields(inside)
-	if len(parts) != 4 {
-		return RGB{}, 0, false
-	}
-	vals := make([]float64, 4)
-	for i := range vals {
-		f, e := strconv.ParseFloat(parts[i], 64)
-		if e != nil {
+		inside := strings.TrimSuffix(strings.TrimPrefix(low, prefix), ")")
+		parts := strings.Fields(inside)
+		if len(parts) != want {
 			return RGB{}, 0, false
 		}
-		vals[i] = f
+		vals := make([]float64, want)
+		for i := range vals {
+			f, e := strconv.ParseFloat(parts[i], 64)
+			if e != nil {
+				return RGB{}, 0, false
+			}
+			vals[i] = f
+		}
+		alpha := 1.0
+		if isRGBA {
+			alpha = vals[3]
+		}
+		return RGB{vals[0] * 255, vals[1] * 255, vals[2] * 255}, alpha, true
 	}
-	return RGB{vals[0] * 255, vals[1] * 255, vals[2] * 255}, vals[3], true
+	if c, ok := parseColor(s); ok {
+		return c, 1, true
+	}
+	return RGB{}, 0, false
 }
 
 func sampleTransitionStops(stops []transitionStop, t float64) (RGB, float64) {
@@ -728,6 +779,17 @@ func applyLayerOpacity(l Layer, alpha []float64) {
 	for i := range alpha {
 		alpha[i] *= opacity
 	}
+}
+
+func capturedPeriod(l Layer, fallback float64) float64 {
+	dur := number(l.Parameters["duration"], 0) / 1000
+	if dur > 0 {
+		return dur
+	}
+	if fallback <= 0 {
+		return 1
+	}
+	return fallback
 }
 
 func discreteSpeed(l Layer) float64 {
@@ -827,6 +889,51 @@ func parseColor(v any) (RGB, bool) {
 	s := strings.ToLower(strings.TrimSpace(toString(v)))
 	if s == "" {
 		return RGB{}, false
+	}
+	// iCUE also serializes ordinary layer colours as color=rgb(r g b) or
+	// color=rgba(r g b a), using normalized 0..1 components. Static/Breathe
+	// layers use this form too, so decode it generically rather than only inside
+	// transition curves.
+	if i := strings.Index(s, "rgb("); i >= 0 {
+		end := strings.Index(s[i:], ")")
+		if end >= 0 {
+			inside := s[i+4 : i+end]
+			parts := strings.Fields(inside)
+			if len(parts) == 3 {
+				vals := make([]float64, 3)
+				ok := true
+				for j := range vals {
+					vals[j], _ = strconv.ParseFloat(parts[j], 64)
+					if _, e := strconv.ParseFloat(parts[j], 64); e != nil {
+						ok = false
+					}
+				}
+				if ok {
+					return RGB{vals[0] * 255, vals[1] * 255, vals[2] * 255}, true
+				}
+			}
+		}
+	}
+	if i := strings.Index(s, "rgba("); i >= 0 {
+		end := strings.Index(s[i:], ")")
+		if end >= 0 {
+			inside := s[i+5 : i+end]
+			parts := strings.Fields(inside)
+			if len(parts) == 4 {
+				vals := make([]float64, 3)
+				ok := true
+				for j := range vals {
+					var e error
+					vals[j], e = strconv.ParseFloat(parts[j], 64)
+					if e != nil {
+						ok = false
+					}
+				}
+				if ok {
+					return RGB{vals[0] * 255, vals[1] * 255, vals[2] * 255}, true
+				}
+			}
+		}
 	}
 	// Leaf collections use strings such as first=4279840521.  Accept the
 	// value side as packed ARGB/RGB while ignoring the alpha byte.
