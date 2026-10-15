@@ -305,16 +305,22 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		}
 		random := boolParam(l.Parameters["random"], false)
 		direction := int(number(l.Parameters["direction"], 0))
-		// Speed 1 is deliberately fairly slow.  Random=false profiles (Halo)
-		// use a stable travelling field rather than sparkle noise.
-		phase := elapsed * (2.0 * speed)
-		if direction == 1 || direction == 3 {
-			phase = -phase
-		}
+		// Captured RainLighting carries an explicit duration. For deterministic
+		// travelling rain, treat that as one complete spatial cycle. This fixes
+		// the old renderer's topology-dependent timing (for example a 17-position
+		// QX field took ~2.125 s even when iCUE authored duration=1000 ms).
+		// Keep the legacy speed-derived phase only as a fallback for profiles that
+		// do not serialize a usable duration.
+		duration := number(l.Parameters["duration"], 0) / 1000
+		legacyPhase := elapsed * (2.0 * speed)
 		for i := 0; i < n; i++ {
 			var intensity float64
 			if random {
-				slot := int(phase * 4)
+				randomPhase := legacyPhase
+				if direction == 1 || direction == 3 {
+					randomPhase = -randomPhase
+				}
+				slot := int(randomPhase * 4)
 				h := hash(slot-i*2, fanOrdinal*42+i)
 				if h <= 0.76 {
 					a[i] = 0
@@ -335,7 +341,14 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 					// continuous coordinate system across adjacent QX fans.
 					period = 17.0
 				}
-				pos := math.Mod(coord+phase*4, period)
+				travel := legacyPhase * 4
+				if duration > 0 {
+					travel = elapsed / duration * period
+				}
+				if direction == 1 || direction == 3 {
+					travel = -travel
+				}
+				pos := math.Mod(coord+travel, period)
 				if pos < 0 {
 					pos += period
 				}
