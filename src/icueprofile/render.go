@@ -698,7 +698,20 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 			dur = 1
 		}
 		if stops := transitionStops(l); len(stops) >= 2 {
-			t := math.Mod(elapsed/dur, 1)
+			// iCUE custom Gradient curves describe a sequence of transition
+			// intervals.  A closed curve repeats its first colour at the final
+			// stop, so the useful transition count is len(stops)-1.  Advance the
+			// normalized curve by that interval count instead of treating the
+			// captured duration as one traversal of the entire multi-stop curve.
+			// This keeps two-stop gradients unchanged while making multi-stop
+			// electrical/flicker curves progress at their authored transition
+			// cadence rather than stretching them across one long fade.
+			transitionCount := len(stops) - 1
+			if transitionCount < 1 {
+				transitionCount = 1
+			}
+			effectiveDur := dur / float64(transitionCount)
+			t := math.Mod(elapsed/effectiveDur, 1)
 			if t < 0 {
 				t += 1
 			}
