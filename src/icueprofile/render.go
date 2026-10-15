@@ -433,6 +433,132 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		}
 		applyLayerOpacity(l, a)
 		return c, a, true
+	case "colorshiftlighting":
+		// Capture-derived structure: two authored colours, speed 1..3 and an
+		// optional random flag. Color Shift is a whole-selection transition, not a
+		// spatial wave, so every selected LED receives the same interpolated colour.
+		c1, c2 := effectColors(l, RGB{R: 255}, RGB{B: 255})
+		speed := discreteSpeed(l)
+		period := 4.0 / math.Pow(2, speed-1)
+		t := (math.Sin(elapsed/period*2*math.Pi-math.Pi/2) + 1) / 2
+		col := mixRGB(c1, c2, t)
+		for i := range c {
+			c[i] = col
+		}
+		applyLayerOpacity(l, a)
+		return c, a, true
+	case "colorpulselighting":
+		// Color Pulse serializes the same two-colour/speed tuple as Color Shift.
+		// Render a smooth A->B->A pulse; unlike Color Shift the midpoint dwells at
+		// peak colour through a cosine intensity curve rather than moving spatially.
+		c1, c2 := effectColors(l, RGB{R: 255}, RGB{B: 255})
+		speed := discreteSpeed(l)
+		period := 4.0 / math.Pow(2, speed-1)
+		pulse := 0.5 - 0.5*math.Cos(elapsed/period*2*math.Pi)
+		col := mixRGB(c1, c2, pulse)
+		for i := range c {
+			c[i] = col
+		}
+		applyLayerOpacity(l, a)
+		return c, a, true
+	case "rainbowwavelighting":
+		// Captures expose speed and direction only. Use the known topology
+		// coordinate where available and retain a sequential fallback elsewhere.
+		speed := discreteSpeed(l)
+		period := 4.0 / math.Pow(2, speed-1)
+		direction := int(number(l.Parameters["direction"], 0))
+		sign := 1.0
+		if direction == 1 || direction == 3 {
+			sign = -1
+		}
+		phase := sign * elapsed / period
+		for i := 0; i < n; i++ {
+			coord := float64(i)
+			span := float64(maxInt(n, 1))
+			if len(spatial) == n {
+				coord = spatial[i]
+				span = 17.0
+			}
+			c[i] = hsv(coord/span+phase, 1, 1)
+		}
+		applyLayerOpacity(l, a)
+		return c, a, true
+	case "watercolorlighting":
+		// WaterColor captures two authored colours, speed, isRandom and a
+		// background colour. Blend broad, slowly moving colour pools rather than
+		// inventing discrete flashes; deterministic hashing keeps playback stable.
+		c1, c2 := effectColors(l, RGB{R: 255}, RGB{B: 255})
+		bg := layerParameterColor(l, "background", RGB{R: 255, G: 255, B: 255})
+		speed := discreteSpeed(l)
+		phase := elapsed * (0.20 * speed)
+		random := boolParam(l.Parameters["isRandom"], false)
+		for i := 0; i < n; i++ {
+			coord := float64(i) / float64(maxInt(n, 1))
+			if len(spatial) == n {
+				coord = spatial[i] / 17.0
+			}
+			w1 := 0.5 + 0.5*math.Sin(2*math.Pi*(coord*1.7+phase))
+			w2 := 0.5 + 0.5*math.Sin(2*math.Pi*(coord*0.9-phase*0.63+0.31))
+			if random {
+				w2 = 0.65*w2 + 0.35*hash(int(math.Floor(phase*4)), fanOrdinal*131+i)
+			}
+			pool := mixRGB(c1, c2, w1)
+			c[i] = mixRGB(bg, pool, 0.35+0.65*w2)
+		}
+		applyLayerOpacity(l, a)
+		return c, a, true
+	case "rainbowlighting":
+		// Rainbow is a whole-selection hue cycle (no direction field in captures).
+		speed := discreteSpeed(l)
+		period := 4.0 / math.Pow(2, speed-1)
+		col := hsv(elapsed/period, 1, 1)
+		for i := range c {
+			c[i] = col
+		}
+		applyLayerOpacity(l, a)
+		return c, a, true
+	case "rainbowchannellighting":
+		// Rainbow Channel carries speed+direction and distributes the spectrum
+		// across the channel, so it shares Rainbow Wave's spatial basis.
+		speed := discreteSpeed(l)
+		period := 4.0 / math.Pow(2, speed-1)
+		direction := int(number(l.Parameters["direction"], 0))
+		sign := 1.0
+		if direction == 1 || direction == 3 {
+			sign = -1
+		}
+		phase := sign * elapsed / period
+		for i := 0; i < n; i++ {
+			coord := float64(i)
+			span := float64(maxInt(n, 1))
+			if len(spatial) == n {
+				coord = spatial[i]
+				span = 17.0
+			}
+			c[i] = hsv(coord/span+phase, 1, 1)
+		}
+		applyLayerOpacity(l, a)
+		return c, a, true
+	case "watercolorspectrumlighting":
+		// Spectrum variant has no authored endpoint colours. Build overlapping
+		// low-saturation spectrum pools from the captured speed/direction tuple.
+		speed := discreteSpeed(l)
+		direction := int(number(l.Parameters["direction"], 0))
+		sign := 1.0
+		if direction == 1 || direction == 3 {
+			sign = -1
+		}
+		phase := sign * elapsed * (0.12 * speed)
+		for i := 0; i < n; i++ {
+			coord := float64(i) / float64(maxInt(n, 1))
+			if len(spatial) == n {
+				coord = spatial[i] / 17.0
+			}
+			h := coord*0.55 + phase + 0.08*math.Sin(2*math.Pi*(coord+phase*0.4))
+			c[i] = hsv(h, 0.68, 1)
+		}
+		applyLayerOpacity(l, a)
+		return c, a, true
 	case "spiralrainbowlighting":
 		speed := number(l.Parameters["speed"], 2)
 		if speed <= 0 {
@@ -592,6 +718,26 @@ func applyLayerOpacity(l Layer, alpha []float64) {
 	for i := range alpha {
 		alpha[i] *= opacity
 	}
+}
+
+func discreteSpeed(l Layer) float64 {
+	speed := number(l.Parameters["speed"], 2)
+	if speed < 1 {
+		return 1
+	}
+	if speed > 3 {
+		return 3
+	}
+	return speed
+}
+
+func layerParameterColor(l Layer, key string, fallback RGB) RGB {
+	if v, ok := l.Parameters[key]; ok {
+		if c, ok := parseColor(v); ok {
+			return c
+		}
+	}
+	return fallback
 }
 
 func effectColors(l Layer, fallback1, fallback2 RGB) (RGB, RGB) {

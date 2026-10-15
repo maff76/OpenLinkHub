@@ -1,0 +1,18 @@
+2026-10-15 capture compatibility after v12.4 handlers
+====================================================
+CCL-Sci-fi Dark : 192/194 supported - 2x RippleLighting unsupported
+Halo-MasterChief: 101/101 supported
+Halo-Infinite   : 180/180 supported
+Profile 2       : 11/11 supported
+Profile 4       : 8/8 supported
+Profile 5       : 8/8 supported
+Profile 7       : 8/8 supported
+Default Profile : 46/57 supported
+rain test       : 19/25 supported
+
+New supported classes in this build:
+ColorPulseLighting, ColorShiftLighting, RainbowWaveLighting, WaterColorLighting,
+RainbowLighting, RainbowChannelLighting, WatercolorSpectrumLighting.
+
+RippleLighting is parsed but intentionally remains unsupported because the
+captured Sci-Fi layers are key-triggered PlayFromKeyCenter one-shot effects.

@@ -283,8 +283,11 @@ func parseLightingLinkPropertyLayer(entry *Node, typeNames map[int]string) *Laye
 func extractParameters(effect *Node) map[string]any {
 	wanted := map[string]bool{
 		"duration": true, "brightness": true, "opacity": true, "speed": true,
-		"direction": true, "clockwise": true, "random": true, "color": true,
-		"colors": true, "transitions": true,
+		"direction": true, "clockwise": true, "random": true, "isRandom": true, "color": true,
+		"colors": true, "transitions": true, "background": true,
+		// Captured RippleLighting fields. These are retained for diagnostics even
+		// while reactive key-centred Ripple playback remains intentionally unsupported.
+		"autoDuration": true, "waveSpread": true,
 		// Captured iCUE WaveLighting fields. Preserve these even before the
 		// renderer claims playback support; this keeps imported profile data
 		// intact without inventing unverified animation semantics.
