@@ -180,6 +180,13 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 		return make([]byte, ledCount*3), []string{"LINK device entry missing"}
 	}
 	layers := p.expandLightingLinks(d.Channels[0].Layers)
+	// Imported profiles encode ConcreteLeds against the source machine's fan
+	// count.  Preserve exact selections for source-covered QX fans, but when
+	// the local machine has additional QX fans repeat the complete source fan
+	// selection pattern by fan ordinal.  This keeps authored per-LED phase
+	// partitions (for example Electricity's ten staggered Gradient groups)
+	// portable without inventing colours, timings, or per-profile rules.
+	sourceDeviceCount := sourceQXFanCount(layers, topology)
 	elapsed := time.Since(started).Seconds()
 	for li := len(layers) - 1; li >= 0; li-- {
 		l := layers[li]
@@ -192,7 +199,7 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 			continue
 		}
 		for i := 0; i < ledCount; i++ {
-			if !selectedWithTopology(l, topology, deviceOrdinal, i) {
+			if !selectedWithTopology(l, topology, deviceOrdinal, i, sourceDeviceCount) {
 				continue
 			}
 			a := alpha[i]
@@ -215,14 +222,18 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 	return buf, names
 }
 
-func selectedWithTopology(l Layer, topology LEDTopology, deviceOrdinal, local int) bool {
+func selectedWithTopology(l Layer, topology LEDTopology, deviceOrdinal, local, sourceDeviceCount int) bool {
 	if strings.EqualFold(l.SelectionMode, "AllLeds") || l.SelectionMode == "" {
 		return true
 	}
 	if topology == nil {
 		return false
 	}
-	logical, ok := topology.LogicalLED(deviceOrdinal, local)
+	mappedOrdinal := deviceOrdinal
+	if sourceDeviceCount > 0 && deviceOrdinal >= sourceDeviceCount {
+		mappedOrdinal = deviceOrdinal % sourceDeviceCount
+	}
+	logical, ok := topology.LogicalLED(mappedOrdinal, local)
 	if !ok {
 		return false
 	}
@@ -237,6 +248,49 @@ func selectedWithTopology(l Layer, topology LEDTopology, deviceOrdinal, local in
 		}
 	}
 	return false
+}
+
+// sourceQXFanCount returns the contiguous source QX fan span that is fully
+// represented by ConcreteLeds in the selected iCUE LINK compatibility entry.
+// QX uses 34 active LEDs in a 42-ID stride. Requiring complete 34/34 union
+// coverage makes this conservative: sparse intentional selections are left
+// exact, while effect families that partition every source fan (Electricity's
+// staggered Gradient groups are the reference case) can be repeated safely onto
+// additional local QX fans. IDs at 756+ are the measured TITAN 280 map.
+func sourceQXFanCount(layers []Layer, topology LEDTopology) int {
+	if topology == nil || !strings.EqualFold(topology.Name(), "QX") {
+		return 0
+	}
+	covered := map[int]map[int]bool{}
+	for _, l := range layers {
+		if strings.EqualFold(l.SelectionMode, "AllLeds") || l.SelectionMode == "" {
+			continue
+		}
+		for _, key := range l.LEDs {
+			m := ledNumber.FindStringSubmatch(strings.TrimSpace(key))
+			if len(m) != 2 {
+				continue
+			}
+			id, err := strconv.Atoi(m[1])
+			if err != nil || id < 0 || id >= 756 {
+				continue
+			}
+			fan := id / 42
+			local := id % 42
+			if local >= 34 { // QX stride gap, not an active fan LED.
+				continue
+			}
+			if covered[fan] == nil {
+				covered[fan] = map[int]bool{}
+			}
+			covered[fan][local] = true
+		}
+	}
+	count := 0
+	for len(covered[count]) == 34 {
+		count++
+	}
+	return count
 }
 
 func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64) ([]RGB, []float64, bool) {
