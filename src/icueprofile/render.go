@@ -468,9 +468,24 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 			if t < 0 {
 				t += 1
 			}
-			// Triangle interpolation gives an alternating A→B→A travelling wave.
-			mix := 1 - math.Abs(2*t-1)
-			c[i] = mixRGB(c1, c2, mix)
+			if boolParam(l.Parameters["random"], false) {
+				// Random Colors is a distinct iCUE Color Wave mode. Keep it
+				// deterministic for a given profile time: adjacent wave cells receive
+				// successive pseudo-random hues and interpolate continuously as the
+				// wave advances. This avoids per-frame RNG flicker while preserving
+				// the authored travelling-wave speed and direction.
+				wavePos := coord/span + phase
+				cellFloor := math.Floor(wavePos)
+				cell := int(cellFloor)
+				frac := wavePos - cellFloor
+				h1 := hash(cell, fanOrdinal*131+17)
+				h2 := hash(cell+1, fanOrdinal*131+17)
+				c[i] = mixRGB(hsv(h1, 1, 1), hsv(h2, 1, 1), frac)
+			} else {
+				// Alternating mode uses the two authored colours.
+				mix := 1 - math.Abs(2*t-1)
+				c[i] = mixRGB(c1, c2, mix)
+			}
 		}
 		applyLayerOpacity(l, a)
 		return c, a, true
