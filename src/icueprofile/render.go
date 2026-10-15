@@ -116,12 +116,12 @@ func renderCanvas(layers []Layer, logicalBase, ledCount, ordinal int, started ti
 	out := make([]RGB, ledCount)
 	unsupported := map[string]bool{}
 	elapsed := time.Since(started).Seconds()
-	for li := 0; li < len(layers); li++ {
+	for li := len(layers) - 1; li >= 0; li-- {
 		l := layers[li]
 		if !l.Enabled {
 			continue
 		}
-		colors, alpha, ok := renderLayer(l, ordinal, ledCount, elapsed, nil)
+		colors, alpha, ok := renderLayer(l, ordinal, ledCount, elapsed, nil, selectionPhases(l, ledCount, func(i int) bool { return selectedAt(l, logicalBase, i) }))
 		if !ok {
 			unsupported[l.Effect] = true
 			continue
@@ -171,7 +171,7 @@ func selectedAt(l Layer, logicalBase, local int) bool {
 }
 
 // RenderFan renders a fan using a device-specific topology supplied by the LINK layer.
-// TEST BUILD: composite in XML order to verify whether exported layer order maps directly to iCUE bottom-to-top priority.
+// Layers are composited bottom-to-top (reverse XML order), matching iCUE's layer stack semantics.
 func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, started time.Time, brightness float64) ([]byte, []string) {
 	out := make([]RGB, ledCount)
 	unsupported := map[string]bool{}
@@ -188,12 +188,12 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 	// portable without inventing colours, timings, or per-profile rules.
 	sourceDeviceCount := sourceQXFanCount(layers, topology)
 	elapsed := time.Since(started).Seconds()
-	for li := 0; li < len(layers); li++ {
+	for li := len(layers) - 1; li >= 0; li-- {
 		l := layers[li]
 		if !l.Enabled {
 			continue
 		}
-		colors, alpha, ok := renderLayer(l, deviceOrdinal, ledCount, elapsed, topologyPositions(topology, deviceOrdinal, ledCount))
+		colors, alpha, ok := renderLayer(l, deviceOrdinal, ledCount, elapsed, topologyPositions(topology, deviceOrdinal, ledCount), selectionPhases(l, ledCount, func(i int) bool { return selectedWithTopology(l, topology, deviceOrdinal, i, sourceDeviceCount) }))
 		if !ok {
 			unsupported[l.Effect] = true
 			continue
@@ -293,7 +293,30 @@ func sourceQXFanCount(layers []Layer, topology LEDTopology) int {
 	return count
 }
 
-func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64) ([]RGB, []float64, bool) {
+func selectionPhases(l Layer, n int, selected func(int) bool) []float64 {
+	phases := make([]float64, n)
+	for i := range phases {
+		phases[i] = -1
+	}
+	indices := make([]int, 0, n)
+	for i := 0; i < n; i++ {
+		if selected(i) {
+			indices = append(indices, i)
+		}
+	}
+	if len(indices) <= 1 {
+		if len(indices) == 1 {
+			phases[indices[0]] = 0
+		}
+		return phases
+	}
+	for rank, i := range indices {
+		phases[i] = float64(rank) / float64(len(indices))
+	}
+	return phases
+}
+
+func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64, selectionPhase []float64) ([]RGB, []float64, bool) {
 	if n <= 0 {
 		return []RGB{}, []float64{}, true
 	}
@@ -719,8 +742,16 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 			if t < 0 {
 				t += 1
 			}
-			col, alpha := sampleTransitionStops(stops, t)
 			for i := range c {
+				ledT := t
+				if len(selectionPhase) == n && selectionPhase[i] >= 0 {
+					// iCUE Gradient Lighting advances through the selected LEDs over
+					// the authored Lighting Time. Each selected LED therefore samples
+					// a different point on the same transition curve instead of every
+					// selected LED fading in lockstep.
+					ledT = math.Mod(t-selectionPhase[i]+1, 1)
+				}
+				col, alpha := sampleTransitionStops(stops, ledT)
 				c[i] = col
 				a[i] *= alpha
 			}
