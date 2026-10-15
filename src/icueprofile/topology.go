@@ -40,16 +40,20 @@ var qxLocalX = [...]float64{
 	270, 280, 290, 310, 320, 330, 260, 320, 300, 280,
 }
 
-// titan280Topology is the verified active-LED geometry and .cueprofile
-// ConcreteLeds mapping for the iCUE LINK TITAN 280. The SDK capture exposes
-// the TITAN as the final 20 active LEDs after nine 34-LED QX blocks. Controlled
-// iCUE exports account for the same 20 physical zones exactly once as
-// Led_Cmd_Led756 through Led_Cmd_Led775.
+// titan280Topology is the measured active-LED geometry and .cueprofile
+// ConcreteLeds mapping for the iCUE LINK TITAN 280.
 //
-// The SDK/local output order and the ConcreteLeds order are the same device
-// order: local LED 0..19 maps to logical LED 756..775. Independent zone
-// captures provide the physical cross-check: 756..766 are UI zones 6..16,
-// 767..771 are zones 1..5, and 772..775 are zones 17..20.
+// Evidence chain:
+//   - the SDK capture exposes 20 active TITAN LEDs after the nine 34-LED QX blocks;
+//   - controlled iCUE exports map the 20 UI zones to Led_Cmd_Led756..775;
+//   - a server-side one-output-at-a-time hardware test measured local outputs
+//     0..19 as UI zones 6..16, 1..5, then 17..20 respectively.
+//
+// Combining those independent captures proves local output 0..19 maps to logical
+// LED 756..775 in order. Keep this explicit table rather than deriving the value so
+// future hardware/capture changes cannot silently turn a measured map into an
+// assumption. For the four centre LEDs, the measured physical output order is
+// top, right, bottom, left (logical LEDs 772, 773, 774, 775).
 type titan280Topology struct{}
 
 func (titan280Topology) Name() string  { return "TITAN 280" }
@@ -64,10 +68,16 @@ func (titan280Topology) Position(deviceOrdinal, localLED int) (float64, bool) {
 }
 
 func (titan280Topology) LogicalLED(deviceOrdinal, localLED int) (int, bool) {
-	if localLED < 0 || localLED >= len(titan280LocalX) {
+	if localLED < 0 || localLED >= len(titan280LogicalLEDs) {
 		return 0, false
 	}
-	return 756 + localLED, true
+	return titan280LogicalLEDs[localLED], true
+}
+
+// Measured OpenLinkHub output order -> iCUE ConcreteLeds logical ID.
+var titan280LogicalLEDs = [...]int{
+	756, 757, 758, 759, 760, 761, 762, 763, 764, 765,
+	766, 767, 768, 769, 770, 771, 772, 773, 774, 775,
 }
 
 // Captured SDK order 306..325, normalized by subtracting the minimum X (3315).
