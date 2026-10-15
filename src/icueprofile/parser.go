@@ -68,14 +68,20 @@ type Channel struct {
 }
 
 type Layer struct {
-	Name          string         `json:"name"`
-	ID            string         `json:"id,omitempty"`
-	Enabled       bool           `json:"enabled"`
-	SelectionMode string         `json:"selectionMode,omitempty"`
-	LEDs          []string       `json:"leds,omitempty"`
-	Effect        string         `json:"effect"`
-	EffectName    string         `json:"effectName,omitempty"`
-	Parameters    map[string]any `json:"parameters,omitempty"`
+	Name             string         `json:"name"`
+	ID               string         `json:"id,omitempty"`
+	Enabled          bool           `json:"enabled"`
+	SelectionMode    string         `json:"selectionMode,omitempty"`
+	LEDs             []string       `json:"leds,omitempty"`
+	Effect           string         `json:"effect"`
+	EffectName       string         `json:"effectName,omitempty"`
+	Parameters       map[string]any `json:"parameters,omitempty"`
+	StartOnKeyPress  bool           `json:"startOnKeyPress,omitempty"`
+	StartWithProfile bool           `json:"startWithProfile,omitempty"`
+	StopOnKeyPress   bool           `json:"stopOnKeyPress,omitempty"`
+	StopOnKeyRelease bool           `json:"stopOnKeyRelease,omitempty"`
+	StopAfterTimes   int            `json:"stopAfterTimes,omitempty"`
+	PlayOption       string         `json:"playOption,omitempty"`
 }
 
 type Summary struct {
@@ -236,6 +242,8 @@ func parseLayer(entry *Node, typeNames map[int]string) *Layer {
 		}
 	}
 
+	parseExecutionHints(base, l)
+
 	l.Effect = childText(lighting, "polymorphic_name")
 	if l.Effect == "" {
 		l.Effect = typeNames[polymorphicTypeID(childText(lighting, "polymorphic_id"))]
@@ -263,7 +271,10 @@ func parseLightingLinkPropertyLayer(entry *Node, typeNames map[int]string) *Laye
 	if lighting == nil {
 		return nil
 	}
-	l := &Layer{Enabled: true, SelectionMode: "AllLeds"}
+	l := &Layer{Enabled: true, SelectionMode: "AllLeds", StartWithProfile: true, StopAfterTimes: -1, PlayOption: "Standard"}
+	if base := directChild(data, "base"); base != nil {
+		parseExecutionHints(base, l)
+	}
 	l.Effect = childText(lighting, "polymorphic_name")
 	if l.Effect == "" {
 		l.Effect = typeNames[polymorphicTypeID(childText(lighting, "polymorphic_id"))]
@@ -278,6 +289,28 @@ func parseLightingLinkPropertyLayer(entry *Node, typeNames map[int]string) *Laye
 		l.Effect = "UnknownLighting"
 	}
 	return l
+}
+
+func parseExecutionHints(base *Node, l *Layer) {
+	hints := directChild(base, "executionHints")
+	if hints == nil {
+		// Older/simple exports behave as profile-started continuous layers.
+		l.StartWithProfile = true
+		l.StopAfterTimes = -1
+		l.PlayOption = "Standard"
+		return
+	}
+	l.StartOnKeyPress = strings.EqualFold(childText(hints, "startOnKeyPress"), "true") || childText(hints, "startOnKeyPress") == "1"
+	l.StartWithProfile = strings.EqualFold(childText(hints, "startWithProfile"), "true") || childText(hints, "startWithProfile") == "1"
+	l.StopOnKeyPress = strings.EqualFold(childText(hints, "stopOnKeyPress"), "true") || childText(hints, "stopOnKeyPress") == "1"
+	l.StopOnKeyRelease = strings.EqualFold(childText(hints, "stopOnKeyRelease"), "true") || childText(hints, "stopOnKeyRelease") == "1"
+	l.StopAfterTimes = -1
+	if v := strings.TrimSpace(childText(hints, "stopAfterTimes")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			l.StopAfterTimes = n
+		}
+	}
+	l.PlayOption = strings.TrimSpace(childText(hints, "playOption"))
 }
 
 func extractParameters(effect *Node) map[string]any {

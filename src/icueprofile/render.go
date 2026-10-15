@@ -303,6 +303,19 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		a[i] = 1
 	}
 	effect := strings.ToLower(l.Effect)
+
+	// iCUE serializes execution separately from effect parameters. A layer that
+	// only starts from a key event must not be rendered as a continuously running
+	// profile layer. We currently have no input-event source in the LINK software
+	// renderer, so leave reactive-only layers inactive rather than inventing
+	// continuous playback. Continuous layers (startWithProfile=true) are unchanged.
+	if l.StartOnKeyPress && !l.StartWithProfile {
+		for i := range a {
+			a[i] = 0
+		}
+		return c, a, true
+	}
+
 	switch effect {
 	case "basicnonelighting":
 		for i := range a {
@@ -460,8 +473,9 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		applyLayerOpacity(l, a)
 		return c, a, true
 	case "wavelighting":
-		// Wave's UI maps directly to velocity (lights/sec), tailLength (lights),
-		// and isDoublesided. Captured profiles also carry an authored transition
+		// Wave captures velocity, tailLength and isDoublesided. Do not assign a
+		// physical unit to velocity here: the profile proves the value, not its unit.
+		// Captured profiles also carry an authored transition
 		// curve. Render that curve along the moving tail. Angle is retained by the
 		// parser but is intentionally not interpreted on the 1-D LINK topology.
 		velocity := number(l.Parameters["velocity"], 100)
