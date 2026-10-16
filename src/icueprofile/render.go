@@ -1,10 +1,12 @@
 package icueprofile
 
 import (
+	"log"
 	"math"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -12,6 +14,76 @@ import (
 type RGB struct{ R, G, B float64 }
 
 var ledNumber = regexp.MustCompile(`(?i)Led_Cmd_Led(\d+)$`)
+
+// Gradient event diagnostics are intentionally observational only: they do not
+// change the v12.4.15 rendering. They count authored transition boundaries that
+// the ~20 ms render cadence crosses, so hardware logs can distinguish scheduler
+// problems from compositor problems before we change Gradient semantics again.
+var gradientDiag = struct {
+	sync.Mutex
+	bucket       int64
+	evaluated    int
+	crossed      int
+	selectedLEDs int
+	samples      []string
+}{}
+
+func diagnoseGradientEvents(l Layer, elapsed, dur float64, stops []transitionStop) {
+	if dur <= 0 || len(stops) < 2 {
+		return
+	}
+	// LSH normally renders every ~20 ms. Looking back 25 ms intentionally spans
+	// one frame without requiring persistent per-layer state in the renderer.
+	const frameWindow = 0.025
+	prev := elapsed - frameWindow
+	if prev < 0 {
+		prev = 0
+	}
+	bucket := int64(math.Floor(elapsed))
+	crossed := 0
+	var sample string
+	startCycle := int(math.Floor(prev / dur))
+	endCycle := int(math.Floor(elapsed / dur))
+	for cycle := startCycle; cycle <= endCycle; cycle++ {
+		base := float64(cycle) * dur
+		for si, st := range stops {
+			// The final 1.0 stop is the next cycle's 0.0 boundary; count it once.
+			if si == len(stops)-1 && st.T >= 0.999999 {
+				continue
+			}
+			eventTime := base + st.T*dur
+			if eventTime > prev && eventTime <= elapsed {
+				crossed++
+				if sample == "" {
+					sample = l.ID + " dur=" + strconv.FormatFloat(dur, 'f', 3, 64) +
+						" stop=" + strconv.FormatFloat(st.T, 'f', 3, 64) +
+						" leds=" + strconv.Itoa(len(l.LEDs))
+				}
+			}
+		}
+	}
+
+	gradientDiag.Lock()
+	defer gradientDiag.Unlock()
+	if gradientDiag.bucket == 0 {
+		gradientDiag.bucket = bucket
+	}
+	if bucket != gradientDiag.bucket {
+		log.Printf("iCUE Gradient diagnostic: evaluated=%d crossedEvents=%d selectedLEDRefs=%d samples=%v",
+			gradientDiag.evaluated, gradientDiag.crossed, gradientDiag.selectedLEDs, gradientDiag.samples)
+		gradientDiag.bucket = bucket
+		gradientDiag.evaluated = 0
+		gradientDiag.crossed = 0
+		gradientDiag.selectedLEDs = 0
+		gradientDiag.samples = gradientDiag.samples[:0]
+	}
+	gradientDiag.evaluated++
+	gradientDiag.crossed += crossed
+	gradientDiag.selectedLEDs += len(l.LEDs)
+	if crossed > 0 && sample != "" && len(gradientDiag.samples) < 6 {
+		gradientDiag.samples = append(gradientDiag.samples, sample)
+	}
+}
 
 // LinkDevice returns the imported lighting entry for the iCUE LINK System Hub.
 func (p *Profile) LinkDevice() *Device {
@@ -362,36 +434,72 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		applyLayerOpacity(l, a)
 		return c, a, true
 	case "rainlighting":
-		// Rain is an event effect: the authored duration is the recurrence
-		// interval, not the lifetime of a drop.  Emit a fresh deterministic-
-		// random field for exactly the render frame that crosses each recurrence
-		// boundary, then leave the layer transparent until the next event.
+		// iCUE RainLighting carries two authored colours.  In cereal exports
+		// these are usually packed ARGB integers under colors/first+second.
+		// Preserve those colours instead of using a generic fallback.
 		c1, c2 := effectColors(l, RGB{R: 25, G: 47, B: 9}, RGB{R: 100, G: 169, B: 45})
+		speed := number(l.Parameters["speed"], 1)
+		if speed <= 0 {
+			speed = 1
+		}
+		random := boolParam(l.Parameters["random"], false)
+		direction := int(number(l.Parameters["direction"], 0))
+		// Captured RainLighting carries an explicit duration. For deterministic
+		// travelling rain, treat that as one complete spatial cycle. This fixes
+		// the old renderer's topology-dependent timing (for example a 17-position
+		// QX field took ~2.125 s even when iCUE authored duration=1000 ms).
+		// Keep the legacy speed-derived phase only as a fallback for profiles that
+		// do not serialize a usable duration.
 		duration := number(l.Parameters["duration"], 0) / 1000
-		if duration <= 0 {
-			speed := number(l.Parameters["speed"], 1)
-			if speed <= 0 {
-				speed = 1
-			}
-			duration = 1 / speed
-		}
-		event, cycle := crossedRecurringEvent(elapsed, duration)
-		if !event {
-			for i := range a {
-				a[i] = 0
-			}
-			return c, a, true
-		}
+		legacyPhase := elapsed * (2.0 * speed)
 		for i := 0; i < n; i++ {
-			// Re-seed from the recurrence number so each drop event chooses a new
-			// field while remaining stable for the one frame in which it is shown.
-			h := hash(cycle*131+i*17, fanOrdinal*42+i)
-			if h <= 0.76 {
-				a[i] = 0
-				continue
+			var intensity float64
+			if random {
+				randomPhase := legacyPhase
+				if direction == 1 || direction == 3 {
+					randomPhase = -randomPhase
+				}
+				slot := int(randomPhase * 4)
+				h := hash(slot-i*2, fanOrdinal*42+i)
+				if h <= 0.76 {
+					a[i] = 0
+					continue
+				}
+				intensity = 0.25 + 0.75*hash(slot, i+17)
+			} else {
+				// Deterministic rain follows the device's logical spatial layout when
+				// one is known.  QX LED numbering doubles back across lighting zones,
+				// so raw LED index order produces the wrong motion.  The SDK-captured
+				// QX positions below preserve Corsair's logical X ordering.  Other
+				// devices deliberately retain the previous index-based fallback.
+				coord := float64(i) + float64(fanOrdinal*3)
+				period := float64(maxInt(n, 1))
+				if len(spatial) == n {
+					coord = spatial[i]
+					// Repeat the rain field at a compact wavelength while keeping one
+					// continuous coordinate system across adjacent QX fans.
+					period = 17.0
+				}
+				travel := legacyPhase * 4
+				if duration > 0 {
+					travel = elapsed / duration * period
+				}
+				if direction == 1 || direction == 3 {
+					travel = -travel
+				}
+				pos := math.Mod(coord+travel, period)
+				if pos < 0 {
+					pos += period
+				}
+				d := math.Min(pos, period-pos)
+				if d > 3.5 {
+					a[i] = 0
+					continue
+				}
+				intensity = 1 - d/3.5
 			}
-			intensity := 0.25 + 0.75*hash(cycle*197+i, i+17)
 			c[i] = mixRGB(c1, c2, intensity)
+			// Keep rain as an overlay so the authored green base remains visible.
 			a[i] *= 0.35 + 0.65*intensity
 		}
 		applyLayerOpacity(l, a)
@@ -669,26 +777,27 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		applyLayerOpacity(l, a)
 		return c, a, true
 	case "gradientlighting":
-		// Gradient transition points are discrete flash events. Each authored
-		// timestamp emits its own colour for the render frame that crosses it,
-		// then the layer is transparent again until the next timestamp. The
-		// authored duration remains the independent loop period for this layer.
+		// GradientLighting carries an authored transition curve.  Electricity, for
+		// example, uses cyan -> pale blue -> very dark blue -> black -> cyan.
+		// Falling back to the old generic green/orange endpoints made those layers
+		// visibly green/yellow on LINK fans even though those colours do not exist
+		// in the profile.  Follow the captured stops directly when present.
 		dur := number(l.Parameters["duration"], 1000) / 1000
 		if dur <= 0 {
 			dur = 1
 		}
 		if stops := transitionStops(l); len(stops) >= 2 {
-			if stop, fired := crossedGradientEvent(stops, elapsed, dur); fired {
-				for i := range c {
-					c[i] = stop.C
-					a[i] *= stop.A
-				}
-				applyLayerOpacity(l, a)
-				return c, a, true
+			diagnoseGradientEvents(l, elapsed, dur, stops)
+			t := math.Mod(elapsed/dur, 1)
+			if t < 0 {
+				t += 1
 			}
-			for i := range a {
-				a[i] = 0
+			col, alpha := sampleTransitionStops(stops, t)
+			for i := range c {
+				c[i] = col
+				a[i] *= alpha
 			}
+			applyLayerOpacity(l, a)
 			return c, a, true
 		}
 
@@ -786,56 +895,6 @@ func parseTransitionColor(s string) (RGB, float64, bool) {
 		return c, 1, true
 	}
 	return RGB{}, 0, false
-}
-
-// eventFrameWindow is slightly wider than the LINK RGB loop's nominal 20 ms
-// frame interval. Events are detected by whether their boundary was crossed
-// since the preceding render interval, rather than requiring elapsed time to
-// land exactly on an authored timestamp.
-const eventFrameWindow = 0.025
-
-func crossedRecurringEvent(elapsed, period float64) (bool, int) {
-	if period <= 0 || elapsed < 0 {
-		return false, 0
-	}
-	current := int(math.Floor(elapsed / period))
-	previousElapsed := elapsed - eventFrameWindow
-	if previousElapsed < 0 {
-		return true, 0
-	}
-	previous := int(math.Floor(previousElapsed / period))
-	return current != previous, current
-}
-
-func crossedGradientEvent(stops []transitionStop, elapsed, duration float64) (transitionStop, bool) {
-	if len(stops) == 0 || duration <= 0 || elapsed < 0 {
-		return transitionStop{}, false
-	}
-	from := elapsed - eventFrameWindow
-	if from < 0 {
-		from = -1e-9
-	}
-	// Search only the current and immediately preceding cycle. The final stop
-	// at t=1 is the same boundary as the next cycle's t=0, so skip it to avoid
-	// firing the loop boundary twice.
-	firstCycle := int(math.Floor(from / duration))
-	if firstCycle < 0 {
-		firstCycle = 0
-	}
-	lastCycle := int(math.Floor(elapsed / duration))
-	for cycle := firstCycle; cycle <= lastCycle; cycle++ {
-		base := float64(cycle) * duration
-		for i, stop := range stops {
-			if i == len(stops)-1 && math.Abs(stop.T-1) < 1e-9 {
-				continue
-			}
-			eventAt := base + stop.T*duration
-			if eventAt > from && eventAt <= elapsed {
-				return stop, true
-			}
-		}
-	}
-	return transitionStop{}, false
 }
 
 func sampleTransitionStops(stops []transitionStop, t float64) (RGB, float64) {
