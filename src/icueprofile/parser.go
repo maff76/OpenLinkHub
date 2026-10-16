@@ -4,6 +4,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"sort"
 	"strconv"
@@ -255,6 +256,7 @@ func parseLayer(entry *Node, typeNames map[int]string) *Layer {
 		}
 		l.EffectName = findFirstField(effectData, "name")
 		l.Parameters = extractParameters(effectData)
+		auditGradientParser(effectData, l)
 	}
 	if l.Effect == "" {
 		l.Effect = "UnknownLighting"
@@ -285,6 +287,7 @@ func parseLightingLinkPropertyLayer(entry *Node, typeNames map[int]string) *Laye
 	}
 	l.EffectName = findFirstField(effectData, "name")
 	l.Parameters = extractParameters(effectData)
+	auditGradientParser(effectData, l)
 	if l.Effect == "" {
 		l.Effect = "UnknownLighting"
 	}
@@ -311,6 +314,42 @@ func parseExecutionHints(base *Node, l *Layer) {
 		}
 	}
 	l.PlayOption = strings.TrimSpace(childText(hints, "playOption"))
+}
+
+func auditGradientParser(effect *Node, l *Layer) {
+	if effect == nil || l == nil || !strings.EqualFold(l.Effect, "GradientLighting") {
+		return
+	}
+
+	nodes := descendants(effect, "transitions")
+	if len(nodes) == 0 {
+		log.Printf("iCUE Gradient parser audit: name=%q sel=%s sourceTransitions=missing storedTransitions=%v", l.EffectName, l.SelectionMode, l.Parameters["transitions"])
+		return
+	}
+
+	source := collectLeafValues(nodes[0])
+	stored, _ := l.Parameters["transitions"].([]string)
+	sourceRGBA, sourceRGB := 0, 0
+	for _, v := range source {
+		lower := strings.ToLower(v)
+		if strings.Contains(lower, "rgba(") {
+			sourceRGBA++
+		} else if strings.Contains(lower, "rgb(") {
+			sourceRGB++
+		}
+	}
+	storedRGBA, storedRGB := 0, 0
+	for _, v := range stored {
+		lower := strings.ToLower(v)
+		if strings.Contains(lower, "rgba(") {
+			storedRGBA++
+		} else if strings.Contains(lower, "rgb(") {
+			storedRGB++
+		}
+	}
+
+	log.Printf("iCUE Gradient parser audit: name=%q sel=%s sourceLeaves=%d sourceRGB=%d sourceRGBA=%d storedLeaves=%d storedRGB=%d storedRGBA=%d identical=%t source=%v stored=%v",
+		l.EffectName, l.SelectionMode, len(source), sourceRGB, sourceRGBA, len(stored), storedRGB, storedRGBA, strings.Join(source, "\x00") == strings.Join(stored, "\x00"), source, stored)
 }
 
 func extractParameters(effect *Node) map[string]any {
