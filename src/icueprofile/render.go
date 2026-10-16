@@ -810,14 +810,11 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		if velocity == 0 {
 			velocity = 100
 		}
-		// Wave serializes both velocity and duration. They are not summed.
-		// Velocity controls motion while duration defines the authored repeat
-		// window when present, preventing elapsed time from drifting across
-		// successive repetitions of the layer.
+		// Wave motion is driven directly by the authored velocity. Do not wrap
+		// elapsed time at the serialized layer duration: the moving head already
+		// wraps naturally at span+tail below. This A/B deliberately treats
+		// duration as layer metadata rather than a second motion/repeat clock.
 		waveElapsed := elapsed
-		if dur := number(l.Parameters["duration"], 0) / 1000; dur > 0 {
-			waveElapsed = math.Mod(elapsed, dur)
-		}
 		tail := number(l.Parameters["tailLength"], 4)
 		if tail <= 0 {
 			tail = 1
