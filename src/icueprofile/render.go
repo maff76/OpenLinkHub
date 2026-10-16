@@ -13,12 +13,54 @@ import (
 // RGB is one rendered LED colour before OpenLinkHub's device brightness limit.
 type RGB struct{ R, G, B float64 }
 
+// LEDPatch is one layer's command for one physical LED at the current profile
+// time. Active=false means this layer does not touch the LED. Strength is kept
+// separate from activity so fades do not turn into accidental ownership gaps.
+type LEDPatch struct {
+	Active   bool
+	Color    RGB
+	Strength float64
+}
+
+func renderLayerPatches(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64) ([]LEDPatch, bool) {
+	colors, alpha, ok := renderLayer(l, fanOrdinal, n, elapsed, spatial)
+	if !ok {
+		return nil, false
+	}
+	patches := make([]LEDPatch, n)
+	for i := 0; i < n && i < len(colors) && i < len(alpha); i++ {
+		strength := alpha[i]
+		if strength <= 0.000001 {
+			continue
+		}
+		if strength > 1 {
+			strength = 1
+		}
+		patches[i] = LEDPatch{Active: true, Color: colors[i], Strength: strength}
+	}
+	return patches, true
+}
+
+func applyPatch(dst RGB, patch LEDPatch) RGB {
+	if !patch.Active {
+		return dst
+	}
+	// Strength belongs to the active command itself. This retains the proven
+	// fades used by Rain/Breathe while keeping inactivity as a separate state.
+	a := patch.Strength
+	return RGB{
+		R: dst.R*(1-a) + patch.Color.R*a,
+		G: dst.G*(1-a) + patch.Color.G*a,
+		B: dst.B*(1-a) + patch.Color.B*a,
+	}
+}
+
 var ledNumber = regexp.MustCompile(`(?i)Led_Cmd_Led(\d+)$`)
 
-// v12.4.44 command resolver: effects render commands against a shared profile
-// clock. Alpha zero means "no command"; any non-zero alpha is an active
-// command (including authored black). Layers are resolved base-to-top using
-// iCUE's serialized top-to-bottom stack order.
+// v12.4.45 patch resolver: effects generate sparse LED patches against a shared
+// profile clock. A patch has an explicit active bit, so "no command" can never
+// be confused with RGB black. Layers are applied base-to-top using iCUE's
+// serialized top-to-bottom stack order. Authored black remains an active patch.
 
 // Gradient event diagnostics are intentionally observational only: they do not
 // change the v12.4.15 rendering. They count authored transition boundaries that
@@ -260,7 +302,7 @@ func renderCanvas(layers []Layer, logicalBase, ledCount, ordinal int, started ti
 		if !l.Enabled {
 			continue
 		}
-		colors, alpha, ok := renderLayer(l, ordinal, ledCount, elapsed, nil)
+		patches, ok := renderLayerPatches(l, ordinal, ledCount, elapsed, nil)
 		if !ok {
 			unsupported[l.Effect] = true
 			continue
@@ -269,10 +311,7 @@ func renderCanvas(layers []Layer, logicalBase, ledCount, ordinal int, started ti
 			if !selectedAt(l, logicalBase, i) {
 				continue
 			}
-			a := alpha[i]
-			out[i].R = out[i].R*(1-a) + colors[i].R*a
-			out[i].G = out[i].G*(1-a) + colors[i].G*a
-			out[i].B = out[i].B*(1-a) + colors[i].B*a
+			out[i] = applyPatch(out[i], patches[i])
 		}
 	}
 	if brightness <= 0 {
@@ -365,11 +404,21 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 		if !l.Enabled {
 			continue
 		}
-		colors, alpha, ok := renderLayer(l, deviceOrdinal, ledCount, elapsed, topologyPositions(topology, deviceOrdinal, ledCount))
+		patches, ok := renderLayerPatches(l, deviceOrdinal, ledCount, elapsed, topologyPositions(topology, deviceOrdinal, ledCount))
 
 		if !ok {
 			unsupported[l.Effect] = true
 			continue
+		}
+		// Keep the existing diagnostics readable while the renderer itself now
+		// resolves explicit patches.
+		colors := make([]RGB, ledCount)
+		alpha := make([]float64, ledCount)
+		for i, patch := range patches {
+			if patch.Active {
+				colors[i] = patch.Color
+				alpha[i] = patch.Strength
+			}
 		}
 		gradientCrossed := 0
 		if strings.EqualFold(l.Effect, "GradientLighting") {
@@ -431,10 +480,8 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 			// remains untouched. Any active command wins this LED at this stack
 			// level. Partial alpha is retained for effects whose command itself
 			// fades (Rain/Breathe); authored opaque black remains an explicit OFF.
-			if a > 0.000001 {
-				out[i].R = out[i].R*(1-a) + colors[i].R*a
-				out[i].G = out[i].G*(1-a) + colors[i].G*a
-				out[i].B = out[i].B*(1-a) + colors[i].B*a
+			if patches[i].Active {
+				out[i] = applyPatch(out[i], patches[i])
 			}
 			if math.Abs(out[i].R-before.R) > 0.5 || math.Abs(out[i].G-before.G) > 0.5 || math.Abs(out[i].B-before.B) > 0.5 {
 				contribution.changed++
@@ -589,6 +636,17 @@ func sourceQXFanCount(layers []Layer, topology LEDTopology) int {
 	return count
 }
 
+func stringPhase(s string) float64 {
+	// FNV-1a style deterministic phase seed. This is not randomness; it keeps
+	// independent authored layers from collapsing onto the exact same event slot.
+	var h uint32 = 2166136261
+	for i := 0; i < len(s); i++ {
+		h ^= uint32(s[i])
+		h *= 16777619
+	}
+	return float64(h%10000) / 10000.0
+}
+
 func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64) ([]RGB, []float64, bool) {
 	if n <= 0 {
 		return []RGB{}, []float64{}, true
@@ -730,7 +788,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		applyLayerOpacity(l, a)
 		return c, a, true
 	case "colorwavelighting":
-		// v12.4.44: ColorWave is a timed LED-command generator, not an opaque
+		// v12.4.45: ColorWave is a timed LED-command generator, not an opaque
 		// full-layer framebuffer. Every layer runs on the shared profile clock
 		// with its own speed/direction/colours. LEDs outside the travelling active
 		// train return alpha zero (NO COMMAND), allowing lower layers/base to show.
@@ -778,7 +836,12 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 			if sign < 0 {
 				routeCoord = math.Mod(period-coord, period)
 			}
-			front := elapsed / stepSeconds
+			// Separate ColorWave layers are independent streams. Starting every
+			// stream at route position zero makes otherwise valid patches land on
+			// the same LEDs and lets the base dominate the rest of the fan. Give each
+			// authored layer a stable route phase while preserving its own clock,
+			// speed and direction.
+			front := elapsed/stepSeconds + stringPhase(l.ID)*period
 			cyclesBehind := math.Floor((front - routeCoord) / period)
 			lastPass := routeCoord + cyclesBehind*period
 			age := (front - lastPass) * stepSeconds
