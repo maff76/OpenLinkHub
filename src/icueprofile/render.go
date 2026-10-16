@@ -45,12 +45,12 @@ var contributionAudit = struct {
 	bucket int64
 }{}
 
-// timingSemanticsAudit reports the effective periods produced by the current
-// renderer formulae. It is observational only and does not alter rendered output.
-var timingSemanticsAudit = struct {
+// rainStateAudit samples the actual state produced by RainLighting. It is
+// observational only: no colour, alpha, phase, or timing values are changed.
+var rainStateAudit = struct {
 	sync.Mutex
 	bucket int64
-}{}
+}{bucket: -1}
 
 func rgbNear(a, b RGB, tolerance float64) bool {
 	return math.Abs(a.R-b.R) <= tolerance && math.Abs(a.G-b.G) <= tolerance && math.Abs(a.B-b.B) <= tolerance
@@ -367,87 +367,6 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 	// AllLeds layers so each can contribute. ConcreteLeds layers retain normal
 	// source-over compositing, including authored black/off pixels.
 	allLedsBasePainted := false
-	if deviceOrdinal == 0 && len(layers) > 0 {
-		bucket := time.Now().Unix() / 5
-		timingSemanticsAudit.Lock()
-		if timingSemanticsAudit.bucket != bucket {
-			timingSemanticsAudit.bucket = bucket
-			positions := topologyPositions(topology, deviceOrdinal, ledCount)
-			for li, layer := range layers {
-				if !layer.Enabled {
-					continue
-				}
-				switch strings.ToLower(layer.Effect) {
-				case "gradientlighting":
-					durationMS := number(layer.Parameters["duration"], 1000)
-					log.Printf("iCUE effective timing: xml=%d effect=GradientLighting sel=%s rawDurationMs=%.0f effectiveCycle=%.4fs formula=duration", li, layer.SelectionMode, durationMS, durationMS/1000)
-				case "colorwavelighting":
-					rawSpeed := number(layer.Parameters["speed"], 2)
-					speed := rawSpeed
-					if speed < 1 {
-						speed = 1
-					}
-					if speed > 3 {
-						speed = 3
-					}
-					period := 1.0 / speed
-					formula := "1/speed"
-					if _, hasSpeed := layer.Parameters["speed"]; !hasSpeed {
-						period = capturedPeriod(layer, period)
-						formula = "duration-fallback"
-					}
-					log.Printf("iCUE effective timing: xml=%d effect=ColorWaveLighting sel=%s rawSpeed=%.3f rawDurationMs=%.0f effectiveCycle=%.4fs formula=%s", li, layer.SelectionMode, rawSpeed, number(layer.Parameters["duration"], 0), period, formula)
-				case "rainlighting":
-					rawSpeed := number(layer.Parameters["speed"], 1)
-					speed := rawSpeed
-					if speed <= 0 {
-						speed = 1
-					}
-					duration := number(layer.Parameters["duration"], 0) / 1000
-					random := boolParam(layer.Parameters["random"], false)
-					if random {
-						slotPeriod := 1.0 / (8.0 * speed)
-						log.Printf("iCUE effective timing: xml=%d effect=RainLighting sel=%s random=true rawSpeed=%.3f rawDurationMs=%.0f effectiveEventPeriod=%.4fs formula=1/(8*speed)", li, layer.SelectionMode, rawSpeed, number(layer.Parameters["duration"], 0), slotPeriod)
-					} else if duration > 0 {
-						log.Printf("iCUE effective timing: xml=%d effect=RainLighting sel=%s random=false rawSpeed=%.3f rawDurationMs=%.0f effectiveSpatialCycle=%.4fs formula=duration", li, layer.SelectionMode, rawSpeed, number(layer.Parameters["duration"], 0), duration)
-					} else {
-						period := float64(maxInt(ledCount, 1))
-						if len(positions) == ledCount {
-							period = 17.0
-						}
-						cycle := period / (8.0 * speed)
-						log.Printf("iCUE effective timing: xml=%d effect=RainLighting sel=%s random=false rawSpeed=%.3f rawDurationMs=0 effectiveSpatialCycle=%.4fs formula=period/(8*speed)", li, layer.SelectionMode, rawSpeed, cycle)
-					}
-				case "wavelighting":
-					velocity := number(layer.Parameters["velocity"], 100)
-					if velocity == 0 {
-						velocity = 100
-					}
-					tail := number(layer.Parameters["tailLength"], 4)
-					if tail <= 0 {
-						tail = 1
-					}
-					span := float64(maxInt(ledCount, 1))
-					if len(positions) == ledCount && len(positions) > 0 {
-						minC, maxC := positions[0], positions[0]
-						for _, x := range positions[1:] {
-							if x < minC {
-								minC = x
-							}
-							if x > maxC {
-								maxC = x
-							}
-						}
-						span = maxC - minC + 1
-					}
-					travelCycle := (span + tail) / math.Abs(velocity)
-					duration := number(layer.Parameters["duration"], 0) / 1000
-					log.Printf("iCUE effective timing: xml=%d effect=WaveLighting sel=%s rawVelocity=%.3f rawTail=%.3f rawDurationMs=%.0f topologySpan=%.3f naturalTravelCycle=%.4fs repeatWindow=%.4fs formula=(span+tail)/abs(velocity),elapsed%%duration", li, layer.SelectionMode, velocity, tail, number(layer.Parameters["duration"], 0), span, travelCycle, duration)
-				}
-			}
-		}
-		timingSemanticsAudit.Unlock()
-	}
 
 	for _, li := range renderOrder {
 		l := layers[li]
@@ -455,6 +374,47 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 			continue
 		}
 		colors, alpha, ok := renderLayer(l, deviceOrdinal, ledCount, elapsed, topologyPositions(topology, deviceOrdinal, ledCount))
+		if ok && deviceOrdinal == 0 && strings.EqualFold(l.Effect, "RainLighting") {
+			bucket := int64(math.Floor(elapsed * 4)) // one sample per ~250 ms of profile time
+			rainStateAudit.Lock()
+			if rainStateAudit.bucket != bucket {
+				rainStateAudit.bucket = bucket
+				speed := number(l.Parameters["speed"], 1)
+				if speed <= 0 {
+					speed = 1
+				}
+				duration := number(l.Parameters["duration"], 0) / 1000
+				random := boolParam(l.Parameters["random"], false)
+				direction := int(number(l.Parameters["direction"], 0))
+				legacyPhase := elapsed * (2.0 * speed)
+				period := float64(maxInt(ledCount, 1))
+				positions := topologyPositions(topology, deviceOrdinal, ledCount)
+				if len(positions) == ledCount {
+					period = 17.0
+				}
+				travel := legacyPhase * 4
+				formula := "legacyPhase*4"
+				if !random && duration > 0 {
+					travel = elapsed / duration * period
+					formula = "elapsed/duration*period"
+				}
+				active := 0
+				alphaMin, alphaMax := 1.0, 0.0
+				for _, av := range alpha {
+					if av > 0 {
+						active++
+					}
+					if av < alphaMin {
+						alphaMin = av
+					}
+					if av > alphaMax {
+						alphaMax = av
+					}
+				}
+				log.Printf("iCUE Rain state audit: xml=%d elapsed=%.4f sel=%s random=%t speed=%.3f duration=%.4fs direction=%d legacyPhase=%.4f period=%.1f travel=%.4f travelMod=%.4f formula=%s active=%d/%d alphaMin=%.4f alphaMax=%.4f params=%v", li, elapsed, l.SelectionMode, random, speed, duration, direction, legacyPhase, period, travel, math.Mod(travel, period), formula, active, len(alpha), alphaMin, alphaMax, l.Parameters)
+			}
+			rainStateAudit.Unlock()
+		}
 		if !ok {
 			unsupported[l.Effect] = true
 			continue
