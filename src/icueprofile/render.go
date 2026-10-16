@@ -299,23 +299,25 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 	// portable without inventing colours, timings, or per-profile rules.
 	sourceDeviceCount := sourceQXFanCount(layers, topology)
 	elapsed := time.Since(started).Seconds()
+	// iCUE A/B: render broad AllLeds layers as the background first, then
+	// composite ConcreteLeds/sparse layers over them. Preserve the existing
+	// reverse-XML relative order within each group.
+	renderOrder := make([]int, 0, len(layers))
 	for li := len(layers) - 1; li >= 0; li-- {
+		if strings.EqualFold(layers[li].SelectionMode, "AllLeds") || layers[li].SelectionMode == "" {
+			renderOrder = append(renderOrder, li)
+		}
+	}
+	for li := len(layers) - 1; li >= 0; li-- {
+		if !strings.EqualFold(layers[li].SelectionMode, "AllLeds") && layers[li].SelectionMode != "" {
+			renderOrder = append(renderOrder, li)
+		}
+	}
+	for _, li := range renderOrder {
 		l := layers[li]
 		if !l.Enabled {
 			continue
 		}
-
-		// Diagnostic A/B: isolate the sparse per-LED Electricity Gradient
-		// partitions from the broad whole-device layers authored alongside them.
-		// Do not alter timing, transition sampling, topology mapping, or any other
-		// effect semantics; simply omit AllLeds ColorWave/Gradient layers so their
-		// interaction with the ten ConcreteLeds Gradient groups can be observed.
-		if strings.EqualFold(l.SelectionMode, "AllLeds") || l.SelectionMode == "" {
-			if strings.EqualFold(l.Effect, "ColorWaveLighting") || strings.EqualFold(l.Effect, "GradientLighting") {
-				continue
-			}
-		}
-
 		colors, alpha, ok := renderLayer(l, deviceOrdinal, ledCount, elapsed, topologyPositions(topology, deviceOrdinal, ledCount))
 		if !ok {
 			unsupported[l.Effect] = true
