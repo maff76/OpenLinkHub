@@ -45,12 +45,15 @@ var contributionAudit = struct {
 	bucket int64
 }{}
 
-// gradientPhaseAudit samples authored Gradient phase progression every 100 ms.
-// It is diagnostic-only and does not alter rendering.
-var gradientPhaseAudit = struct {
+// gradientClockAudit follows one representative Gradient against the monotonic
+// wall clock at ~100 ms cadence. It is diagnostic-only and does not alter rendering.
+var gradientClockAudit = struct {
 	sync.Mutex
-	bucket int64
-}{bucket: -1}
+	initialized bool
+	lastWall    time.Time
+	lastElapsed float64
+	lastPhase   float64
+}{}
 
 func rgbNear(a, b RGB, tolerance float64) bool {
 	return math.Abs(a.R-b.R) <= tolerance && math.Abs(a.G-b.G) <= tolerance && math.Abs(a.B-b.B) <= tolerance
@@ -367,44 +370,65 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 	// AllLeds layers so each can contribute. ConcreteLeds layers retain normal
 	// source-over compositing, including authored black/off pixels.
 	allLedsBasePainted := false
-	if deviceOrdinal == 0 {
-		phaseBucket := int64(math.Floor(elapsed * 10))
-		gradientPhaseAudit.Lock()
-		if gradientPhaseAudit.bucket != phaseBucket {
-			gradientPhaseAudit.bucket = phaseBucket
-			for li, layer := range layers {
-				if !layer.Enabled || !strings.EqualFold(layer.Effect, "GradientLighting") {
-					continue
-				}
-				stops := transitionStops(layer)
-				dur := number(layer.Parameters["duration"], 1000) / 1000
-				if dur <= 0 || len(stops) == 0 {
-					continue
-				}
+	if deviceOrdinal == 0 && len(layers) > 0 {
+		// Electricity xml=0 is the representative clock. More generally, use the
+		// first enabled Gradient so this audit remains useful on other profiles.
+		representative := -1
+		for li, layer := range layers {
+			if layer.Enabled && strings.EqualFold(layer.Effect, "GradientLighting") {
+				representative = li
+				break
+			}
+		}
+		if representative >= 0 {
+			layer := layers[representative]
+			stops := transitionStops(layer)
+			dur := number(layer.Parameters["duration"], 1000) / 1000
+			if dur > 0 && len(stops) > 0 {
+				now := time.Now()
 				phase := math.Mod(elapsed/dur, 1)
 				if phase < 0 {
 					phase += 1
 				}
-				interval := 0
-				frac := 0.0
-				for si := 1; si < len(stops); si++ {
-					if phase <= stops[si].T {
-						interval = si - 1
-						span := stops[si].T - stops[si-1].T
-						if span > 0 {
-							frac = (phase - stops[si-1].T) / span
+
+				gradientClockAudit.Lock()
+				// A backwards elapsed value means a new/restarted profile; start a fresh
+				// wall-clock baseline rather than comparing two different runs.
+				if gradientClockAudit.initialized && elapsed < gradientClockAudit.lastElapsed {
+					gradientClockAudit.initialized = false
+				}
+				if !gradientClockAudit.initialized {
+					gradientClockAudit.initialized = true
+					gradientClockAudit.lastWall = now
+					gradientClockAudit.lastElapsed = elapsed
+					gradientClockAudit.lastPhase = phase
+				} else if wallDelta := now.Sub(gradientClockAudit.lastWall).Seconds(); wallDelta >= 0.1 {
+					elapsedDelta := elapsed - gradientClockAudit.lastElapsed
+					interval := 0
+					frac := 0.0
+					for si := 1; si < len(stops); si++ {
+						if phase <= stops[si].T {
+							interval = si - 1
+							span := stops[si].T - stops[si-1].T
+							if span > 0 {
+								frac = (phase - stops[si-1].T) / span
+							}
+							break
 						}
-						break
 					}
+					if phase > stops[len(stops)-1].T {
+						interval = len(stops) - 1
+						frac = 1
+					}
+					wrapped := phase < gradientClockAudit.lastPhase
+					log.Printf("iCUE Gradient clock: xml=%d sel=%s wallDt=%.4f elapsedDt=%.4f ratio=%.4f elapsed=%.4f dur=%.4f phase=%.6f interval=%d frac=%.6f wrap=%t", representative, layer.SelectionMode, wallDelta, elapsedDelta, elapsedDelta/wallDelta, elapsed, dur, phase, interval, frac, wrapped)
+					gradientClockAudit.lastWall = now
+					gradientClockAudit.lastElapsed = elapsed
+					gradientClockAudit.lastPhase = phase
 				}
-				if phase > stops[len(stops)-1].T {
-					interval = len(stops) - 1
-					frac = 1
-				}
-				log.Printf("iCUE Gradient phase audit: xml=%d sel=%s elapsed=%.4f dur=%.4f phase=%.6f interval=%d frac=%.6f", li, layer.SelectionMode, elapsed, dur, phase, interval, frac)
+				gradientClockAudit.Unlock()
 			}
 		}
-		gradientPhaseAudit.Unlock()
 	}
 	for _, li := range renderOrder {
 		l := layers[li]
