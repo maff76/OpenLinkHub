@@ -362,72 +362,43 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		applyLayerOpacity(l, a)
 		return c, a, true
 	case "rainlighting":
-		// iCUE RainLighting carries two authored colours.  In cereal exports
-		// these are usually packed ARGB integers under colors/first+second.
-		// Preserve those colours instead of using a generic fallback.
+		// Treat Rain as a recurring impact event: a drop flashes for one output
+		// frame, immediately disappears, then waits for the next authored cycle.
+		// Each cycle re-rolls the random LED field, so drops do not linger.
 		c1, c2 := effectColors(l, RGB{R: 25, G: 47, B: 9}, RGB{R: 100, G: 169, B: 45})
 		speed := number(l.Parameters["speed"], 1)
 		if speed <= 0 {
 			speed = 1
 		}
-		random := boolParam(l.Parameters["random"], false)
-		direction := int(number(l.Parameters["direction"], 0))
-		// Captured RainLighting carries an explicit duration. For deterministic
-		// travelling rain, treat that as one complete spatial cycle. This fixes
-		// the old renderer's topology-dependent timing (for example a 17-position
-		// QX field took ~2.125 s even when iCUE authored duration=1000 ms).
-		// Keep the legacy speed-derived phase only as a fallback for profiles that
-		// do not serialize a usable duration.
 		duration := number(l.Parameters["duration"], 0) / 1000
-		legacyPhase := elapsed * (2.0 * speed)
-		for i := 0; i < n; i++ {
-			var intensity float64
-			if random {
-				randomPhase := legacyPhase
-				if direction == 1 || direction == 3 {
-					randomPhase = -randomPhase
-				}
-				slot := int(randomPhase * 4)
-				h := hash(slot-i*2, fanOrdinal*42+i)
-				if h <= 0.76 {
-					a[i] = 0
-					continue
-				}
-				intensity = 0.25 + 0.75*hash(slot, i+17)
-			} else {
-				// Deterministic rain follows the device's logical spatial layout when
-				// one is known.  QX LED numbering doubles back across lighting zones,
-				// so raw LED index order produces the wrong motion.  The SDK-captured
-				// QX positions below preserve Corsair's logical X ordering.  Other
-				// devices deliberately retain the previous index-based fallback.
-				coord := float64(i) + float64(fanOrdinal*3)
-				period := float64(maxInt(n, 1))
-				if len(spatial) == n {
-					coord = spatial[i]
-					// Repeat the rain field at a compact wavelength while keeping one
-					// continuous coordinate system across adjacent QX fans.
-					period = 17.0
-				}
-				travel := legacyPhase * 4
-				if duration > 0 {
-					travel = elapsed / duration * period
-				}
-				if direction == 1 || direction == 3 {
-					travel = -travel
-				}
-				pos := math.Mod(coord+travel, period)
-				if pos < 0 {
-					pos += period
-				}
-				d := math.Min(pos, period-pos)
-				if d > 3.5 {
-					a[i] = 0
-					continue
-				}
-				intensity = 1 - d/3.5
+		if duration <= 0 {
+			// Older profiles without an authored duration retain the previous
+			// speed-derived cadence rather than inventing a new time scale.
+			duration = 1.0 / (2.0 * speed)
+		}
+		const eventFrame = 0.020
+		cycleTime := math.Mod(elapsed, duration)
+		if cycleTime < 0 {
+			cycleTime += duration
+		}
+		if cycleTime >= eventFrame {
+			for i := range a {
+				a[i] = 0
 			}
+			return c, a, true
+		}
+
+		event := int(math.Floor(elapsed / duration))
+		for i := 0; i < n; i++ {
+			// Preserve the existing sparse/random character, but seed it from the
+			// recurrence number so every rain impact chooses a fresh field.
+			h := hash(event-i*2, fanOrdinal*42+i)
+			if h <= 0.76 {
+				a[i] = 0
+				continue
+			}
+			intensity := 0.25 + 0.75*hash(event, i+17)
 			c[i] = mixRGB(c1, c2, intensity)
-			// Keep rain as an overlay so the authored green base remains visible.
 			a[i] *= 0.35 + 0.65*intensity
 		}
 		applyLayerOpacity(l, a)
@@ -705,39 +676,47 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		applyLayerOpacity(l, a)
 		return c, a, true
 	case "gradientlighting":
-		// GradientLighting carries an authored transition curve.  Electricity, for
-		// example, uses cyan -> pale blue -> very dark blue -> black -> cyan.
-		// Falling back to the old generic green/orange endpoints made those layers
-		// visibly green/yellow on LINK fans even though those colours do not exist
-		// in the profile.  Follow the captured stops directly when present.
+		// Treat authored Gradient stops as instantaneous events, not intervals to
+		// interpolate across. Each stop flashes its own authored colour for one
+		// output frame, then the layer is transparent until the next stop. The
+		// authored duration remains the complete looping timeline, so differently
+		// sized layers naturally drift out of phase and build the dense effect.
 		dur := number(l.Parameters["duration"], 1000) / 1000
 		if dur <= 0 {
 			dur = 1
 		}
 		if stops := transitionStops(l); len(stops) >= 2 {
-			t := math.Mod(elapsed/dur, 1)
-			if t < 0 {
-				t += 1
+			const eventFrame = 0.020
+			cycleTime := math.Mod(elapsed, dur)
+			if cycleTime < 0 {
+				cycleTime += dur
 			}
 
-			// Treat the first authored transition interval as the visible flash
-			// lifetime.  Once the next transition boundary is reached this layer
-			// becomes transparent for the rest of its cycle, allowing independently
-			// timed Electricity layers underneath to contribute instead of leaving
-			// this LED illuminated for most of the 1-2 second layer duration.
-			flashEnd := stops[1].T
-			if flashEnd > stops[0].T && t >= stops[0].T && t < flashEnd {
-				u := (t - stops[0].T) / (flashEnd - stops[0].T)
-				col := mixRGB(stops[0].C, stops[1].C, u)
-				alpha := stops[0].A + (stops[1].A-stops[0].A)*u
-				for i := range c {
-					c[i] = col
-					a[i] *= alpha
+			event := -1
+			for i := range stops {
+				// A stop at normalized 1.0 is the same instant as the next loop's
+				// 0.0 stop; let the next cycle fire it once rather than double-pulse.
+				if stops[i].T >= 1 {
+					continue
 				}
-			} else {
+				eventTime := stops[i].T * dur
+				if cycleTime >= eventTime && cycleTime < eventTime+eventFrame {
+					event = i
+					break
+				}
+			}
+
+			if event < 0 {
 				for i := range a {
 					a[i] = 0
 				}
+				return c, a, true
+			}
+
+			col, alpha := stops[event].C, stops[event].A
+			for i := range c {
+				c[i] = col
+				a[i] *= alpha
 			}
 			applyLayerOpacity(l, a)
 			return c, a, true
