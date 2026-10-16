@@ -45,14 +45,11 @@ var contributionAudit = struct {
 	bucket int64
 }{}
 
-// gradientClockAudit follows one representative Gradient against the monotonic
-// wall clock at ~100 ms cadence. It is diagnostic-only and does not alter rendering.
-var gradientClockAudit = struct {
+// timingSemanticsAudit reports the effective periods produced by the current
+// renderer formulae. It is observational only and does not alter rendered output.
+var timingSemanticsAudit = struct {
 	sync.Mutex
-	initialized bool
-	lastWall    time.Time
-	lastElapsed float64
-	lastPhase   float64
+	bucket int64
 }{}
 
 func rgbNear(a, b RGB, tolerance float64) bool {
@@ -371,65 +368,87 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 	// source-over compositing, including authored black/off pixels.
 	allLedsBasePainted := false
 	if deviceOrdinal == 0 && len(layers) > 0 {
-		// Electricity xml=0 is the representative clock. More generally, use the
-		// first enabled Gradient so this audit remains useful on other profiles.
-		representative := -1
-		for li, layer := range layers {
-			if layer.Enabled && strings.EqualFold(layer.Effect, "GradientLighting") {
-				representative = li
-				break
-			}
-		}
-		if representative >= 0 {
-			layer := layers[representative]
-			stops := transitionStops(layer)
-			dur := number(layer.Parameters["duration"], 1000) / 1000
-			if dur > 0 && len(stops) > 0 {
-				now := time.Now()
-				phase := math.Mod(elapsed/dur, 1)
-				if phase < 0 {
-					phase += 1
+		bucket := time.Now().Unix() / 5
+		timingSemanticsAudit.Lock()
+		if timingSemanticsAudit.bucket != bucket {
+			timingSemanticsAudit.bucket = bucket
+			positions := topologyPositions(topology, deviceOrdinal, ledCount)
+			for li, layer := range layers {
+				if !layer.Enabled {
+					continue
 				}
-
-				gradientClockAudit.Lock()
-				// A backwards elapsed value means a new/restarted profile; start a fresh
-				// wall-clock baseline rather than comparing two different runs.
-				if gradientClockAudit.initialized && elapsed < gradientClockAudit.lastElapsed {
-					gradientClockAudit.initialized = false
-				}
-				if !gradientClockAudit.initialized {
-					gradientClockAudit.initialized = true
-					gradientClockAudit.lastWall = now
-					gradientClockAudit.lastElapsed = elapsed
-					gradientClockAudit.lastPhase = phase
-				} else if wallDelta := now.Sub(gradientClockAudit.lastWall).Seconds(); wallDelta >= 0.1 {
-					elapsedDelta := elapsed - gradientClockAudit.lastElapsed
-					interval := 0
-					frac := 0.0
-					for si := 1; si < len(stops); si++ {
-						if phase <= stops[si].T {
-							interval = si - 1
-							span := stops[si].T - stops[si-1].T
-							if span > 0 {
-								frac = (phase - stops[si-1].T) / span
-							}
-							break
+				switch strings.ToLower(layer.Effect) {
+				case "gradientlighting":
+					durationMS := number(layer.Parameters["duration"], 1000)
+					log.Printf("iCUE effective timing: xml=%d effect=GradientLighting sel=%s rawDurationMs=%.0f effectiveCycle=%.4fs formula=duration", li, layer.SelectionMode, durationMS, durationMS/1000)
+				case "colorwavelighting":
+					rawSpeed := number(layer.Parameters["speed"], 2)
+					speed := rawSpeed
+					if speed < 1 {
+						speed = 1
+					}
+					if speed > 3 {
+						speed = 3
+					}
+					period := 1.0 / speed
+					formula := "1/speed"
+					if _, hasSpeed := layer.Parameters["speed"]; !hasSpeed {
+						period = capturedPeriod(layer, period)
+						formula = "duration-fallback"
+					}
+					log.Printf("iCUE effective timing: xml=%d effect=ColorWaveLighting sel=%s rawSpeed=%.3f rawDurationMs=%.0f effectiveCycle=%.4fs formula=%s", li, layer.SelectionMode, rawSpeed, number(layer.Parameters["duration"], 0), period, formula)
+				case "rainlighting":
+					rawSpeed := number(layer.Parameters["speed"], 1)
+					speed := rawSpeed
+					if speed <= 0 {
+						speed = 1
+					}
+					duration := number(layer.Parameters["duration"], 0) / 1000
+					random := boolParam(layer.Parameters["random"], false)
+					if random {
+						slotPeriod := 1.0 / (8.0 * speed)
+						log.Printf("iCUE effective timing: xml=%d effect=RainLighting sel=%s random=true rawSpeed=%.3f rawDurationMs=%.0f effectiveEventPeriod=%.4fs formula=1/(8*speed)", li, layer.SelectionMode, rawSpeed, number(layer.Parameters["duration"], 0), slotPeriod)
+					} else if duration > 0 {
+						log.Printf("iCUE effective timing: xml=%d effect=RainLighting sel=%s random=false rawSpeed=%.3f rawDurationMs=%.0f effectiveSpatialCycle=%.4fs formula=duration", li, layer.SelectionMode, rawSpeed, number(layer.Parameters["duration"], 0), duration)
+					} else {
+						period := float64(maxInt(ledCount, 1))
+						if len(positions) == ledCount {
+							period = 17.0
 						}
+						cycle := period / (8.0 * speed)
+						log.Printf("iCUE effective timing: xml=%d effect=RainLighting sel=%s random=false rawSpeed=%.3f rawDurationMs=0 effectiveSpatialCycle=%.4fs formula=period/(8*speed)", li, layer.SelectionMode, rawSpeed, cycle)
 					}
-					if phase > stops[len(stops)-1].T {
-						interval = len(stops) - 1
-						frac = 1
+				case "wavelighting":
+					velocity := number(layer.Parameters["velocity"], 100)
+					if velocity == 0 {
+						velocity = 100
 					}
-					wrapped := phase < gradientClockAudit.lastPhase
-					log.Printf("iCUE Gradient clock: xml=%d sel=%s wallDt=%.4f elapsedDt=%.4f ratio=%.4f elapsed=%.4f dur=%.4f phase=%.6f interval=%d frac=%.6f wrap=%t", representative, layer.SelectionMode, wallDelta, elapsedDelta, elapsedDelta/wallDelta, elapsed, dur, phase, interval, frac, wrapped)
-					gradientClockAudit.lastWall = now
-					gradientClockAudit.lastElapsed = elapsed
-					gradientClockAudit.lastPhase = phase
+					tail := number(layer.Parameters["tailLength"], 4)
+					if tail <= 0 {
+						tail = 1
+					}
+					span := float64(maxInt(ledCount, 1))
+					if len(positions) == ledCount && len(positions) > 0 {
+						minC, maxC := positions[0], positions[0]
+						for _, x := range positions[1:] {
+							if x < minC {
+								minC = x
+							}
+							if x > maxC {
+								maxC = x
+							}
+						}
+						span = maxC - minC + 1
+					}
+					travelCycle := (span + tail) / math.Abs(velocity)
+					duration := number(layer.Parameters["duration"], 0) / 1000
+					log.Printf("iCUE effective timing: xml=%d effect=WaveLighting sel=%s rawVelocity=%.3f rawTail=%.3f rawDurationMs=%.0f topologySpan=%.3f naturalTravelCycle=%.4fs repeatWindow=%.4fs formula=(span+tail)/abs(velocity),elapsed%%duration", li, layer.SelectionMode, velocity, tail, number(layer.Parameters["duration"], 0), span, travelCycle, duration)
 				}
-				gradientClockAudit.Unlock()
 			}
 		}
+		timingSemanticsAudit.Unlock()
 	}
+
 	for _, li := range renderOrder {
 		l := layers[li]
 		if !l.Enabled {
