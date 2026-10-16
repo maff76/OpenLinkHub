@@ -40,6 +40,29 @@ var outputDiag = struct {
 	previous           map[int][]byte
 }{previous: map[int][]byte{}}
 
+var contributionAudit = struct {
+	sync.Mutex
+	bucket int64
+}{}
+
+func rgbNear(a, b RGB, tolerance float64) bool {
+	return math.Abs(a.R-b.R) <= tolerance && math.Abs(a.G-b.G) <= tolerance && math.Abs(a.B-b.B) <= tolerance
+}
+
+// topologyLogicalBase returns the exact logical base only when the topology can
+// express one. It is used solely for the diagnostic authored-selection count;
+// actual mapping continues to use selectedWithTopology unchanged.
+func topologyLogicalBase(topology LEDTopology, deviceOrdinal int) int {
+	if topology == nil {
+		return -1
+	}
+	logical, ok := topology.LogicalLED(deviceOrdinal, 0)
+	if !ok {
+		return -1
+	}
+	return logical
+}
+
 func gradientCrossings(elapsed, dur float64, stops []transitionStop) int {
 	if dur <= 0 || len(stops) < 2 {
 		return 0
@@ -313,6 +336,18 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 			renderOrder = append(renderOrder, li)
 		}
 	}
+	type contributionSample struct {
+		layerIndex     int
+		effect         string
+		selection      string
+		selected       int
+		mapped         int
+		activeOutput   int
+		nonBlackOutput int
+		changed        int
+		post           map[int]RGB
+	}
+	contributions := make([]contributionSample, 0, len(renderOrder))
 	for _, li := range renderOrder {
 		l := layers[li]
 		if !l.Enabled {
@@ -330,22 +365,48 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 		}
 		mappedThisLayer := 0
 		changedThisLayer := 0
+		contribution := contributionSample{
+			layerIndex: li,
+			effect:     l.Effect,
+			selection:  l.SelectionMode,
+			post:       make(map[int]RGB),
+		}
+		if contribution.selection == "" {
+			contribution.selection = "AllLeds"
+		}
 		for i := 0; i < ledCount; i++ {
+			if strings.EqualFold(l.SelectionMode, "AllLeds") || l.SelectionMode == "" {
+				contribution.selected++
+			} else if selectedAt(l, topologyLogicalBase(topology, deviceOrdinal), i) {
+				contribution.selected++
+			}
 			if !selectedWithTopology(l, topology, deviceOrdinal, i, sourceDeviceCount) {
 				continue
 			}
+			contribution.mapped++
 			if gradientCrossed > 0 {
 				mappedThisLayer++
 			}
 			a := alpha[i]
+			if a > 0.000001 {
+				contribution.activeOutput++
+			}
+			if a > 0.000001 && (math.Abs(colors[i].R) > 0.5 || math.Abs(colors[i].G) > 0.5 || math.Abs(colors[i].B) > 0.5) {
+				contribution.nonBlackOutput++
+			}
 			before := out[i]
 			out[i].R = out[i].R*(1-a) + colors[i].R*a
 			out[i].G = out[i].G*(1-a) + colors[i].G*a
 			out[i].B = out[i].B*(1-a) + colors[i].B*a
-			if gradientCrossed > 0 && (math.Abs(out[i].R-before.R) > 0.5 || math.Abs(out[i].G-before.G) > 0.5 || math.Abs(out[i].B-before.B) > 0.5) {
-				changedThisLayer++
+			if math.Abs(out[i].R-before.R) > 0.5 || math.Abs(out[i].G-before.G) > 0.5 || math.Abs(out[i].B-before.B) > 0.5 {
+				contribution.changed++
+				contribution.post[i] = out[i]
+				if gradientCrossed > 0 {
+					changedThisLayer++
+				}
 			}
 		}
+		contributions = append(contributions, contribution)
 		if gradientCrossed > 0 {
 			outputDiag.Lock()
 			outputDiag.crossed += gradientCrossed
@@ -353,6 +414,28 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 			outputDiag.changedByGradients += changedThisLayer
 			outputDiag.Unlock()
 		}
+	}
+	// Contribution audit is observational only. It records whether each authored
+	// layer selects/maps LEDs, produces visible pixels, changes the compositor,
+	// and whether those exact post-layer pixels remain in the final composite.
+	// This distinguishes missing topology from inactive effect output and from
+	// later layers simply covering an otherwise healthy effect.
+	if deviceOrdinal == 0 {
+		bucket := int64(math.Floor(elapsed))
+		contributionAudit.Lock()
+		if contributionAudit.bucket != bucket {
+			contributionAudit.bucket = bucket
+			for _, sample := range contributions {
+				survives := 0
+				for i, post := range sample.post {
+					if i >= 0 && i < len(out) && rgbNear(out[i], post, 0.5) {
+						survives++
+					}
+				}
+				log.Printf("iCUE layer contribution: xml=%d effect=%s sel=%s selected=%d mapped=%d active=%d nonBlack=%d changed=%d survivesFinal=%d", sample.layerIndex, sample.effect, sample.selection, sample.selected, sample.mapped, sample.activeOutput, sample.nonBlackOutput, sample.changed, survives)
+			}
+		}
+		contributionAudit.Unlock()
 	}
 	if brightness <= 0 {
 		brightness = 1
