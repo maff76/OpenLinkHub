@@ -28,6 +28,45 @@ var gradientDiag = struct {
 	samples      []string
 }{}
 
+// outputDiag traces Gradient events through topology selection and into the final
+// per-fan RGB buffer. It is diagnostic-only and does not alter rendered colours.
+var outputDiag = struct {
+	sync.Mutex
+	bucket             int64
+	crossed            int
+	mappedLEDRefs      int
+	changedByGradients int
+	finalChangedLEDs   int
+	previous           map[int][]byte
+}{previous: map[int][]byte{}}
+
+func gradientCrossings(elapsed, dur float64, stops []transitionStop) int {
+	if dur <= 0 || len(stops) < 2 {
+		return 0
+	}
+	const frameWindow = 0.025
+	prev := elapsed - frameWindow
+	if prev < 0 {
+		prev = 0
+	}
+	crossed := 0
+	startCycle := int(math.Floor(prev / dur))
+	endCycle := int(math.Floor(elapsed / dur))
+	for cycle := startCycle; cycle <= endCycle; cycle++ {
+		base := float64(cycle) * dur
+		for si, st := range stops {
+			if si == len(stops)-1 && st.T >= 0.999999 {
+				continue
+			}
+			eventTime := base + st.T*dur
+			if eventTime > prev && eventTime <= elapsed {
+				crossed++
+			}
+		}
+	}
+	return crossed
+}
+
 func diagnoseGradientEvents(l Layer, elapsed, dur float64, stops []transitionStop) {
 	if dur <= 0 || len(stops) < 2 {
 		return
@@ -270,14 +309,35 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 			unsupported[l.Effect] = true
 			continue
 		}
+		gradientCrossed := 0
+		if strings.EqualFold(l.Effect, "GradientLighting") {
+			dur := number(l.Parameters["duration"], 1000) / 1000
+			gradientCrossed = gradientCrossings(elapsed, dur, transitionStops(l))
+		}
+		mappedThisLayer := 0
+		changedThisLayer := 0
 		for i := 0; i < ledCount; i++ {
 			if !selectedWithTopology(l, topology, deviceOrdinal, i, sourceDeviceCount) {
 				continue
 			}
+			if gradientCrossed > 0 {
+				mappedThisLayer++
+			}
 			a := alpha[i]
+			before := out[i]
 			out[i].R = out[i].R*(1-a) + colors[i].R*a
 			out[i].G = out[i].G*(1-a) + colors[i].G*a
 			out[i].B = out[i].B*(1-a) + colors[i].B*a
+			if gradientCrossed > 0 && (math.Abs(out[i].R-before.R) > 0.5 || math.Abs(out[i].G-before.G) > 0.5 || math.Abs(out[i].B-before.B) > 0.5) {
+				changedThisLayer++
+			}
+		}
+		if gradientCrossed > 0 {
+			outputDiag.Lock()
+			outputDiag.crossed += gradientCrossed
+			outputDiag.mappedLEDRefs += mappedThisLayer
+			outputDiag.changedByGradients += changedThisLayer
+			outputDiag.Unlock()
 		}
 	}
 	if brightness <= 0 {
@@ -287,6 +347,31 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 	for _, c := range out {
 		buf = append(buf, byte(clamp(c.R*brightness)), byte(clamp(c.G*brightness)), byte(clamp(c.B*brightness)))
 	}
+	outputDiag.Lock()
+	prevBuf := outputDiag.previous[deviceOrdinal]
+	if len(prevBuf) == len(buf) {
+		for i := 0; i+2 < len(buf); i += 3 {
+			if buf[i] != prevBuf[i] || buf[i+1] != prevBuf[i+1] || buf[i+2] != prevBuf[i+2] {
+				outputDiag.finalChangedLEDs++
+			}
+		}
+	}
+	copyBuf := make([]byte, len(buf))
+	copy(copyBuf, buf)
+	outputDiag.previous[deviceOrdinal] = copyBuf
+	bucket := int64(math.Floor(elapsed))
+	if outputDiag.bucket == 0 {
+		outputDiag.bucket = bucket
+	}
+	if bucket != outputDiag.bucket {
+		log.Printf("iCUE Gradient pipeline: crossedEvents=%d mappedLEDRefs=%d changedByGradientComposition=%d finalBufferChangedLEDs=%d", outputDiag.crossed, outputDiag.mappedLEDRefs, outputDiag.changedByGradients, outputDiag.finalChangedLEDs)
+		outputDiag.bucket = bucket
+		outputDiag.crossed = 0
+		outputDiag.mappedLEDRefs = 0
+		outputDiag.changedByGradients = 0
+		outputDiag.finalChangedLEDs = 0
+	}
+	outputDiag.Unlock()
 	names := make([]string, 0, len(unsupported))
 	for n := range unsupported {
 		names = append(names, n)
