@@ -45,13 +45,6 @@ var contributionAudit = struct {
 	bucket int64
 }{}
 
-// rainStateAudit samples the actual state produced by RainLighting. It is
-// observational only: no colour, alpha, phase, or timing values are changed.
-var rainStateAudit = struct {
-	sync.Mutex
-	bucket int64
-}{bucket: -1}
-
 func rgbNear(a, b RGB, tolerance float64) bool {
 	return math.Abs(a.R-b.R) <= tolerance && math.Abs(a.G-b.G) <= tolerance && math.Abs(a.B-b.B) <= tolerance
 }
@@ -374,47 +367,7 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 			continue
 		}
 		colors, alpha, ok := renderLayer(l, deviceOrdinal, ledCount, elapsed, topologyPositions(topology, deviceOrdinal, ledCount))
-		if ok && deviceOrdinal == 0 && strings.EqualFold(l.Effect, "RainLighting") {
-			bucket := int64(math.Floor(elapsed * 4)) // one sample per ~250 ms of profile time
-			rainStateAudit.Lock()
-			if rainStateAudit.bucket != bucket {
-				rainStateAudit.bucket = bucket
-				speed := number(l.Parameters["speed"], 1)
-				if speed <= 0 {
-					speed = 1
-				}
-				duration := number(l.Parameters["duration"], 0) / 1000
-				random := boolParam(l.Parameters["random"], false)
-				direction := int(number(l.Parameters["direction"], 0))
-				legacyPhase := elapsed * (2.0 * speed)
-				period := float64(maxInt(ledCount, 1))
-				positions := topologyPositions(topology, deviceOrdinal, ledCount)
-				if len(positions) == ledCount {
-					period = 17.0
-				}
-				travel := legacyPhase * 4
-				formula := "legacyPhase*4"
-				if !random && duration > 0 {
-					travel = elapsed / duration * period
-					formula = "elapsed/duration*period"
-				}
-				active := 0
-				alphaMin, alphaMax := 1.0, 0.0
-				for _, av := range alpha {
-					if av > 0 {
-						active++
-					}
-					if av < alphaMin {
-						alphaMin = av
-					}
-					if av > alphaMax {
-						alphaMax = av
-					}
-				}
-				log.Printf("iCUE Rain state audit: xml=%d elapsed=%.4f sel=%s random=%t speed=%.3f duration=%.4fs direction=%d legacyPhase=%.4f period=%.1f travel=%.4f travelMod=%.4f formula=%s active=%d/%d alphaMin=%.4f alphaMax=%.4f params=%v", li, elapsed, l.SelectionMode, random, speed, duration, direction, legacyPhase, period, travel, math.Mod(travel, period), formula, active, len(alpha), alphaMin, alphaMax, l.Parameters)
-			}
-			rainStateAudit.Unlock()
-		}
+
 		if !ok {
 			unsupported[l.Effect] = true
 			continue
@@ -717,9 +670,12 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		applyLayerOpacity(l, a)
 		return c, a, true
 	case "rainlighting":
-		// iCUE RainLighting carries two authored colours.  In cereal exports
-		// these are usually packed ARGB integers under colors/first+second.
-		// Preserve those colours instead of using a generic fallback.
+		// v12.4.38 A/B: model imported iCUE Rain as discrete short-lived drops
+		// rather than a continuously travelling full-field waveform.  The cadence
+		// and lifetime follow OpenLinkHub's proven native Rain timing model; iCUE's
+		// authored colours, selection, direction, random flag and opacity remain in
+		// force.  Authored duration is deliberately not used as a spatial sweep
+		// period in this A/B.
 		c1, c2 := effectColors(l, RGB{R: 25, G: 47, B: 9}, RGB{R: 100, G: 169, B: 45})
 		speed := number(l.Parameters["speed"], 1)
 		if speed <= 0 {
@@ -727,63 +683,61 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		}
 		random := boolParam(l.Parameters["random"], false)
 		direction := int(number(l.Parameters["direction"], 0))
-		// Captured RainLighting carries an explicit duration. For deterministic
-		// travelling rain, treat that as one complete spatial cycle. This fixes
-		// the old renderer's topology-dependent timing (for example a 17-position
-		// QX field took ~2.125 s even when iCUE authored duration=1000 ms).
-		// Keep the legacy speed-derived phase only as a fallback for profiles that
-		// do not serialize a usable duration.
-		duration := number(l.Parameters["duration"], 0) / 1000
-		legacyPhase := elapsed * (2.0 * speed)
+		stepDuration := 0.115 / speed
+		dropDuration := 0.55 / math.Sqrt(speed)
+		currentSlot := int(math.Floor(elapsed / stepDuration))
+		period := float64(maxInt(n, 1))
+		if len(spatial) == n {
+			period = 17.0
+		}
 		for i := 0; i < n; i++ {
-			var intensity float64
-			if random {
-				randomPhase := legacyPhase
-				if direction == 1 || direction == 3 {
-					randomPhase = -randomPhase
-				}
-				slot := int(randomPhase * 4)
-				h := hash(slot-i*2, fanOrdinal*42+i)
-				if h <= 0.76 {
-					a[i] = 0
-					continue
-				}
-				intensity = 0.25 + 0.75*hash(slot, i+17)
-			} else {
-				// Deterministic rain follows the device's logical spatial layout when
-				// one is known.  QX LED numbering doubles back across lighting zones,
-				// so raw LED index order produces the wrong motion.  The SDK-captured
-				// QX positions below preserve Corsair's logical X ordering.  Other
-				// devices deliberately retain the previous index-based fallback.
-				coord := float64(i) + float64(fanOrdinal*3)
-				period := float64(maxInt(n, 1))
-				if len(spatial) == n {
-					coord = spatial[i]
-					// Repeat the rain field at a compact wavelength while keeping one
-					// continuous coordinate system across adjacent QX fans.
-					period = 17.0
-				}
-				travel := legacyPhase * 4
-				if duration > 0 {
-					travel = elapsed / duration * period
-				}
-				if direction == 1 || direction == 3 {
-					travel = -travel
-				}
-				pos := math.Mod(coord+travel, period)
-				if pos < 0 {
-					pos += period
-				}
-				d := math.Min(pos, period-pos)
-				if d > 3.5 {
-					a[i] = 0
-					continue
-				}
-				intensity = 1 - d/3.5
+			coord := float64(i)
+			if len(spatial) == n {
+				coord = spatial[i]
 			}
-			c[i] = mixRGB(c1, c2, intensity)
-			// Keep rain as an overlay so the authored green base remains visible.
-			a[i] *= 0.35 + 0.65*intensity
+			best := 0.0
+			bestMix := 0.0
+			// Six recent spawn slots is the same bounded history used by native
+			// OpenLinkHub Rain. Each slot is a discrete event that fades out.
+			for back := 0; back < 6; back++ {
+				slot := currentSlot - back
+				if slot < 0 {
+					continue
+				}
+				spawnTime := float64(slot) * stepDuration
+				age := elapsed - spawnTime
+				if age < 0 || age >= dropDuration {
+					continue
+				}
+				// Deterministic Rain advances event positions through the logical
+				// field; random Rain scatters them reproducibly instead.
+				var target float64
+				if random {
+					target = math.Floor(hash(slot, fanOrdinal+31) * period)
+				} else {
+					target = math.Mod(float64(slot), period)
+				}
+				if direction == 1 || direction == 3 {
+					target = math.Mod(period-target, period)
+				}
+				d := math.Abs(coord - target)
+				d = math.Min(d, period-d)
+				if d > 0.55 {
+					continue
+				}
+				norm := age / dropDuration
+				intensity := math.Pow(1-norm, 1.9)
+				if intensity > best {
+					best = intensity
+					bestMix = hash(slot, i+17)
+				}
+			}
+			if best <= 0 {
+				a[i] = 0
+				continue
+			}
+			c[i] = mixRGB(c1, c2, bestMix)
+			a[i] *= best
 		}
 		applyLayerOpacity(l, a)
 		return c, a, true
