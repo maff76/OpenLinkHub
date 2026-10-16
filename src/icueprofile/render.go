@@ -344,6 +344,12 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 		mapped         int
 		activeOutput   int
 		nonBlackOutput int
+		alphaZero      int
+		alphaPartial   int
+		alphaOpaque    int
+		alphaMin       float64
+		alphaMax       float64
+		alphaSeen      bool
 		changed        int
 		post           map[int]RGB
 	}
@@ -396,6 +402,25 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 				mappedThisLayer++
 			}
 			a := alpha[i]
+			if !contribution.alphaSeen {
+				contribution.alphaMin = a
+				contribution.alphaMax = a
+				contribution.alphaSeen = true
+			} else {
+				if a < contribution.alphaMin {
+					contribution.alphaMin = a
+				}
+				if a > contribution.alphaMax {
+					contribution.alphaMax = a
+				}
+			}
+			if a <= 0.000001 {
+				contribution.alphaZero++
+			} else if a >= 0.999999 {
+				contribution.alphaOpaque++
+			} else {
+				contribution.alphaPartial++
+			}
 			if a > 0.000001 {
 				contribution.activeOutput++
 			}
@@ -456,6 +481,9 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 					}
 				}
 				log.Printf("iCUE layer contribution: xml=%d effect=%s sel=%s selected=%d mapped=%d active=%d nonBlack=%d changed=%d survivesFinal=%d", sample.layerIndex, sample.effect, sample.selection, sample.selected, sample.mapped, sample.activeOutput, sample.nonBlackOutput, sample.changed, survives)
+				if sample.alphaSeen {
+					log.Printf("iCUE alpha coverage: xml=%d effect=%s sel=%s mapped=%d alpha0=%d alphaPartial=%d alpha255=%d alphaMin=%.4f alphaMax=%.4f", sample.layerIndex, sample.effect, sample.selection, sample.mapped, sample.alphaZero, sample.alphaPartial, sample.alphaOpaque, sample.alphaMin, sample.alphaMax)
+				}
 			}
 		}
 		contributionAudit.Unlock()
