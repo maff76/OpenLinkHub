@@ -30,6 +30,16 @@ var gradientDiag = struct {
 
 // outputDiag traces Gradient events through topology selection and into the final
 // per-fan RGB buffer. It is diagnostic-only and does not alter rendered colours.
+// compatibilityAudit is observational only. Once per second (from fan 0) it
+// reports the imported LINK layer inventory, renderer coverage, execution skips,
+// and the raw timing controls that reach render.go. This lets hardware testing
+// distinguish missing-effect coverage from timing-semantics differences without
+// changing the v12.4.24 visual output.
+var compatibilityAudit = struct {
+	sync.Mutex
+	bucket int64
+}{}
+
 var outputDiag = struct {
 	sync.Mutex
 	bucket             int64
@@ -281,6 +291,102 @@ func selectedAt(l Layer, logicalBase, local int) bool {
 	return false
 }
 
+func auditSupportedEffect(effect string) bool {
+	switch strings.ToLower(effect) {
+	case "basicnonelighting", "staticlighting", "blinklighting", "breathelighting",
+		"rainlighting", "colorwavelighting", "wavelighting", "colorshiftlighting",
+		"colorpulselighting", "rainbowwavelighting", "watercolorlighting",
+		"rainbowlighting", "rainbowchannellighting", "watercolorspectrumlighting",
+		"spiralrainbowlighting", "gradientlighting":
+		return true
+	default:
+		return false
+	}
+}
+
+func auditParam(l Layer, key string) string {
+	v, ok := l.Parameters[key]
+	if !ok {
+		return "-"
+	}
+	switch x := v.(type) {
+	case string:
+		return x
+	case float64:
+		return strconv.FormatFloat(x, 'f', -1, 64)
+	case float32:
+		return strconv.FormatFloat(float64(x), 'f', -1, 64)
+	case int:
+		return strconv.Itoa(x)
+	case int64:
+		return strconv.FormatInt(x, 10)
+	case bool:
+		return strconv.FormatBool(x)
+	default:
+		return "set"
+	}
+}
+
+func auditLINKLayers(layers []Layer, elapsed float64) {
+	bucket := int64(math.Floor(elapsed))
+	compatibilityAudit.Lock()
+	defer compatibilityAudit.Unlock()
+	if compatibilityAudit.bucket == bucket {
+		return
+	}
+	compatibilityAudit.bucket = bucket
+
+	type counts struct{ parsed, enabled, renderable, disabled, reactive, unsupported int }
+	byEffect := map[string]*counts{}
+	order := make([]string, 0)
+	timing := make([]string, 0, 16)
+	for _, l := range layers {
+		name := l.Effect
+		if name == "" {
+			name = "<empty>"
+		}
+		key := strings.ToLower(name)
+		c := byEffect[key]
+		if c == nil {
+			c = &counts{}
+			byEffect[key] = c
+			order = append(order, name)
+		}
+		c.parsed++
+		if !l.Enabled {
+			c.disabled++
+			continue
+		}
+		c.enabled++
+		if l.StartOnKeyPress && !l.StartWithProfile {
+			c.reactive++
+			continue
+		}
+		if !auditSupportedEffect(l.Effect) {
+			c.unsupported++
+			continue
+		}
+		c.renderable++
+		if len(timing) < 16 {
+			timing = append(timing, name+"{sel="+l.SelectionMode+
+				",leds="+strconv.Itoa(len(l.LEDs))+
+				",duration="+auditParam(l, "duration")+
+				",speed="+auditParam(l, "speed")+
+				",velocity="+auditParam(l, "velocity")+
+				",tail="+auditParam(l, "tailLength")+"}")
+		}
+	}
+	parts := make([]string, 0, len(order))
+	for _, name := range order {
+		c := byEffect[strings.ToLower(name)]
+		parts = append(parts, name+"="+strconv.Itoa(c.parsed)+"/"+strconv.Itoa(c.renderable)+
+			"(enabled="+strconv.Itoa(c.enabled)+",disabled="+strconv.Itoa(c.disabled)+
+			",reactive="+strconv.Itoa(c.reactive)+",unsupported="+strconv.Itoa(c.unsupported)+")")
+	}
+	log.Printf("iCUE compatibility audit: layers parsed/renderable by effect: %s", strings.Join(parts, "; "))
+	log.Printf("iCUE compatibility timing: %s", strings.Join(timing, "; "))
+}
+
 // RenderFan renders a fan using a device-specific topology supplied by the LINK layer.
 // Layers are composited bottom-to-top (reverse XML order), matching iCUE's layer stack semantics.
 func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, started time.Time, brightness float64) ([]byte, []string) {
@@ -299,6 +405,9 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 	// portable without inventing colours, timings, or per-profile rules.
 	sourceDeviceCount := sourceQXFanCount(layers, topology)
 	elapsed := time.Since(started).Seconds()
+	if deviceOrdinal == 0 {
+		auditLINKLayers(layers, elapsed)
+	}
 	// iCUE A/B: render broad AllLeds layers as the background first, then
 	// composite ConcreteLeds/sparse layers over them. Preserve the existing
 	// reverse-XML relative order within each group.
