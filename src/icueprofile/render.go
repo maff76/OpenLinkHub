@@ -1,9 +1,11 @@
 package icueprofile
 
 import (
+	"fmt"
 	"log"
 	"math"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -327,6 +329,86 @@ func auditParam(l Layer, key string) string {
 	}
 }
 
+func auditValue(v interface{}) string {
+	switch x := v.(type) {
+	case string:
+		if len(x) > 80 {
+			return strconv.Quote(x[:77] + "...")
+		}
+		return strconv.Quote(x)
+	case bool:
+		return strconv.FormatBool(x)
+	case int:
+		return strconv.Itoa(x)
+	case int64:
+		return strconv.FormatInt(x, 10)
+	case float64:
+		return strconv.FormatFloat(x, 'f', -1, 64)
+	case float32:
+		return strconv.FormatFloat(float64(x), 'f', -1, 64)
+	case []string:
+		if len(x) <= 4 {
+			return fmt.Sprintf("%q", x)
+		}
+		return fmt.Sprintf("[]string(len=%d,first=%q)", len(x), x[:2])
+	case []interface{}:
+		return fmt.Sprintf("[]any(len=%d)", len(x))
+	default:
+		return fmt.Sprintf("%T", v)
+	}
+}
+
+func auditParameterSet(l Layer) string {
+	keys := make([]string, 0, len(l.Parameters))
+	for k := range l.Parameters {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+auditValue(l.Parameters[k]))
+	}
+	return strings.Join(parts, ",")
+}
+
+func rendererParameterKeys(effect string) string {
+	// This is deliberately an audit description of the current renderer, not a
+	// second implementation of the effect. It makes parsed-but-unused controls
+	// visible in hardware logs without changing playback semantics.
+	var keys []string
+	switch strings.ToLower(effect) {
+	case "staticlighting":
+		keys = []string{"color", "colors", "opacity"}
+	case "blinklighting":
+		keys = []string{"color", "colors", "duration"}
+	case "breathelighting":
+		keys = []string{"color", "colors", "duration", "opacity"}
+	case "rainlighting":
+		keys = []string{"colors", "duration", "speed", "random", "direction", "opacity"}
+	case "colorwavelighting":
+		keys = []string{"colors", "speed", "direction", "random", "opacity"}
+	case "wavelighting":
+		keys = []string{"velocity", "tailLength", "isDoublesided", "transitions", "opacity"}
+	case "colorshiftlighting", "colorpulselighting":
+		keys = []string{"colors", "speed", "duration", "opacity"}
+	case "rainbowwavelighting", "rainbowchannellighting":
+		keys = []string{"speed", "duration", "direction", "opacity"}
+	case "watercolorlighting":
+		keys = []string{"colors", "background", "speed", "isRandom", "opacity"}
+	case "rainbowlighting":
+		keys = []string{"speed", "duration", "opacity"}
+	case "watercolorspectrumlighting":
+		keys = []string{"speed", "direction", "opacity"}
+	case "spiralrainbowlighting":
+		keys = []string{"speed", "duration", "clockwise", "opacity"}
+	case "gradientlighting":
+		keys = []string{"duration", "transitions"}
+	case "basicnonelighting":
+		keys = nil
+	}
+	return strings.Join(keys, ",")
+}
+
 func auditLINKLayers(layers []Layer, elapsed float64) {
 	bucket := int64(math.Floor(elapsed))
 	compatibilityAudit.Lock()
@@ -385,6 +467,25 @@ func auditLINKLayers(layers []Layer, elapsed float64) {
 	}
 	log.Printf("iCUE compatibility audit: layers parsed/renderable by effect: %s", strings.Join(parts, "; "))
 	log.Printf("iCUE compatibility timing: %s", strings.Join(timing, "; "))
+
+	// Parameter-semantics audit: print one representative for each unique
+	// effect/selection/parameter tuple. Comparing parsed= with rendererUses=
+	// exposes controls that survive XML parsing but are currently ignored by
+	// renderLayer (for example a movement/mechanics field).
+	seen := map[string]bool{}
+	for _, l := range layers {
+		if !l.Enabled {
+			continue
+		}
+		params := auditParameterSet(l)
+		sig := strings.ToLower(l.Effect) + "|" + l.SelectionMode + "|" + params
+		if seen[sig] {
+			continue
+		}
+		seen[sig] = true
+		log.Printf("iCUE parameter semantics: effect=%s sel=%s leds=%d parsed={%s} rendererUses={%s}",
+			l.Effect, l.SelectionMode, len(l.LEDs), params, rendererParameterKeys(l.Effect))
+	}
 }
 
 // RenderFan renders a fan using a device-specific topology supplied by the LINK layer.
