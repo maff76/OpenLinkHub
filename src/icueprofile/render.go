@@ -362,42 +362,35 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		applyLayerOpacity(l, a)
 		return c, a, true
 	case "rainlighting":
-		// Treat Rain as a recurring impact event: a drop flashes for one output
-		// frame, immediately disappears, then waits for the next authored cycle.
-		// Each cycle re-rolls the random LED field, so drops do not linger.
+		// Rain is an event effect: the authored duration is the recurrence
+		// interval, not the lifetime of a drop.  Emit a fresh deterministic-
+		// random field for exactly the render frame that crosses each recurrence
+		// boundary, then leave the layer transparent until the next event.
 		c1, c2 := effectColors(l, RGB{R: 25, G: 47, B: 9}, RGB{R: 100, G: 169, B: 45})
-		speed := number(l.Parameters["speed"], 1)
-		if speed <= 0 {
-			speed = 1
-		}
 		duration := number(l.Parameters["duration"], 0) / 1000
 		if duration <= 0 {
-			// Older profiles without an authored duration retain the previous
-			// speed-derived cadence rather than inventing a new time scale.
-			duration = 1.0 / (2.0 * speed)
+			speed := number(l.Parameters["speed"], 1)
+			if speed <= 0 {
+				speed = 1
+			}
+			duration = 1 / speed
 		}
-		const eventFrame = 0.020
-		cycleTime := math.Mod(elapsed, duration)
-		if cycleTime < 0 {
-			cycleTime += duration
-		}
-		if cycleTime >= eventFrame {
+		event, cycle := crossedRecurringEvent(elapsed, duration)
+		if !event {
 			for i := range a {
 				a[i] = 0
 			}
 			return c, a, true
 		}
-
-		event := int(math.Floor(elapsed / duration))
 		for i := 0; i < n; i++ {
-			// Preserve the existing sparse/random character, but seed it from the
-			// recurrence number so every rain impact chooses a fresh field.
-			h := hash(event-i*2, fanOrdinal*42+i)
+			// Re-seed from the recurrence number so each drop event chooses a new
+			// field while remaining stable for the one frame in which it is shown.
+			h := hash(cycle*131+i*17, fanOrdinal*42+i)
 			if h <= 0.76 {
 				a[i] = 0
 				continue
 			}
-			intensity := 0.25 + 0.75*hash(event, i+17)
+			intensity := 0.25 + 0.75*hash(cycle*197+i, i+17)
 			c[i] = mixRGB(c1, c2, intensity)
 			a[i] *= 0.35 + 0.65*intensity
 		}
@@ -676,49 +669,26 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		applyLayerOpacity(l, a)
 		return c, a, true
 	case "gradientlighting":
-		// Treat authored Gradient stops as instantaneous events, not intervals to
-		// interpolate across. Each stop flashes its own authored colour for one
-		// output frame, then the layer is transparent until the next stop. The
-		// authored duration remains the complete looping timeline, so differently
-		// sized layers naturally drift out of phase and build the dense effect.
+		// Gradient transition points are discrete flash events. Each authored
+		// timestamp emits its own colour for the render frame that crosses it,
+		// then the layer is transparent again until the next timestamp. The
+		// authored duration remains the independent loop period for this layer.
 		dur := number(l.Parameters["duration"], 1000) / 1000
 		if dur <= 0 {
 			dur = 1
 		}
 		if stops := transitionStops(l); len(stops) >= 2 {
-			const eventFrame = 0.020
-			cycleTime := math.Mod(elapsed, dur)
-			if cycleTime < 0 {
-				cycleTime += dur
-			}
-
-			event := -1
-			for i := range stops {
-				// A stop at normalized 1.0 is the same instant as the next loop's
-				// 0.0 stop; let the next cycle fire it once rather than double-pulse.
-				if stops[i].T >= 1 {
-					continue
+			if stop, fired := crossedGradientEvent(stops, elapsed, dur); fired {
+				for i := range c {
+					c[i] = stop.C
+					a[i] *= stop.A
 				}
-				eventTime := stops[i].T * dur
-				if cycleTime >= eventTime && cycleTime < eventTime+eventFrame {
-					event = i
-					break
-				}
-			}
-
-			if event < 0 {
-				for i := range a {
-					a[i] = 0
-				}
+				applyLayerOpacity(l, a)
 				return c, a, true
 			}
-
-			col, alpha := stops[event].C, stops[event].A
-			for i := range c {
-				c[i] = col
-				a[i] *= alpha
+			for i := range a {
+				a[i] = 0
 			}
-			applyLayerOpacity(l, a)
 			return c, a, true
 		}
 
@@ -816,6 +786,56 @@ func parseTransitionColor(s string) (RGB, float64, bool) {
 		return c, 1, true
 	}
 	return RGB{}, 0, false
+}
+
+// eventFrameWindow is slightly wider than the LINK RGB loop's nominal 20 ms
+// frame interval. Events are detected by whether their boundary was crossed
+// since the preceding render interval, rather than requiring elapsed time to
+// land exactly on an authored timestamp.
+const eventFrameWindow = 0.025
+
+func crossedRecurringEvent(elapsed, period float64) (bool, int) {
+	if period <= 0 || elapsed < 0 {
+		return false, 0
+	}
+	current := int(math.Floor(elapsed / period))
+	previousElapsed := elapsed - eventFrameWindow
+	if previousElapsed < 0 {
+		return true, 0
+	}
+	previous := int(math.Floor(previousElapsed / period))
+	return current != previous, current
+}
+
+func crossedGradientEvent(stops []transitionStop, elapsed, duration float64) (transitionStop, bool) {
+	if len(stops) == 0 || duration <= 0 || elapsed < 0 {
+		return transitionStop{}, false
+	}
+	from := elapsed - eventFrameWindow
+	if from < 0 {
+		from = -1e-9
+	}
+	// Search only the current and immediately preceding cycle. The final stop
+	// at t=1 is the same boundary as the next cycle's t=0, so skip it to avoid
+	// firing the loop boundary twice.
+	firstCycle := int(math.Floor(from / duration))
+	if firstCycle < 0 {
+		firstCycle = 0
+	}
+	lastCycle := int(math.Floor(elapsed / duration))
+	for cycle := firstCycle; cycle <= lastCycle; cycle++ {
+		base := float64(cycle) * duration
+		for i, stop := range stops {
+			if i == len(stops)-1 && math.Abs(stop.T-1) < 1e-9 {
+				continue
+			}
+			eventAt := base + stop.T*duration
+			if eventAt > from && eventAt <= elapsed {
+				return stop, true
+			}
+		}
+	}
+	return transitionStop{}, false
 }
 
 func sampleTransitionStops(stops []transitionStop, t float64) (RGB, float64) {
