@@ -15,31 +15,32 @@ type RGB struct{ R, G, B float64 }
 
 var ledNumber = regexp.MustCompile(`(?i)Led_Cmd_Led(\d+)$`)
 
-// v12.4.41 diagnostic A/B: rotate through isolated effect families, then back
-// to the normal combined stack. This changes visibility only; render semantics
-// for each effect and the v12.4.40 compositor remain untouched.
+// v12.4.42 diagnostic A/B: isolate Cobalt's three ColorWave layers one at a
+// time, then show all ColorWave layers together and the normal combined stack.
+// This changes visibility only; effect semantics and the v12.4.40 compositor
+// remain untouched.
 var isolationDiag = struct {
 	sync.Mutex
 	mode int
 }{mode: -1}
 
 var isolationModes = []struct {
-	name   string
-	effect string
+	name       string
+	effect     string
+	layerIndex int
 }{
-	{name: "Combined"},
-	{name: "Static", effect: "staticlighting"},
-	{name: "Gradient", effect: "gradientlighting"},
-	{name: "ColorWave", effect: "colorwavelighting"},
-	{name: "Wave", effect: "wavelighting"},
-	{name: "Rain", effect: "rainlighting"},
+	{name: "Combined", layerIndex: -1},
+	{name: "ColorWave xml0", effect: "colorwavelighting", layerIndex: 0},
+	{name: "ColorWave xml1", effect: "colorwavelighting", layerIndex: 1},
+	{name: "ColorWave xml2", effect: "colorwavelighting", layerIndex: 2},
+	{name: "ColorWave all", effect: "colorwavelighting", layerIndex: -1},
 }
 
-func isolationMode(elapsed float64) (int, string, string) {
+func isolationMode(elapsed float64) (int, string, string, int) {
 	const secondsPerMode = 4.0
 	idx := int(elapsed/secondsPerMode) % len(isolationModes)
 	m := isolationModes[idx]
-	return idx, m.name, m.effect
+	return idx, m.name, m.effect, m.layerIndex
 }
 
 // Gradient event diagnostics are intentionally observational only: they do not
@@ -387,10 +388,10 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 	// source layer. Keep the established broad-background/sparse-foreground
 	// ordering, but let each effect's own alpha determine its contribution.
 
-	modeIndex, modeName, isolatedEffect := isolationMode(elapsed)
+	modeIndex, modeName, isolatedEffect, isolatedLayer := isolationMode(elapsed)
 	isolationDiag.Lock()
 	if isolationDiag.mode != modeIndex {
-		log.Printf("iCUE layer isolation: mode=%s window=4s", modeName)
+		log.Printf("iCUE ColorWave isolation: mode=%s window=4s", modeName)
 		isolationDiag.mode = modeIndex
 	}
 	isolationDiag.Unlock()
@@ -401,6 +402,9 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 			continue
 		}
 		if isolatedEffect != "" && !strings.EqualFold(l.Effect, isolatedEffect) {
+			continue
+		}
+		if isolatedLayer >= 0 && li != isolatedLayer {
 			continue
 		}
 		colors, alpha, ok := renderLayer(l, deviceOrdinal, ledCount, elapsed, topologyPositions(topology, deviceOrdinal, ledCount))
