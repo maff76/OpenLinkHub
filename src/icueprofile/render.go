@@ -1,11 +1,9 @@
 package icueprofile
 
 import (
-	"fmt"
 	"log"
 	"math"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,16 +30,6 @@ var gradientDiag = struct {
 
 // outputDiag traces Gradient events through topology selection and into the final
 // per-fan RGB buffer. It is diagnostic-only and does not alter rendered colours.
-// compatibilityAudit is observational only. Once per second (from fan 0) it
-// reports the imported LINK layer inventory, renderer coverage, execution skips,
-// and the raw timing controls that reach render.go. This lets hardware testing
-// distinguish missing-effect coverage from timing-semantics differences without
-// changing the v12.4.24 visual output.
-var compatibilityAudit = struct {
-	sync.Mutex
-	bucket int64
-}{}
-
 var outputDiag = struct {
 	sync.Mutex
 	bucket             int64
@@ -293,201 +281,6 @@ func selectedAt(l Layer, logicalBase, local int) bool {
 	return false
 }
 
-func auditSupportedEffect(effect string) bool {
-	switch strings.ToLower(effect) {
-	case "basicnonelighting", "staticlighting", "blinklighting", "breathelighting",
-		"rainlighting", "colorwavelighting", "wavelighting", "colorshiftlighting",
-		"colorpulselighting", "rainbowwavelighting", "watercolorlighting",
-		"rainbowlighting", "rainbowchannellighting", "watercolorspectrumlighting",
-		"spiralrainbowlighting", "gradientlighting":
-		return true
-	default:
-		return false
-	}
-}
-
-func auditParam(l Layer, key string) string {
-	v, ok := l.Parameters[key]
-	if !ok {
-		return "-"
-	}
-	switch x := v.(type) {
-	case string:
-		return x
-	case float64:
-		return strconv.FormatFloat(x, 'f', -1, 64)
-	case float32:
-		return strconv.FormatFloat(float64(x), 'f', -1, 64)
-	case int:
-		return strconv.Itoa(x)
-	case int64:
-		return strconv.FormatInt(x, 10)
-	case bool:
-		return strconv.FormatBool(x)
-	default:
-		return "set"
-	}
-}
-
-func auditValue(v interface{}) string {
-	switch x := v.(type) {
-	case string:
-		if len(x) > 80 {
-			return strconv.Quote(x[:77] + "...")
-		}
-		return strconv.Quote(x)
-	case bool:
-		return strconv.FormatBool(x)
-	case int:
-		return strconv.Itoa(x)
-	case int64:
-		return strconv.FormatInt(x, 10)
-	case float64:
-		return strconv.FormatFloat(x, 'f', -1, 64)
-	case float32:
-		return strconv.FormatFloat(float64(x), 'f', -1, 64)
-	case []string:
-		if len(x) <= 4 {
-			return fmt.Sprintf("%q", x)
-		}
-		return fmt.Sprintf("[]string(len=%d,first=%q)", len(x), x[:2])
-	case []interface{}:
-		return fmt.Sprintf("[]any(len=%d)", len(x))
-	default:
-		return fmt.Sprintf("%T", v)
-	}
-}
-
-func auditParameterSet(l Layer) string {
-	keys := make([]string, 0, len(l.Parameters))
-	for k := range l.Parameters {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, k+"="+auditValue(l.Parameters[k]))
-	}
-	return strings.Join(parts, ",")
-}
-
-func rendererParameterKeys(effect string) string {
-	// This is deliberately an audit description of the current renderer, not a
-	// second implementation of the effect. It makes parsed-but-unused controls
-	// visible in hardware logs without changing playback semantics.
-	var keys []string
-	switch strings.ToLower(effect) {
-	case "staticlighting":
-		keys = []string{"color", "colors", "opacity"}
-	case "blinklighting":
-		keys = []string{"color", "colors", "duration"}
-	case "breathelighting":
-		keys = []string{"color", "colors", "duration", "opacity"}
-	case "rainlighting":
-		keys = []string{"colors", "duration", "speed", "random", "direction", "opacity"}
-	case "colorwavelighting":
-		keys = []string{"colors", "speed", "direction", "random", "opacity"}
-	case "wavelighting":
-		keys = []string{"velocity", "tailLength", "isDoublesided", "transitions", "opacity"}
-	case "colorshiftlighting", "colorpulselighting":
-		keys = []string{"colors", "speed", "duration", "opacity"}
-	case "rainbowwavelighting", "rainbowchannellighting":
-		keys = []string{"speed", "duration", "direction", "opacity"}
-	case "watercolorlighting":
-		keys = []string{"colors", "background", "speed", "isRandom", "opacity"}
-	case "rainbowlighting":
-		keys = []string{"speed", "duration", "opacity"}
-	case "watercolorspectrumlighting":
-		keys = []string{"speed", "direction", "opacity"}
-	case "spiralrainbowlighting":
-		keys = []string{"speed", "duration", "clockwise", "opacity"}
-	case "gradientlighting":
-		keys = []string{"duration", "transitions"}
-	case "basicnonelighting":
-		keys = nil
-	}
-	return strings.Join(keys, ",")
-}
-
-func auditLINKLayers(layers []Layer, elapsed float64) {
-	bucket := int64(math.Floor(elapsed))
-	compatibilityAudit.Lock()
-	defer compatibilityAudit.Unlock()
-	if compatibilityAudit.bucket == bucket {
-		return
-	}
-	compatibilityAudit.bucket = bucket
-
-	type counts struct{ parsed, enabled, renderable, disabled, reactive, unsupported int }
-	byEffect := map[string]*counts{}
-	order := make([]string, 0)
-	timing := make([]string, 0, 16)
-	for _, l := range layers {
-		name := l.Effect
-		if name == "" {
-			name = "<empty>"
-		}
-		key := strings.ToLower(name)
-		c := byEffect[key]
-		if c == nil {
-			c = &counts{}
-			byEffect[key] = c
-			order = append(order, name)
-		}
-		c.parsed++
-		if !l.Enabled {
-			c.disabled++
-			continue
-		}
-		c.enabled++
-		if l.StartOnKeyPress && !l.StartWithProfile {
-			c.reactive++
-			continue
-		}
-		if !auditSupportedEffect(l.Effect) {
-			c.unsupported++
-			continue
-		}
-		c.renderable++
-		if len(timing) < 16 {
-			timing = append(timing, name+"{sel="+l.SelectionMode+
-				",leds="+strconv.Itoa(len(l.LEDs))+
-				",duration="+auditParam(l, "duration")+
-				",speed="+auditParam(l, "speed")+
-				",velocity="+auditParam(l, "velocity")+
-				",tail="+auditParam(l, "tailLength")+"}")
-		}
-	}
-	parts := make([]string, 0, len(order))
-	for _, name := range order {
-		c := byEffect[strings.ToLower(name)]
-		parts = append(parts, name+"="+strconv.Itoa(c.parsed)+"/"+strconv.Itoa(c.renderable)+
-			"(enabled="+strconv.Itoa(c.enabled)+",disabled="+strconv.Itoa(c.disabled)+
-			",reactive="+strconv.Itoa(c.reactive)+",unsupported="+strconv.Itoa(c.unsupported)+")")
-	}
-	log.Printf("iCUE compatibility audit: layers parsed/renderable by effect: %s", strings.Join(parts, "; "))
-	log.Printf("iCUE compatibility timing: %s", strings.Join(timing, "; "))
-
-	// Parameter-semantics audit: print one representative for each unique
-	// effect/selection/parameter tuple. Comparing parsed= with rendererUses=
-	// exposes controls that survive XML parsing but are currently ignored by
-	// renderLayer (for example a movement/mechanics field).
-	seen := map[string]bool{}
-	for _, l := range layers {
-		if !l.Enabled {
-			continue
-		}
-		params := auditParameterSet(l)
-		sig := strings.ToLower(l.Effect) + "|" + l.SelectionMode + "|" + params
-		if seen[sig] {
-			continue
-		}
-		seen[sig] = true
-		log.Printf("iCUE parameter semantics: effect=%s sel=%s leds=%d parsed={%s} rendererUses={%s}",
-			l.Effect, l.SelectionMode, len(l.LEDs), params, rendererParameterKeys(l.Effect))
-	}
-}
-
 // RenderFan renders a fan using a device-specific topology supplied by the LINK layer.
 // Layers are composited bottom-to-top (reverse XML order), matching iCUE's layer stack semantics.
 func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, started time.Time, brightness float64) ([]byte, []string) {
@@ -506,9 +299,6 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 	// portable without inventing colours, timings, or per-profile rules.
 	sourceDeviceCount := sourceQXFanCount(layers, topology)
 	elapsed := time.Since(started).Seconds()
-	if deviceOrdinal == 0 {
-		auditLINKLayers(layers, elapsed)
-	}
 	// iCUE A/B: render broad AllLeds layers as the background first, then
 	// composite ConcreteLeds/sparse layers over them. Preserve the existing
 	// reverse-XML relative order within each group.
@@ -831,12 +621,14 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		if direction == 2 {
 			sign = -1
 		}
-		// iCUE exposes Color Wave with a Speed slider, not a Lighting Time field.
-		// Do not reuse the serialized duration as a Gradient-style period. Treat
-		// the captured discrete speed as wave cycles per second: 1/2/3 gives
-		// 1.0/0.5/0.333 s per cycle. This keeps Color Wave timing independent
-		// from Gradient Lighting Time, matching the controls exposed by iCUE.
+		// Color Wave has an explicit discrete speed control. The serialized
+		// duration belongs to the layer record as well, but it is not additive
+		// with speed (or with neighbouring layers): all layers run concurrently.
+		// Keep speed authoritative here unless a profile omits it entirely.
 		periodSeconds := 1.0 / speed
+		if _, hasSpeed := l.Parameters["speed"]; !hasSpeed {
+			periodSeconds = capturedPeriod(l, periodSeconds)
+		}
 		phase := sign * elapsed / periodSeconds
 		for i := 0; i < n; i++ {
 			coord := float64(i)
@@ -880,6 +672,14 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		if velocity == 0 {
 			velocity = 100
 		}
+		// Wave serializes both velocity and duration. They are not summed.
+		// Velocity controls motion while duration defines the authored repeat
+		// window when present, preventing elapsed time from drifting across
+		// successive repetitions of the layer.
+		waveElapsed := elapsed
+		if dur := number(l.Parameters["duration"], 0) / 1000; dur > 0 {
+			waveElapsed = math.Mod(elapsed, dur)
+		}
 		tail := number(l.Parameters["tailLength"], 4)
 		if tail <= 0 {
 			tail = 1
@@ -906,7 +706,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 			}
 		}
 		span := maxC - minC + 1
-		head := math.Mod(elapsed*velocity, span+tail)
+		head := math.Mod(waveElapsed*velocity, span+tail)
 		for i, x := range coords {
 			d := head - (x - minC)
 			for d < 0 {
