@@ -1,12 +1,10 @@
 package icueprofile
 
 import (
-	"log"
 	"math"
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -15,43 +13,24 @@ type RGB struct{ R, G, B float64 }
 
 var ledNumber = regexp.MustCompile(`(?i)Led_Cmd_Led(\d+)$`)
 
-// Gradient event diagnostics are intentionally observational only: they do not
-// change the v12.4.15 rendering. They count authored transition boundaries that
-// the ~20 ms render cadence crosses, so hardware logs can distinguish scheduler
-// problems from compositor problems before we change Gradient semantics again.
-var gradientDiag = struct {
-	sync.Mutex
-	bucket       int64
-	evaluated    int
-	crossed      int
-	selectedLEDs int
-	samples      []string
-}{}
-
-// outputDiag traces Gradient events through topology selection and into the final
-// per-fan RGB buffer. It is diagnostic-only and does not alter rendered colours.
-var outputDiag = struct {
-	sync.Mutex
-	bucket             int64
-	crossed            int
-	mappedLEDRefs      int
-	changedByGradients int
-	finalChangedLEDs   int
-	previous           map[int][]byte
-}{previous: map[int][]byte{}}
-
-func gradientCrossings(elapsed, dur float64, stops []transitionStop) int {
+// crossedGradientStop returns the authored stop crossed by the current render
+// frame. Imported iCUE Gradient layers use this as a transient event: the stop
+// colour is emitted for this frame only, then the layer becomes inactive until
+// another authored timestamp is crossed. The final 1.0 stop is the next cycle's
+// 0.0 boundary and is therefore not emitted twice.
+func crossedGradientStop(elapsed, dur float64, stops []transitionStop) (transitionStop, bool) {
 	if dur <= 0 || len(stops) < 2 {
-		return 0
+		return transitionStop{}, false
 	}
 	const frameWindow = 0.025
 	prev := elapsed - frameWindow
 	if prev < 0 {
 		prev = 0
 	}
-	crossed := 0
 	startCycle := int(math.Floor(prev / dur))
 	endCycle := int(math.Floor(elapsed / dur))
+	var hit transitionStop
+	found := false
 	for cycle := startCycle; cycle <= endCycle; cycle++ {
 		base := float64(cycle) * dur
 		for si, st := range stops {
@@ -60,68 +39,12 @@ func gradientCrossings(elapsed, dur float64, stops []transitionStop) int {
 			}
 			eventTime := base + st.T*dur
 			if eventTime > prev && eventTime <= elapsed {
-				crossed++
+				hit = st
+				found = true
 			}
 		}
 	}
-	return crossed
-}
-
-func diagnoseGradientEvents(l Layer, elapsed, dur float64, stops []transitionStop) {
-	if dur <= 0 || len(stops) < 2 {
-		return
-	}
-	// LSH normally renders every ~20 ms. Looking back 25 ms intentionally spans
-	// one frame without requiring persistent per-layer state in the renderer.
-	const frameWindow = 0.025
-	prev := elapsed - frameWindow
-	if prev < 0 {
-		prev = 0
-	}
-	bucket := int64(math.Floor(elapsed))
-	crossed := 0
-	var sample string
-	startCycle := int(math.Floor(prev / dur))
-	endCycle := int(math.Floor(elapsed / dur))
-	for cycle := startCycle; cycle <= endCycle; cycle++ {
-		base := float64(cycle) * dur
-		for si, st := range stops {
-			// The final 1.0 stop is the next cycle's 0.0 boundary; count it once.
-			if si == len(stops)-1 && st.T >= 0.999999 {
-				continue
-			}
-			eventTime := base + st.T*dur
-			if eventTime > prev && eventTime <= elapsed {
-				crossed++
-				if sample == "" {
-					sample = l.ID + " dur=" + strconv.FormatFloat(dur, 'f', 3, 64) +
-						" stop=" + strconv.FormatFloat(st.T, 'f', 3, 64) +
-						" leds=" + strconv.Itoa(len(l.LEDs))
-				}
-			}
-		}
-	}
-
-	gradientDiag.Lock()
-	defer gradientDiag.Unlock()
-	if gradientDiag.bucket == 0 {
-		gradientDiag.bucket = bucket
-	}
-	if bucket != gradientDiag.bucket {
-		log.Printf("iCUE Gradient diagnostic: evaluated=%d crossedEvents=%d selectedLEDRefs=%d samples=%v",
-			gradientDiag.evaluated, gradientDiag.crossed, gradientDiag.selectedLEDs, gradientDiag.samples)
-		gradientDiag.bucket = bucket
-		gradientDiag.evaluated = 0
-		gradientDiag.crossed = 0
-		gradientDiag.selectedLEDs = 0
-		gradientDiag.samples = gradientDiag.samples[:0]
-	}
-	gradientDiag.evaluated++
-	gradientDiag.crossed += crossed
-	gradientDiag.selectedLEDs += len(l.LEDs)
-	if crossed > 0 && sample != "" && len(gradientDiag.samples) < 6 {
-		gradientDiag.samples = append(gradientDiag.samples, sample)
-	}
+	return hit, found
 }
 
 // LinkDevice returns the imported lighting entry for the iCUE LINK System Hub.
@@ -309,35 +232,14 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 			unsupported[l.Effect] = true
 			continue
 		}
-		gradientCrossed := 0
-		if strings.EqualFold(l.Effect, "GradientLighting") {
-			dur := number(l.Parameters["duration"], 1000) / 1000
-			gradientCrossed = gradientCrossings(elapsed, dur, transitionStops(l))
-		}
-		mappedThisLayer := 0
-		changedThisLayer := 0
 		for i := 0; i < ledCount; i++ {
 			if !selectedWithTopology(l, topology, deviceOrdinal, i, sourceDeviceCount) {
 				continue
 			}
-			if gradientCrossed > 0 {
-				mappedThisLayer++
-			}
 			a := alpha[i]
-			before := out[i]
 			out[i].R = out[i].R*(1-a) + colors[i].R*a
 			out[i].G = out[i].G*(1-a) + colors[i].G*a
 			out[i].B = out[i].B*(1-a) + colors[i].B*a
-			if gradientCrossed > 0 && (math.Abs(out[i].R-before.R) > 0.5 || math.Abs(out[i].G-before.G) > 0.5 || math.Abs(out[i].B-before.B) > 0.5) {
-				changedThisLayer++
-			}
-		}
-		if gradientCrossed > 0 {
-			outputDiag.Lock()
-			outputDiag.crossed += gradientCrossed
-			outputDiag.mappedLEDRefs += mappedThisLayer
-			outputDiag.changedByGradients += changedThisLayer
-			outputDiag.Unlock()
 		}
 	}
 	if brightness <= 0 {
@@ -347,31 +249,6 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 	for _, c := range out {
 		buf = append(buf, byte(clamp(c.R*brightness)), byte(clamp(c.G*brightness)), byte(clamp(c.B*brightness)))
 	}
-	outputDiag.Lock()
-	prevBuf := outputDiag.previous[deviceOrdinal]
-	if len(prevBuf) == len(buf) {
-		for i := 0; i+2 < len(buf); i += 3 {
-			if buf[i] != prevBuf[i] || buf[i+1] != prevBuf[i+1] || buf[i+2] != prevBuf[i+2] {
-				outputDiag.finalChangedLEDs++
-			}
-		}
-	}
-	copyBuf := make([]byte, len(buf))
-	copy(copyBuf, buf)
-	outputDiag.previous[deviceOrdinal] = copyBuf
-	bucket := int64(math.Floor(elapsed))
-	if outputDiag.bucket == 0 {
-		outputDiag.bucket = bucket
-	}
-	if bucket != outputDiag.bucket {
-		log.Printf("iCUE Gradient pipeline: crossedEvents=%d mappedLEDRefs=%d changedByGradientComposition=%d finalBufferChangedLEDs=%d", outputDiag.crossed, outputDiag.mappedLEDRefs, outputDiag.changedByGradients, outputDiag.finalChangedLEDs)
-		outputDiag.bucket = bucket
-		outputDiag.crossed = 0
-		outputDiag.mappedLEDRefs = 0
-		outputDiag.changedByGradients = 0
-		outputDiag.finalChangedLEDs = 0
-	}
-	outputDiag.Unlock()
 	names := make([]string, 0, len(unsupported))
 	for n := range unsupported {
 		names = append(names, n)
@@ -872,17 +749,22 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 			dur = 1
 		}
 		if stops := transitionStops(l); len(stops) >= 2 {
-			diagnoseGradientEvents(l, elapsed, dur, stops)
-			t := math.Mod(elapsed/dur, 1)
-			if t < 0 {
-				t += 1
+			// iCUE Electricity-style gradients behave as authored timestamp events,
+			// not as colours held/interpolated across the entire interval. Emit the
+			// exact authored stop for one render window; otherwise contribute no
+			// alpha so lower layers remain visible. Authored black remains opaque
+			// black when its event fires.
+			if stop, hit := crossedGradientStop(elapsed, dur, stops); hit {
+				for i := range c {
+					c[i] = stop.C
+					a[i] *= stop.A
+				}
+				applyLayerOpacity(l, a)
+				return c, a, true
 			}
-			col, alpha := sampleTransitionStops(stops, t)
-			for i := range c {
-				c[i] = col
-				a[i] *= alpha
+			for i := range a {
+				a[i] = 0
 			}
-			applyLayerOpacity(l, a)
 			return c, a, true
 		}
 
