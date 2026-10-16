@@ -1,7 +1,6 @@
 package icueprofile
 
 import (
-	"fmt"
 	"log"
 	"math"
 	"regexp"
@@ -45,6 +44,13 @@ var contributionAudit = struct {
 	sync.Mutex
 	bucket int64
 }{}
+
+// gradientPhaseAudit samples authored Gradient phase progression every 100 ms.
+// It is diagnostic-only and does not alter rendering.
+var gradientPhaseAudit = struct {
+	sync.Mutex
+	bucket int64
+}{bucket: -1}
 
 func rgbNear(a, b RGB, tolerance float64) bool {
 	return math.Abs(a.R-b.R) <= tolerance && math.Abs(a.G-b.G) <= tolerance && math.Abs(a.B-b.B) <= tolerance
@@ -361,6 +367,45 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 	// AllLeds layers so each can contribute. ConcreteLeds layers retain normal
 	// source-over compositing, including authored black/off pixels.
 	allLedsBasePainted := false
+	if deviceOrdinal == 0 {
+		phaseBucket := int64(math.Floor(elapsed * 10))
+		gradientPhaseAudit.Lock()
+		if gradientPhaseAudit.bucket != phaseBucket {
+			gradientPhaseAudit.bucket = phaseBucket
+			for li, layer := range layers {
+				if !layer.Enabled || !strings.EqualFold(layer.Effect, "GradientLighting") {
+					continue
+				}
+				stops := transitionStops(layer)
+				dur := number(layer.Parameters["duration"], 1000) / 1000
+				if dur <= 0 || len(stops) == 0 {
+					continue
+				}
+				phase := math.Mod(elapsed/dur, 1)
+				if phase < 0 {
+					phase += 1
+				}
+				interval := 0
+				frac := 0.0
+				for si := 1; si < len(stops); si++ {
+					if phase <= stops[si].T {
+						interval = si - 1
+						span := stops[si].T - stops[si-1].T
+						if span > 0 {
+							frac = (phase - stops[si-1].T) / span
+						}
+						break
+					}
+				}
+				if phase > stops[len(stops)-1].T {
+					interval = len(stops) - 1
+					frac = 1
+				}
+				log.Printf("iCUE Gradient phase audit: xml=%d sel=%s elapsed=%.4f dur=%.4f phase=%.6f interval=%d frac=%.6f", li, layer.SelectionMode, elapsed, dur, phase, interval, frac)
+			}
+		}
+		gradientPhaseAudit.Unlock()
+	}
 	for _, li := range renderOrder {
 		l := layers[li]
 		if !l.Enabled {
@@ -485,28 +530,7 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 				if sample.alphaSeen {
 					log.Printf("iCUE alpha coverage: xml=%d effect=%s sel=%s mapped=%d alpha0=%d alphaPartial=%d alpha255=%d alphaMin=%.4f alphaMax=%.4f", sample.layerIndex, sample.effect, sample.selection, sample.mapped, sample.alphaZero, sample.alphaPartial, sample.alphaOpaque, sample.alphaMin, sample.alphaMax)
 				}
-				if strings.EqualFold(sample.effect, "GradientLighting") && sample.layerIndex >= 0 && sample.layerIndex < len(layers) {
-					layer := layers[sample.layerIndex]
-					stops := transitionStops(layer)
-					dur := number(layer.Parameters["duration"], 1000) / 1000
-					if dur <= 0 {
-						dur = 1
-					}
-					t := math.Mod(elapsed/dur, 1)
-					if t < 0 {
-						t += 1
-					}
-					_, sampledAlpha := sampleTransitionStops(stops, t)
-					stopSummary := make([]string, 0, len(stops))
-					for _, stop := range stops {
-						stopSummary = append(stopSummary, fmt.Sprintf("t=%.4f rgb=(%.0f,%.0f,%.0f) a=%.4f", stop.T, stop.C.R, stop.C.G, stop.C.B, stop.A))
-					}
-					rawSummary := "<missing>"
-					if raw, ok := layer.Parameters["transitions"]; ok {
-						rawSummary = fmt.Sprintf("%v", raw)
-					}
-					log.Printf("iCUE Gradient alpha audit: xml=%d sel=%s dur=%.4f phase=%.4f sampledAlpha=%.4f stops=[%s] raw=%s", sample.layerIndex, sample.selection, dur, t, sampledAlpha, strings.Join(stopSummary, " | "), rawSummary)
-				}
+
 			}
 		}
 		contributionAudit.Unlock()
