@@ -348,6 +348,12 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 		post           map[int]RGB
 	}
 	contributions := make([]contributionSample, 0, len(renderOrder))
+	// iCUE compatibility: broad animated layers are simultaneous lighting
+	// contributions, not a sequence of opaque full-frame replacements. Keep the
+	// first AllLeds layer as the base, then screen-composite later animated
+	// AllLeds layers so each can contribute. ConcreteLeds layers retain normal
+	// source-over compositing, including authored black/off pixels.
+	allLedsBasePainted := false
 	for _, li := range renderOrder {
 		l := layers[li]
 		if !l.Enabled {
@@ -374,6 +380,8 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 		if contribution.selection == "" {
 			contribution.selection = "AllLeds"
 		}
+		isAllLeds := strings.EqualFold(l.SelectionMode, "AllLeds") || l.SelectionMode == ""
+		useScreenBlend := isAllLeds && allLedsBasePainted && !strings.EqualFold(l.Effect, "StaticLighting")
 		for i := 0; i < ledCount; i++ {
 			if strings.EqualFold(l.SelectionMode, "AllLeds") || l.SelectionMode == "" {
 				contribution.selected++
@@ -395,9 +403,21 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 				contribution.nonBlackOutput++
 			}
 			before := out[i]
-			out[i].R = out[i].R*(1-a) + colors[i].R*a
-			out[i].G = out[i].G*(1-a) + colors[i].G*a
-			out[i].B = out[i].B*(1-a) + colors[i].B*a
+			if useScreenBlend {
+				// Screen blend preserves motion from earlier broad layers while
+				// allowing the current layer to brighten/tint the same LED. Alpha
+				// still controls the strength of the authored contribution.
+				sr := clamp(colors[i].R * a)
+				sg := clamp(colors[i].G * a)
+				sb := clamp(colors[i].B * a)
+				out[i].R = 255 - ((255-clamp(out[i].R))*(255-sr))/255
+				out[i].G = 255 - ((255-clamp(out[i].G))*(255-sg))/255
+				out[i].B = 255 - ((255-clamp(out[i].B))*(255-sb))/255
+			} else {
+				out[i].R = out[i].R*(1-a) + colors[i].R*a
+				out[i].G = out[i].G*(1-a) + colors[i].G*a
+				out[i].B = out[i].B*(1-a) + colors[i].B*a
+			}
 			if math.Abs(out[i].R-before.R) > 0.5 || math.Abs(out[i].G-before.G) > 0.5 || math.Abs(out[i].B-before.B) > 0.5 {
 				contribution.changed++
 				contribution.post[i] = out[i]
@@ -405,6 +425,9 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 					changedThisLayer++
 				}
 			}
+		}
+		if isAllLeds && !allLedsBasePainted {
+			allLedsBasePainted = true
 		}
 		contributions = append(contributions, contribution)
 		if gradientCrossed > 0 {
