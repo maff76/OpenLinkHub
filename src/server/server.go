@@ -12,6 +12,8 @@ import (
 	"OpenLinkHub/src/dashboard"
 	"OpenLinkHub/src/devices"
 	"OpenLinkHub/src/devices/lcd"
+	lshdevice "OpenLinkHub/src/devices/lsh"
+	memorydevice "OpenLinkHub/src/devices/memory"
 	"OpenLinkHub/src/discovery"
 	"OpenLinkHub/src/display"
 	"OpenLinkHub/src/icueprofile"
@@ -36,6 +38,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -2630,6 +2633,74 @@ func uiLcdOverview(w http.ResponseWriter, _ *http.Request) {
 	}
 }
 
+// getICUEEditorDevices exposes the RGB-capable hardware OpenLinkHub has actually
+// enumerated. The profile editor uses this instead of asking the user to enter a
+// fan/DIMM count, so the canvas follows the same live device model as playback.
+func getICUEEditorDevices(w http.ResponseWriter, _ *http.Request) {
+	type editorDevice struct {
+		Key       string `json:"key"`
+		Parent    string `json:"parent"`
+		Name      string `json:"name"`
+		Kind      string `json:"kind"`
+		LEDs      int    `json:"leds"`
+		ChannelID int    `json:"channelId"`
+		PortID    int    `json:"portId,omitempty"`
+		Topology  string `json:"topology,omitempty"`
+	}
+	out := make([]editorDevice, 0)
+	for serial, registered := range devices.GetDevices() {
+		switch d := registered.GetDevice.(type) {
+		case *lshdevice.Device:
+			keys := make([]int, 0, len(d.Devices))
+			for k := range d.Devices {
+				keys = append(keys, k)
+			}
+			sort.Ints(keys)
+			for _, k := range keys {
+				dev := d.Devices[k]
+				if dev == nil || dev.LedChannels == 0 {
+					continue
+				}
+				kind, topology := "link", "linear"
+				lower := strings.ToLower(dev.Name)
+				if strings.Contains(lower, "qx") && dev.LedChannels == 34 {
+					kind, topology = "qx", "qx34"
+				}
+				if strings.Contains(lower, "titan") && dev.LedChannels == 20 {
+					kind, topology = "titan", "titan20"
+				}
+				name := strings.TrimSpace(dev.Label)
+				if name == "" {
+					name = dev.Name
+				}
+				out = append(out, editorDevice{Key: fmt.Sprintf("%s:%d", serial, k), Parent: registered.Product, Name: name, Kind: kind, LEDs: int(dev.LedChannels), ChannelID: k, PortID: int(dev.PortId), Topology: topology})
+			}
+		case *memorydevice.Device:
+			keys := make([]int, 0, len(d.Devices))
+			for k := range d.Devices {
+				keys = append(keys, k)
+			}
+			sort.Ints(keys)
+			for _, k := range keys {
+				dev := d.Devices[k]
+				if dev == nil || dev.LedChannels == 0 {
+					continue
+				}
+				name := strings.TrimSpace(dev.Label)
+				if name == "" {
+					name = dev.Name
+				}
+				if name == "" {
+					name = fmt.Sprintf("DIMM %d", k+1)
+				}
+				out = append(out, editorDevice{Key: fmt.Sprintf("%s:%d", serial, k), Parent: registered.Product, Name: name, Kind: "memory", LEDs: int(dev.LedChannels), ChannelID: k, Topology: "linear"})
+			}
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"devices": out})
+}
+
 // getICUEProfiles returns all imported iCUE profiles and parser failures.
 func getICUEProfiles(w http.ResponseWriter, _ *http.Request) {
 	profiles, failures, err := icueprofile.Scan(config.GetConfig().ConfigPath)
@@ -2991,6 +3062,7 @@ func setRoutes() http.Handler {
 	handleFunc(r, "/api/keyboard/dial/getColors/", http.MethodGet, getControlDialColors)
 	handleFunc(r, "/api/getSupportedDevices", http.MethodGet, getSupportedDevices)
 	handleFunc(r, "/api/icue/profiles", http.MethodGet, getICUEProfiles)
+	handleFunc(r, "/api/icue/devices", http.MethodGet, getICUEEditorDevices)
 	r.HandleFunc("/api/icue/profile", icueProfileWorkspace)
 	r.HandleFunc("/api/icue/rain-calibration", icueRainCalibration)
 	handleFunc(r, "/api/backup", http.MethodGet, backup.PerformBackup)

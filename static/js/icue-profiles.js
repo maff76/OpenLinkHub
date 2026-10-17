@@ -1,193 +1,65 @@
 $(function () {
-    let currentKey = '';
-    let currentData = null;
-    let currentTarget = null;
-    let currentLayer = null;
-    let applying = false;
-    let probeLocal = 0;
-    let inspectRegion = '';
-    const qxTopology = [
-        {key:'front-outer', label:'Front Outer Ring', face:'front', region:'outer', start:0, count:12},
-        {key:'back-outer', label:'Back Outer Ring', face:'rear', region:'outer', start:12, count:12},
-        {key:'front-inner', label:'Front Inner Ring', face:'front', region:'inner', start:24, count:6},
-        {key:'back-inner', label:'Back Inner Ring', face:'rear', region:'inner', start:30, count:4}
+    let currentKey='', currentData=null, currentTarget=null, currentLayer=null, applying=false, inspectRegion='', probeLocal=0;
+    let detectedDevices=[];
+    const qxTopology=[
+        {key:'front-outer',label:'Front Outer Ring',face:'front',region:'outer',start:0,count:12},
+        {key:'back-outer',label:'Back Outer Ring',face:'rear',region:'outer',start:12,count:12},
+        {key:'front-inner',label:'Front Inner Ring',face:'front',region:'inner',start:24,count:6},
+        {key:'back-inner',label:'Back Inner Ring',face:'rear',region:'inner',start:30,count:4}
     ];
+    const commonEffects=['StaticLighting','RainLighting','WaveLighting','ColorWaveLighting','RippleLighting','SpiralLighting','SpiralRainbowLighting','RainbowWaveLighting','WatercolorLighting','VisorLighting','MarqueeLighting','SequentialLighting','ColorShiftLighting','ColorPulseLighting','GradientLighting'];
+    const schemas={
+        staticlighting:[['colors','Colours','colors']],
+        rainlighting:[['colors','Colours','colors'],['speed','Speed','number'],['direction','Direction','number'],['duration','Duration','number'],['tail','Tail / falloff','number']],
+        wavelighting:[['colors','Colours','colors'],['speed','Speed','number'],['direction','Direction','number'],['width','Width','number'],['wavelength','Wavelength / period','number'],['tail','Tail / falloff','number'],['phase','Phase / offset','number']],
+        colorwavelighting:[['colors','Colours','colors'],['speed','Speed','number'],['direction','Direction','number'],['width','Width','number'],['phase','Phase / offset','number']],
+        ripplelighting:[['colors','Colours','colors'],['speed','Speed','number'],['duration','Duration','number'],['width','Width','number'],['tail','Tail / falloff','number'],['direction','Direction','number']],
+        spirallighting:[['colors','Colours','colors'],['speed','Speed','number'],['direction','Direction','number'],['width','Width','number'],['tail','Tail / falloff','number']],
+        spiralrainbowlighting:[['speed','Speed','number'],['direction','Direction','number'],['width','Width','number']],
+        rainbowwavelighting:[['speed','Speed','number'],['direction','Direction','number'],['width','Width','number']],
+        watercolorlighting:[['colors','Colours','colors'],['speed','Speed','number'],['duration','Duration','number']],
+        visorlighting:[['colors','Colours','colors'],['speed','Speed','number'],['direction','Direction','number'],['width','Width','number'],['tail','Tail / falloff','number']],
+        marqueelighting:[['colors','Colours','colors'],['speed','Speed','number'],['direction','Direction','number'],['width','Width','number']],
+        sequentiallighting:[['colors','Colours','colors'],['speed','Speed','number'],['direction','Direction','number'],['duration','Duration','number']],
+        colorshiftlighting:[['colors','Colours','colors'],['speed','Speed','number'],['duration','Duration','number']],
+        colorpulselighting:[['colors','Colours','colors'],['speed','Speed','number'],['duration','Duration','number']],
+        gradientlighting:[['colors','Colours','colors'],['direction','Direction','number']]
+    };
+    function status(t){$('#icueLiveStatus').text(t);} function layerLabel(l,i){return (l.name&&l.name.trim())||l.effectName||l.effect||('Layer '+(i+1));}
+    function colorToHex(v){const m=String(v||'').match(/rgba?\(\s*([\d.]+)[ ,]+([\d.]+)[ ,]+([\d.]+)/i);if(!m)return '#000000';let a=[+m[1],+m[2],+m[3]];if(Math.max(...a)<=1.001)a=a.map(x=>x*255);return '#'+a.map(x=>Math.max(0,Math.min(255,Math.round(x))).toString(16).padStart(2,'0')).join('');}
+    function hexToRGB(h){return 'rgb('+[1,3,5].map(i=>(parseInt(h.slice(i,i+2),16)/255).toFixed(6).replace(/0+$/,'').replace(/\.$/,'')).join(' ')+')';}
+    function getColors(p){let xs=Array.isArray(p.colors)?p.colors:(p.colors?[p.colors]:[]);if(!xs.length&&p.color)xs=[p.color];return [colorToHex(xs[0]),colorToHex(xs[1]||xs[0])];}
+    function profileColor(){const c=getColors((currentLayer||{}).parameters||{})[0];return c==='#000000'?'#2563eb':c;}
 
-    function esc(s) { return $('<div>').text(s == null ? '' : String(s)).html(); }
-    function layerLabel(l, i) { return (l.name && l.name.trim()) || l.effectName || l.effect || ('Layer ' + (i + 1)); }
-    function status(text) { $('#icueLiveStatus').text(text); }
+    function refreshDevices(){return $.getJSON('/api/icue/devices').then(r=>{detectedDevices=r.devices||[];const qx=detectedDevices.filter(d=>d.kind==='qx');qx.forEach((d,i)=>d.qxOrdinal=i);const sel=$('#icueDeviceCanvas').empty();detectedDevices.forEach((d,i)=>sel.append($('<option>').val(i).text(d.name+' · '+d.leds+' LEDs'+(d.portId!==undefined?' · Port '+d.portId:''))));if(!detectedDevices.length)sel.append($('<option>').val('').text('No RGB devices detected'));const groups={};detectedDevices.forEach(d=>groups[d.kind]=(groups[d.kind]||0)+1);$('#icueDetectedSummary').text('Detected: '+Object.entries(groups).map(x=>x[1]+' '+x[0].toUpperCase()).join(' · '));});}
+    function refreshProfiles(selectKey){$.getJSON('/api/icue/profiles',r=>{ $('#icueProfileDirectory').text(r.directory?'Stored in: '+r.directory:'');const list=$('#icueProfileList').empty();(r.profiles||[]).forEach(p=>{const row=$('<div class="settings-row icue-profile-row"></div>').attr('data-key',p.key);row.append($('<span class="settings-label text-ellipsis"></span>').text(p.name||p.fileName),$('<small></small>').text(p.layers+' layers')).on('click',()=>loadProfile(p.key));list.append(row);});if(!(r.profiles||[]).length)list.append('<div class="settings-row"><span class="settings-label">No iCUE profiles imported</span></div>');if(selectKey)loadProfile(selectKey);});}
+    function workspaceLayers(data){const p=data.profile||{},out=[];let di=(p.devices||[]).findIndex(d=>Number(d.usbVid)===6940&&Number(d.usbPid)===3135&&(d.channels||[]).length);if(di<0)return out;const c=p.devices[di].channels[0];(c.layers||[]).forEach((l,li)=>{if(String(l.effect||'').toLowerCase()==='lightinglink'&&(data.lightingLinkLayers||[]).length){data.lightingLinkLayers.forEach((linked,lli)=>{const v=Object.assign({},linked,{enabled:!!l.enabled&&!!linked.enabled,selectionMode:l.selectionMode,leds:Array.isArray(l.leds)?l.leds.slice():[]});out.push({layer:v,deviceIndex:di,channelIndex:0,layerIndex:lli,lightingLink:true,selectionSource:l,selectionLayerIndex:li});});}else out.push({layer:l,deviceIndex:di,channelIndex:0,layerIndex:li,lightingLink:false});});return out;}
+    function loadProfile(key){currentKey=key;$.getJSON('/api/icue/profile?key='+encodeURIComponent(key),data=>{currentData=data;$('.icue-profile-row').removeClass('active').filter('[data-key="'+CSS.escape(key)+'"]').addClass('active');$('#icueEmpty').hide();$('#icueWorkspace').show();const p=data.profile||{};$('#icueProfileTitle').text(p.name||data.fileName||key);$('#icueMetaFile').text(data.fileName||'—');$('#icueMetaDevices').text((p.summary||{}).deviceEntries??(p.devices||[]).length);$('#icueMetaChannels').text((p.summary||{}).channels??'—');const layers=workspaceLayers(data);$('#icueMetaLayers').text(layers.length);const list=$('#icueLayerList').empty();layers.forEach((x,i)=>{const row=$('<div class="settings-row icue-layer-row"></div>').attr('data-i',i);row.append($('<span class="settings-label text-ellipsis"></span>').text((i+1)+' · '+layerLabel(x.layer,i)),$('<span class="icue-layer-effect"></span>').text(x.layer.effect||'unknown')).on('click',()=>selectLayer(x,i));list.append(row);});if(!layers.length)list.append('<div class="settings-row"><span class="settings-label">No iCUE LINK lighting layers found</span></div>');$('#icueSaveName').val((p.name||'Profile')+'-EDIT-001');if(layers.length)selectLayer(layers[0],0);});}
+    function selectLayer(target,index){currentTarget=target;currentLayer=target.layer;$('.icue-layer-row').removeClass('active').filter('[data-i="'+index+'"]').addClass('active');$('#icueLayerTitle').text(layerLabel(currentLayer,index)+' · '+(currentLayer.effect||'unknown'));$('#icueLayerEnabled').prop('checked',!!currentLayer.enabled);$('#icueLayerName').val(layerLabel(currentLayer,index));populateEffects();$('#icueSelectionMode').val((currentLayer.selectionMode||'').toLowerCase()==='allleds'?'AllLeds':'ConcreteLeds');$('#icueParameters').val(JSON.stringify(currentLayer.parameters||{},null,2));renderEffectControls();renderLEDs();status('Live editor ready · imported source remains unchanged.');}
+    function populateEffects(){const found=new Set(commonEffects);workspaceLayers(currentData||{}).forEach(x=>found.add(x.layer.effect));const s=$('#icueEffectType').empty();[...found].filter(Boolean).sort().forEach(x=>s.append($('<option>').val(x).text(x)));s.val(currentLayer.effect);}
+    function renderEffectControls(){const box=$('#icueEffectControls').empty(),p=currentLayer.parameters||{},schema=schemas[String(currentLayer.effect||'').toLowerCase()]||[['colors','Colours','colors'],['speed','Speed','number'],['duration','Duration','number'],['direction','Direction','number']];schema.forEach(([key,label,type])=>{if(type==='colors'){const cs=getColors(p);[0,1].forEach(n=>{const col=$('<div class="col-md-6"></div>');col.append($('<label class="sentence-text"></label>').text(label+' '+(n+1)));const inp=$('<input type="color" class="form-control form-control-color icue-param-color">').attr('data-key',key).attr('data-n',n).val(cs[n]);col.append(inp);box.append(col);});}else{const col=$('<div class="col-md-4"></div>');col.append($('<label class="sentence-text"></label>').text(label));const inp=$('<input type="number" step="0.05" class="form-control system-input icue-param-number">').attr('data-key',key);if(p[key]!==undefined)inp.val(p[key]);col.append(inp);box.append(col);}});box.append($('<div class="col-12"><label class="system-toggle compact"><input type="checkbox" id="icueRandomTest"><span class="toggle-track"></span><span class="ms-2">Random</span></label></div>'));$('#icueRandomTest').prop('checked',!!(p.random||p.isRandom));}
 
-    function refreshProfiles(selectKey) {
-        $.getJSON('/api/icue/profiles', function (r) {
-            $('#icueProfileDirectory').text(r.directory ? 'Stored in: ' + r.directory : '');
-            const list = $('#icueProfileList').empty();
-            (r.profiles || []).forEach(function (p) {
-                const row = $('<div class="settings-row icue-profile-row"></div>').attr('data-key', p.key);
-                row.append($('<span class="settings-label text-ellipsis"></span>').text(p.name || p.fileName));
-                row.append($('<small></small>').text(p.layers + ' layers'));
-                row.on('click', function () { loadProfile(p.key); });
-                list.append(row);
-            });
-            if (!(r.profiles || []).length) list.append('<div class="settings-row"><span class="settings-label">No iCUE profiles imported</span></div>');
-            Object.keys(r.failures || {}).forEach(function (f) { list.append($('<div class="settings-row"></div>').text(f + ': ' + r.failures[f])); });
-            if (selectKey) loadProfile(selectKey);
-        });
-    }
+    function selectedDevice(){const i=parseInt($('#icueDeviceCanvas').val(),10);return Number.isFinite(i)?detectedDevices[i]:null;}
+    function logicalFor(d,local){if(!d)return null;if(d.kind==='qx')return (d.qxOrdinal||0)*42+local;if(d.kind==='titan')return 756+local;return null;}
+    function localSelected(local){if(!currentLayer)return false;if((currentLayer.selectionMode||'').toLowerCase()==='allleds')return true;const logical=logicalFor(selectedDevice(),local);if(logical===null)return false;return (currentLayer.leds||[]).some(x=>{const m=String(x).match(/(\d+)\s*$/);return m&&+m[1]===logical;});}
+    function qxSegment(local){return qxTopology.find(z=>local>=z.start&&local<z.start+z.count);}
+    function topologySlot(local){const z=qxSegment(local);if(!z)return {face:'front',x:50,y:50};const n=local-z.start,r=z.region==='outer'?39:20,a=(-90+360*n/z.count)*Math.PI/180;return {face:z.face,x:50+r*Math.cos(a),y:50+r*Math.sin(a),label:z.label,segmentIndex:n,segmentCount:z.count};}
+    function facePanel(name,label){const face=$('<div class="icue-face"></div>').attr('data-face',name).append($('<div class="icue-face-title"></div>').text(label));const stage=$('<div class="icue-fan-stage"></div>').append('<div class="icue-fan-ring"></div><div class="icue-fan-ring inner"></div><div class="icue-sidebar left"></div><div class="icue-sidebar right"></div>');face.append(stage);return {face,stage};}
+    function renderLEDs(){const map=$('#icueLedMap').empty().removeClass('linear'),d=selectedDevice();if(!d){$('#icueLedCount').text('No RGB device selected');return;}let count=0;if(d.kind==='qx'&&d.leds===34){const front=facePanel('front','Front'),rear=facePanel('rear','Rear');map.append(front.face,rear.face);for(let i=0;i<34;i++){const selected=localSelected(i),pos=topologySlot(i),z=qxSegment(i);if(selected)count++;const b=$('<button type="button" class="icue-led"></button>').text(i).css({left:pos.x+'%',top:pos.y+'%'}).attr('title','Local LED '+i+' · '+pos.label);if(selected)b.addClass('selected').css('background-color',profileColor());if(inspectRegion&&z&&inspectRegion===z.key)b.addClass('region-inspect');if($('#icueTopologyProbe').prop('checked')&&i===probeLocal)b.addClass('probe');b.on('click',()=>toggleLED(i));(pos.face==='front'?front.stage:rear.stage).append(b);}}else{map.addClass('linear');for(let i=0;i<d.leds;i++){const selected=localSelected(i);if(selected)count++;const b=$('<button type="button" class="icue-led"></button>').text(i).attr('title',d.name+' · local LED '+i);if(selected)b.addClass('selected').css('background-color',profileColor());b.on('click',()=>toggleLED(i));map.append(b);}}$('#icueLedCount').text(count+' / '+d.leds+' LEDs on '+d.name);$('.icue-topology-key,#icueTopologyProbe').toggle(d.kind==='qx');updateProbeLabel();}
+    function updateProbeLabel(){const d=selectedDevice();if(!d||d.kind!=='qx')return;const z=qxSegment(probeLocal),logical=logicalFor(d,probeLocal);$('#icueProbeLed').text('Local LED '+probeLocal+' · Logical '+logical);$('#icueProbeZone').text(z?z.label+' · candidate order '+(probeLocal-z.start+1)+'/'+z.count:'Unknown');}
+    function toggleLED(local){const d=selectedDevice(),logical=logicalFor(d,local);if(logical===null){toast.warning('Concrete LED IDs for this device topology are not mapped yet; All LEDs is safe.');return;}let ids=(currentLayer.leds||[]).map(String);if((currentLayer.selectionMode||'').toLowerCase()==='allleds')ids=[];let found=ids.findIndex(x=>{const m=x.match(/(\d+)\s*$/);return m&&+m[1]===logical;});if(found>=0)ids.splice(found,1);else ids.push('LedId::'+logical);currentLayer.selectionMode='ConcreteLeds';currentLayer.leds=ids;$('#icueSelectionMode').val('ConcreteLeds');renderLEDs();apply({selectionMode:'ConcreteLeds',leds:ids});}
+    function setDeviceSelection(all){const d=selectedDevice();if(!d)return;if(all){currentLayer.selectionMode='AllLeds';$('#icueSelectionMode').val('AllLeds');renderLEDs();apply({selectionMode:'AllLeds'});return;}const logicals=new Set();for(let i=0;i<d.leds;i++){const x=logicalFor(d,i);if(x!==null)logicals.add(x);}const ids=(currentLayer.leds||[]).filter(x=>{const m=String(x).match(/(\d+)\s*$/);return !m||!logicals.has(+m[1]);});currentLayer.selectionMode='ConcreteLeds';currentLayer.leds=ids;$('#icueSelectionMode').val('ConcreteLeds');renderLEDs();apply({selectionMode:'ConcreteLeds',leds:ids});}
+    function apply(changes){if(!currentTarget||!currentKey||applying)return;const body={deviceIndex:currentTarget.deviceIndex,channelIndex:currentTarget.channelIndex,layerIndex:currentTarget.layerIndex,lightingLink:currentTarget.lightingLink};Object.assign(body,changes);applying=true;status('Applying live…');$.ajax({url:'/api/icue/profile?key='+encodeURIComponent(currentKey),type:'POST',contentType:'application/json',data:JSON.stringify(body),success:r=>{currentLayer=Object.assign(currentLayer,r.layer||{});status('Live edit applied · source .cueprofile unchanged.');renderLEDs();},error:x=>{toast.warning(x.responseText||'Unable to apply live edit');status('Live edit failed.');},complete:()=>applying=false});}
+    function applyParam(key,val){currentLayer.parameters=currentLayer.parameters||{};currentLayer.parameters[key]=val;$('#icueParameters').val(JSON.stringify(currentLayer.parameters,null,2));apply({parameters:{[key]:val}});}
 
-    function workspaceLayers(data) {
-        const p=data.profile||{}, out=[];
-        // Mirror renderer Profile.LinkDevice(): the workspace is about the LINK/QX
-        // lighting canvas, not every keyboard/DRAM/compatibility canvas serialized
-        // into the .cueprofile.
-        let di=(p.devices||[]).findIndex(d=>Number(d.usbVid)===6940 && Number(d.usbPid)===3135 && (d.channels||[]).length);
-        if(di<0) return out;
-        const d=p.devices[di], c=(d.channels||[])[0];
-        (c.layers||[]).forEach(function(l,li){
-            if(String(l.effect||'').toLowerCase()==='lightinglink' && (data.lightingLinkLayers||[]).length){
-                (data.lightingLinkLayers||[]).forEach(function(linked,lli){
-                    const v=Object.assign({},linked,{
-                        enabled:!!l.enabled && !!linked.enabled,
-                        selectionMode:l.selectionMode,
-                        leds:Array.isArray(l.leds)?l.leds.slice():[]
-                    });
-                    out.push({layer:v,deviceIndex:di,channelIndex:0,layerIndex:lli,lightingLink:true,selectionSource:l,selectionLayerIndex:li,group:'iCUE LINK'});
-                });
-            } else {
-                out.push({layer:l,deviceIndex:di,channelIndex:0,layerIndex:li,lightingLink:false,group:'iCUE LINK'});
-            }
-        });
-        return out;
-    }
-
-    function loadProfile(key) {
-        currentKey = key;
-        $.getJSON('/api/icue/profile?key=' + encodeURIComponent(key), function (data) {
-            currentData = data;
-            $('.icue-profile-row').removeClass('active').filter('[data-key="' + CSS.escape(key) + '"]').addClass('active');
-            $('#icueEmpty').hide(); $('#icueWorkspace').show();
-            const p = data.profile || {};
-            $('#icueProfileTitle').text(p.name || data.fileName || key);
-            $('#icueMetaFile').text(data.fileName || '—');
-            $('#icueMetaDevices').text((p.summary || {}).deviceEntries ?? (p.devices || []).length);
-            $('#icueMetaChannels').text((p.summary || {}).channels ?? '—');
-            $('#icueMetaLayers').text((p.summary || {}).layers ?? '—');
-            const layers = workspaceLayers(data), list = $('#icueLayerList').empty();
-            $('#icueMetaLayers').text(layers.length);
-            layers.forEach(function (x, i) {
-                const l=x.layer, row=$('<div class="settings-row icue-layer-row"></div>').attr('data-i',i);
-                const left=$('<span class="settings-label text-ellipsis"></span>').text((i+1)+' · '+layerLabel(l,i));
-                const right=$('<span class="icue-layer-effect"></span>').text(l.effect||'unknown');
-                row.append(left,right).on('click',function(){selectLayer(x,i);});
-                list.append(row);
-            });
-            if(!layers.length) list.append('<div class="settings-row"><span class="settings-label">No iCUE LINK lighting layers found</span></div>');
-            if (layers.length) selectLayer(layers[0], 0);
-        }).fail(function (xhr) { toast.warning(xhr.responseText || 'Unable to load iCUE profile'); });
-    }
-
-    function selectLayer(target, index) {
-        currentTarget = target; currentLayer = target.layer;
-        $('.icue-layer-row').removeClass('active').filter('[data-i="' + index + '"]').addClass('active');
-        $('#icueLayerTitle').text(layerLabel(currentLayer, index) + ' · ' + (currentLayer.effect || 'unknown'));
-        $('#icueLayerEnabled').prop('checked', !!currentLayer.enabled);
-        $('#icueSelectionMode').val((currentLayer.selectionMode || '').toLowerCase() === 'allleds' ? 'AllLeds' : 'ConcreteLeds');
-        const p = currentLayer.parameters || {};
-        $('#icueRandomTest').prop('checked', !!(p.random || p.isRandom));
-        setNumber('#icueSpeed', p.speed); setNumber('#icueDuration', p.duration); setNumber('#icueDirection', p.direction);
-        const colors = getColors(p); $('#icueColor1').val(colors[0]); $('#icueColor2').val(colors[1]);
-        $('#icueParameters').val(JSON.stringify(p, null, 2));
-        renderLEDs(); status('Changes apply live and reset on restart/re-upload.');
-    }
-
-    function setNumber(id, value) { $(id).val((typeof value === 'number' || /^-?\d+(\.\d+)?$/.test(String(value || ''))) ? value : ''); }
-    function colorToHex(v) {
-        const m = String(v || '').match(/rgba?\(\s*([\d.]+)[ ,]+([\d.]+)[ ,]+([\d.]+)/i); if (!m) return '#000000';
-        let a = [Number(m[1]), Number(m[2]), Number(m[3])]; if (Math.max.apply(null,a) <= 1.001) a = a.map(x => x*255);
-        return '#' + a.map(x => Math.max(0,Math.min(255,Math.round(x))).toString(16).padStart(2,'0')).join('');
-    }
-    function hexToRGB(h) { return 'rgb(' + [1,3,5].map(i => (parseInt(h.slice(i,i+2),16)/255).toFixed(6).replace(/0+$/,'').replace(/\.$/,'')).join(' ') + ')'; }
-    function getColors(p) {
-        let xs = Array.isArray(p.colors) ? p.colors : (p.colors ? [p.colors] : []);
-        if (!xs.length && p.color) xs=[p.color];
-        return [colorToHex(xs[0]), colorToHex(xs[1] || xs[0])];
-    }
-
-    function localSelected(local) {
-        if (!currentLayer) return false;
-        if ((currentLayer.selectionMode || '').toLowerCase() === 'allleds') return true;
-        const fan = parseInt($('#icueFan').val(),10), logical = fan * 42 + local;
-        return (currentLayer.leds || []).some(x => { const m=String(x).match(/(\d+)\s*$/); return m && parseInt(m[1],10)===logical; });
-    }
-    // Confirmed QX segment boundaries from OpenLinkHub. Angular start/direction remain to verify.
-    function qxSegment(local) { return qxTopology.find(z => local >= z.start && local < z.start + z.count); }
-    function topologySlot(local) {
-        const z=qxSegment(local);
-        if(!z)return {face:'front',x:50,y:50,region:'unknown',label:'Unknown',segmentIndex:0,segmentCount:1};
-        const n=local-z.start, radius=z.region==='outer'?39:20;
-        const a=(-90+(360*n/z.count))*Math.PI/180;
-        return {face:z.face,x:50+radius*Math.cos(a),y:50+radius*Math.sin(a),region:z.region,label:z.label,segmentIndex:n,segmentCount:z.count};
-    }
-    function facePanel(name,label) {
-        const face=$('<div class="icue-face"></div>').attr('data-face',name);
-        face.append($('<div class="icue-face-title"></div>').text(label));
-        const stage=$('<div class="icue-fan-stage"></div>');
-        stage.append('<div class="icue-fan-ring"></div><div class="icue-fan-ring inner"></div><div class="icue-sidebar left"></div><div class="icue-sidebar right"></div>');
-        face.append(stage); return {face:face,stage:stage};
-    }
-    function renderLEDs() {
-        const map=$('#icueLedMap').empty(), front=facePanel('front','Front'), rear=facePanel('rear','Rear'); let count=0;
-        map.append(front.face,rear.face);
-        for(let i=0;i<34;i++) {
-            const selected=localSelected(i), pos=topologySlot(i), inspected=inspectRegion===qxSegment(i).key; if(selected) count++;
-            const b=$('<button type="button" class="icue-led"></button>').text(i).attr({'aria-label':'Local LED '+i+' · '+pos.label,'title':'Local LED '+i+' · '+pos.label+' · group position '+(pos.segmentIndex+1)+'/'+pos.segmentCount+' · angular order still to verify'});
-            b.css({left:pos.x+'%',top:pos.y+'%'}); if(selected){ b.addClass('selected'); const c=getColors((currentLayer||{}).parameters||{})[0]; if(c && c!=='#000000') b.css('background-color',c); } if(inspected)b.addClass('region-inspect'); if($('#icueTopologyProbe').prop('checked')&&i===probeLocal)b.addClass('probe');
-            b.on('click',()=>toggleLED(i)); (pos.face==='front'?front.stage:rear.stage).append(b);
-        }
-        $('#icueLedCount').text(count + ' / 34 LEDs on selected fan'); updateProbeLabel();
-    }
-    function updateProbeLabel(){
-        const fan=parseInt($('#icueFan').val(),10)||0, z=qxSegment(probeLocal), n=z?probeLocal-z.start:0;
-        $('#icueProbeLed').text('Local LED '+probeLocal+' · Logical '+(fan*42+probeLocal));
-        $('#icueProbeZone').text(z?z.label+' · candidate order '+(n+1)+'/'+z.count:'Unknown zone');
-        $('#icueProbeGroup').val(z?z.key:'front-outer');
-    }
-    function stepProbe(delta){ probeLocal=(probeLocal+delta+34)%34; renderLEDs(); }
-    function selectProbeGroup(key){ const z=qxTopology.find(x=>x.key===key); if(!z)return; probeLocal=z.start; renderLEDs(); }
-    function inspectTopologyRegion(key){ inspectRegion=(inspectRegion===key?'':key); $('.icue-region-button').removeClass('active').filter('[data-region="'+inspectRegion+'"]').addClass('active'); renderLEDs(); }
-    function setFanSelection(mode) {
-        if (!currentLayer) return;
-        const fan=parseInt($('#icueFan').val(),10), lo=fan*42, hi=lo+33;
-        let ids=(currentLayer.leds||[]).map(String).filter(x=>{const m=x.match(/(\d+)\s*$/); if(!m)return true; const n=parseInt(m[1],10); return n<lo||n>hi;});
-        if(mode==='all') for(let i=0;i<34;i++) ids.push('LedId::' + (lo+i));
-        currentLayer.selectionMode='ConcreteLeds'; currentLayer.leds=ids; $('#icueSelectionMode').val('ConcreteLeds'); renderLEDs(); apply({selectionMode:'ConcreteLeds', leds:ids});
-    }
-    function toggleLED(local) {
-        const fan=parseInt($('#icueFan').val(),10), logical=fan*42+local; let ids=(currentLayer.leds||[]).map(String);
-        if ((currentLayer.selectionMode||'').toLowerCase()==='allleds') { ids=[]; for(let i=0;i<34;i++) ids.push('LedId::'+(fan*42+i)); }
-        let found=-1;
-        ids.forEach((x,i)=>{const m=x.match(/(\d+)\s*$/); if(m&&parseInt(m[1],10)===logical)found=i;});
-        if(found>=0) ids.splice(found,1); else ids.push('LedId::'+logical);
-        currentLayer.selectionMode='ConcreteLeds'; currentLayer.leds=ids; $('#icueSelectionMode').val('ConcreteLeds'); renderLEDs(); apply({selectionMode:'ConcreteLeds', leds:ids});
-    }
-
-    function apply(changes) {
-        if (!currentTarget || !currentKey || applying) return;
-        const body={deviceIndex:currentTarget.deviceIndex,channelIndex:currentTarget.channelIndex,layerIndex:currentTarget.layerIndex,lightingLink:currentTarget.lightingLink};
-        Object.assign(body,changes); applying=true; status('Applying live…');
-        $.ajax({url:'/api/icue/profile?key='+encodeURIComponent(currentKey),type:'POST',contentType:'application/json',data:JSON.stringify(body),success:function(r){ currentLayer=Object.assign(currentLayer,r.layer||{}); status('Live edit applied · source .cueprofile unchanged.'); },error:function(xhr){toast.warning(xhr.responseText||'Unable to apply live edit');status('Live edit failed.');},complete:function(){applying=false;}});
-    }
-
-    $('#icueProfileForm').on('submit', function(e){ e.preventDefault(); const f=$('#icueProfileFile')[0].files[0]; if(!f){toast.warning('Choose a .cueprofile first');return;} const fd=new FormData();fd.append('profileFile',f);$('#btnICUEProfileUpload').prop('disabled',true);$.ajax({url:'/api/icue/upload',type:'POST',data:fd,processData:false,contentType:false,success:r=>{toast.success(r.message||'Profile imported');$('#icueProfileFile').val('');refreshProfiles(r.profile && r.profile.key ? r.profile.key : undefined);},error:x=>toast.warning(x.responseText||'Import failed'),complete:()=>$('#btnICUEProfileUpload').prop('disabled',false)}); });
-    $('#icueFan').on('change',renderLEDs); $('.icue-region-button').on('click',function(){inspectTopologyRegion($(this).data('region'));}); $('#icueTopologyProbe').on('change',function(){ $('#icueProbePanel').toggle(this.checked); renderLEDs(); }); $('#icueProbePrev').on('click',()=>stepProbe(-1)); $('#icueProbeNext').on('click',()=>stepProbe(1)); $('#icueProbeGroup').on('change',function(){selectProbeGroup(this.value);}); $('#icueSelectAll').on('click',()=>setFanSelection('all')); $('#icueSelectNone').on('click',()=>setFanSelection('none'));
-    $('#icueLayerEnabled').on('change',function(){currentLayer.enabled=this.checked;apply({enabled:this.checked});});
-    $('#icueSelectionMode').on('change',function(){currentLayer.selectionMode=this.value;renderLEDs();apply({selectionMode:this.value});});
-    $('#icueRandomTest').on('change',function(){const k=('isRandom' in (currentLayer.parameters||{}))?'isRandom':'random';currentLayer.parameters=currentLayer.parameters||{};currentLayer.parameters[k]=this.checked;$('#icueParameters').val(JSON.stringify(currentLayer.parameters,null,2));apply({parameters:{[k]:this.checked}});});
-    [['#icueSpeed','speed'],['#icueDuration','duration'],['#icueDirection','direction']].forEach(x=>$(x[0]).on('change',function(){if(this.value==='')return;const v=Number(this.value);currentLayer.parameters=currentLayer.parameters||{};currentLayer.parameters[x[1]]=v;$('#icueParameters').val(JSON.stringify(currentLayer.parameters,null,2));apply({parameters:{[x[1]]:v}});}));
-    $('#icueColor1,#icueColor2').on('change',function(){const colors=[hexToRGB($('#icueColor1').val()),hexToRGB($('#icueColor2').val())];currentLayer.parameters=currentLayer.parameters||{};currentLayer.parameters.colors=colors;$('#icueParameters').val(JSON.stringify(currentLayer.parameters,null,2));apply({parameters:{colors:colors}});});
-    $('#icueApplyParameters').on('click',function(){try{const p=JSON.parse($('#icueParameters').val()||'{}');currentLayer.parameters=p;apply({parameters:p});}catch(e){toast.warning('Parameters must be valid JSON');}});
-
-    function loadRain(){ $.getJSON('/api/icue/rain-calibration',v=>{['Slow','Normal','Fast'].forEach(k=>{$('#icueRain'+k).val(Math.round(v[k.toLowerCase()+'Ms']));$('#icueRain'+k+'Value').text(Math.round(v[k.toLowerCase()+'Ms'])+' ms');});}); }
-    let rainTimer=null; $('#icueRainSlow,#icueRainNormal,#icueRainFast').on('input',function(){const id=this.id, label=id+'Value';$('#'+label).text(Math.round(Number(this.value))+' ms');clearTimeout(rainTimer);rainTimer=setTimeout(()=>{$.ajax({url:'/api/icue/rain-calibration',type:'POST',contentType:'application/json',data:JSON.stringify({slowMs:Number($('#icueRainSlow').val()),normalMs:Number($('#icueRainNormal').val()),fastMs:Number($('#icueRainFast').val())}),success:()=>$('#icueRainCalibrationStatus').text('Live Rain timing applied.'),error:x=>$('#icueRainCalibrationStatus').text(x.responseText||'Unable to apply timing')});},100);});
-
-    refreshProfiles(); loadRain();
+    $('#icueProfileForm').on('submit',function(e){e.preventDefault();const f=$('#icueProfileFile')[0].files[0];if(!f){toast.warning('Choose a .cueprofile first');return;}const fd=new FormData();fd.append('profileFile',f);$.ajax({url:'/api/icue/upload',type:'POST',data:fd,processData:false,contentType:false,success:r=>{toast.success(r.message||'Profile imported');refreshProfiles(r.profile&&r.profile.key);},error:x=>toast.warning(x.responseText||'Import failed')});});
+    $('#icueDeviceCanvas').on('change',renderLEDs);$('#icueSelectionMode').on('change',function(){currentLayer.selectionMode=this.value;renderLEDs();apply({selectionMode:this.value});});$('#icueLayerEnabled').on('change',function(){currentLayer.enabled=this.checked;apply({enabled:this.checked});});
+    $('#icueLayerName').on('change',function(){currentLayer.name=this.value;apply({name:this.value});});$('#icueEffectType').on('change',function(){currentLayer.effect=this.value;renderEffectControls();apply({effect:this.value});});
+    $('#icueEffectControls').on('change','.icue-param-number',function(){if(this.value!=='')applyParam($(this).data('key'),Number(this.value));}).on('change','.icue-param-color',function(){const key=$(this).data('key'),inputs=$('.icue-param-color[data-key="'+key+'"]'),colors=inputs.map((_,x)=>hexToRGB(x.value)).get();applyParam(key,colors);renderLEDs();}).on('change','#icueRandomTest',function(){applyParam(('isRandom' in (currentLayer.parameters||{}))?'isRandom':'random',this.checked);});
+    $('#icueApplyParameters').on('click',function(){try{const p=JSON.parse($('#icueParameters').val()||'{}');currentLayer.parameters=p;renderEffectControls();renderLEDs();apply({parameters:p});}catch(e){toast.warning('Parameters must be valid JSON');}});
+    $('#icueSelectAll').on('click',()=>setDeviceSelection(true));$('#icueSelectNone').on('click',()=>setDeviceSelection(false));$('.icue-region-button').on('click',function(){inspectRegion=inspectRegion===$(this).data('region')?'':$(this).data('region');$('.icue-region-button').removeClass('active').filter('[data-region="'+inspectRegion+'"]').addClass('active');renderLEDs();});$('#icueTopologyProbe').on('change',function(){$('#icueProbePanel').toggle(this.checked);renderLEDs();});$('#icueProbePrev').on('click',()=>{probeLocal=(probeLocal+33)%34;renderLEDs();});$('#icueProbeNext').on('click',()=>{probeLocal=(probeLocal+1)%34;renderLEDs();});$('#icueProbeGroup').on('change',function(){const z=qxTopology.find(x=>x.key===this.value);if(z){probeLocal=z.start;renderLEDs();}});
+    function layerAction(action){if(!currentTarget||!currentTarget.lightingLink){toast.warning('Layer structure editing currently applies to authored Lighting Link layers.');return;}const body={action:action,lightingLink:true,layerIndex:currentTarget.layerIndex,deviceIndex:currentTarget.deviceIndex,channelIndex:currentTarget.channelIndex};$.ajax({url:'/api/icue/profile?key='+encodeURIComponent(currentKey),type:'POST',contentType:'application/json',data:JSON.stringify(body),success:()=>loadProfile(currentKey),error:x=>toast.warning(x.responseText||'Unable to edit layer structure')});}
+    $('#icueAddLayer').on('click',()=>layerAction('add'));$('#icueDuplicateLayer').on('click',()=>layerAction('duplicate'));$('#icueMoveUp').on('click',()=>layerAction('up'));$('#icueMoveDown').on('click',()=>layerAction('down'));$('#icueDeleteLayer').on('click',()=>layerAction('delete'));
+    function loadRain(){$.getJSON('/api/icue/rain-calibration',v=>{['Slow','Normal','Fast'].forEach(k=>{$('#icueRain'+k).val(Math.round(v[k.toLowerCase()+'Ms']));$('#icueRain'+k+'Value').text(Math.round(v[k.toLowerCase()+'Ms'])+' ms');});});}let rainTimer=null;$('#icueRainSlow,#icueRainNormal,#icueRainFast').on('input',function(){$('#'+this.id+'Value').text(Math.round(+this.value)+' ms');clearTimeout(rainTimer);rainTimer=setTimeout(()=>{$.ajax({url:'/api/icue/rain-calibration',type:'POST',contentType:'application/json',data:JSON.stringify({slowMs:+$('#icueRainSlow').val(),normalMs:+$('#icueRainNormal').val(),fastMs:+$('#icueRainFast').val()}),success:()=>$('#icueRainCalibrationStatus').text('Live Rain timing applied.')});},100);});
+    $.when(refreshDevices()).always(()=>{refreshProfiles();loadRain();});
 });

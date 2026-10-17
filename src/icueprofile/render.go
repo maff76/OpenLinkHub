@@ -2546,14 +2546,25 @@ func hsv(h, s, v float64) RGB {
 // never rewritten. Re-uploading the file or restarting OpenLinkHub restores
 // the authored iCUE values.
 type RuntimeLayerEdit struct {
+	Action        string         `json:"action,omitempty"`
 	DeviceIndex   int            `json:"deviceIndex"`
 	ChannelIndex  int            `json:"channelIndex"`
 	LayerIndex    int            `json:"layerIndex"`
 	LightingLink  bool           `json:"lightingLink"`
+	Name          *string        `json:"name,omitempty"`
+	Effect        *string        `json:"effect,omitempty"`
 	Enabled       *bool          `json:"enabled,omitempty"`
 	SelectionMode *string        `json:"selectionMode,omitempty"`
 	LEDs          *[]string      `json:"leds,omitempty"`
 	Parameters    map[string]any `json:"parameters,omitempty"`
+}
+
+func cloneMap(in map[string]any) map[string]any {
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 // ApplyRuntimeLayerEdit applies a temporary layer patch and drops compiled live
@@ -2568,7 +2579,52 @@ func ApplyRuntimeLayerEdit(p *Profile, edit RuntimeLayerEdit) (Layer, error) {
 	defer scorePlayers.Unlock()
 
 	var layer *Layer
-	if edit.LightingLink {
+	if edit.LightingLink && strings.TrimSpace(edit.Action) != "" {
+		action := strings.ToLower(strings.TrimSpace(edit.Action))
+		switch action {
+		case "add":
+			p.LightingLinkLayers = append(p.LightingLinkLayers, Layer{Name: "New Layer", Enabled: true, SelectionMode: "AllLeds", Effect: "StaticLighting", Parameters: map[string]any{"colors": []any{"rgb(1 1 1)"}}, StartWithProfile: true, StopAfterTimes: -1, PlayOption: "Standard"})
+			edit.LayerIndex = len(p.LightingLinkLayers) - 1
+		case "duplicate":
+			if edit.LayerIndex < 0 || edit.LayerIndex >= len(p.LightingLinkLayers) {
+				return Layer{}, fmt.Errorf("lighting-link layer %d is out of range", edit.LayerIndex)
+			}
+			clone := p.LightingLinkLayers[edit.LayerIndex]
+			clone.Name = strings.TrimSpace(clone.Name + " Copy")
+			clone.LEDs = append([]string(nil), clone.LEDs...)
+			clone.Parameters = cloneMap(clone.Parameters)
+			p.LightingLinkLayers = append(p.LightingLinkLayers, Layer{})
+			copy(p.LightingLinkLayers[edit.LayerIndex+2:], p.LightingLinkLayers[edit.LayerIndex+1:])
+			p.LightingLinkLayers[edit.LayerIndex+1] = clone
+			edit.LayerIndex++
+		case "delete":
+			if edit.LayerIndex < 0 || edit.LayerIndex >= len(p.LightingLinkLayers) {
+				return Layer{}, fmt.Errorf("lighting-link layer %d is out of range", edit.LayerIndex)
+			}
+			p.LightingLinkLayers = append(p.LightingLinkLayers[:edit.LayerIndex], p.LightingLinkLayers[edit.LayerIndex+1:]...)
+			if len(p.LightingLinkLayers) == 0 {
+				p.LightingLinkLayers = append(p.LightingLinkLayers, Layer{Name: "New Layer", Enabled: true, SelectionMode: "AllLeds", Effect: "StaticLighting", Parameters: map[string]any{"colors": []any{"rgb(1 1 1)"}}, StartWithProfile: true, StopAfterTimes: -1, PlayOption: "Standard"})
+			}
+			if edit.LayerIndex >= len(p.LightingLinkLayers) {
+				edit.LayerIndex = len(p.LightingLinkLayers) - 1
+			}
+		case "up", "down":
+			if edit.LayerIndex < 0 || edit.LayerIndex >= len(p.LightingLinkLayers) {
+				return Layer{}, fmt.Errorf("lighting-link layer %d is out of range", edit.LayerIndex)
+			}
+			other := edit.LayerIndex - 1
+			if action == "down" {
+				other = edit.LayerIndex + 1
+			}
+			if other >= 0 && other < len(p.LightingLinkLayers) {
+				p.LightingLinkLayers[edit.LayerIndex], p.LightingLinkLayers[other] = p.LightingLinkLayers[other], p.LightingLinkLayers[edit.LayerIndex]
+				edit.LayerIndex = other
+			}
+		default:
+			return Layer{}, fmt.Errorf("unknown layer action %q", edit.Action)
+		}
+		layer = &p.LightingLinkLayers[edit.LayerIndex]
+	} else if edit.LightingLink {
 		if edit.LayerIndex < 0 || edit.LayerIndex >= len(p.LightingLinkLayers) {
 			return Layer{}, fmt.Errorf("lighting-link layer %d is out of range", edit.LayerIndex)
 		}
@@ -2588,6 +2644,12 @@ func ApplyRuntimeLayerEdit(p *Profile, edit RuntimeLayerEdit) (Layer, error) {
 		layer = &ch.Layers[edit.LayerIndex]
 	}
 
+	if edit.Name != nil {
+		layer.Name = strings.TrimSpace(*edit.Name)
+	}
+	if edit.Effect != nil && strings.TrimSpace(*edit.Effect) != "" {
+		layer.Effect = strings.TrimSpace(*edit.Effect)
+	}
 	if edit.Enabled != nil {
 		layer.Enabled = *edit.Enabled
 	}
