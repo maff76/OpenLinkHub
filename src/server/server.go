@@ -2645,6 +2645,26 @@ func getICUEProfiles(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+// getICUERainCalibration returns the temporary in-memory Rain timing controls.
+func getICUERainCalibration(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(icueprofile.GetRainCalibration())
+}
+
+// setICUERainCalibration updates the temporary Rain timing controls. These are
+// intentionally not persisted: they are diagnostic values used to establish
+// the correct iCUE Slow/Normal/Fast mapping before it is baked into the renderer.
+func setICUERainCalibration(w http.ResponseWriter, r *http.Request) {
+	var values icueprofile.RainCalibration
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&values); err != nil {
+		http.Error(w, "Unable to read Rain calibration values: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	values = icueprofile.SetRainCalibration(values)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(values)
+}
+
 // uploadICUEProfile validates and stores one Corsair .cueprofile. This stage is
 // parser-only: importing a profile never changes the currently active RGB.
 func uploadICUEProfile(w http.ResponseWriter, r *http.Request) {
@@ -2896,6 +2916,7 @@ func setRoutes() http.Handler {
 	handleFunc(r, "/api/keyboard/dial/getColors/", http.MethodGet, getControlDialColors)
 	handleFunc(r, "/api/getSupportedDevices", http.MethodGet, getSupportedDevices)
 	handleFunc(r, "/api/icue/profiles", http.MethodGet, getICUEProfiles)
+	handleFunc(r, "/api/icue/rain-calibration", http.MethodGet, getICUERainCalibration)
 	handleFunc(r, "/api/backup", http.MethodGet, backup.PerformBackup)
 	handleFunc(r, "/api/position/", http.MethodGet, getPositionData)
 	handleFunc(r, "/api/headset/getEqualizers/", http.MethodGet, getEqualizers)
@@ -2995,6 +3016,7 @@ func setRoutes() http.Handler {
 	handleFunc(r, "/api/setSupportedDevices", http.MethodPost, setSupportedDevices)
 	handleFunc(r, "/api/restore", http.MethodPost, backup.PerformRestore)
 	handleFunc(r, "/api/icue/upload", http.MethodPost, uploadICUEProfile)
+	handleFunc(r, "/api/icue/rain-calibration", http.MethodPost, setICUERainCalibration)
 	handleFunc(r, "/api/lcd/upload", http.MethodPost, lcd.PerformImageUpload)
 	handleFunc(r, "/api/headset/anc", http.MethodPost, changeActiveNoiseCancellation)
 	handleFunc(r, "/api/headset/sidetone", http.MethodPost, changeSidetone)

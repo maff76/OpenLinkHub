@@ -247,6 +247,22 @@
                                 </form>
                                 <div id="icueProfileDirectory" class="sentence-text text-left" style="margin-top: 12px;"></div>
                                 <div id="icueProfileList" class="settings-list" style="margin-top: 8px;"></div>
+                                <div class="sentence-text text-left" style="margin-top: 18px;"><strong>Rain timing calibration</strong><br><small>Temporary live controls. Values reset when OpenLinkHub restarts. Higher ms = slower Rain; density/overlap is preserved.</small></div>
+                                <div class="settings-list" id="icueRainCalibration" style="margin-top: 8px;">
+                                    <div class="settings-row">
+                                        <span class="settings-label">Slow <strong id="icueRainSlowValue">200 ms</strong></span>
+                                        <input type="range" id="icueRainSlow" min="20" max="1000" step="5" value="200" style="width: 55%;">
+                                    </div>
+                                    <div class="settings-row">
+                                        <span class="settings-label">Normal <strong id="icueRainNormalValue">100 ms</strong></span>
+                                        <input type="range" id="icueRainNormal" min="20" max="1000" step="5" value="100" style="width: 55%;">
+                                    </div>
+                                    <div class="settings-row">
+                                        <span class="settings-label">Fast <strong id="icueRainFastValue">67 ms</strong></span>
+                                        <input type="range" id="icueRainFast" min="20" max="1000" step="5" value="67" style="width: 55%;">
+                                    </div>
+                                    <div class="sentence-text text-left" id="icueRainCalibrationStatus" style="margin-top: 6px;">Move a slider while the matching iCUE Rain speed is active.</div>
+                                </div>
                             </div>
                         </div>
                     </div>

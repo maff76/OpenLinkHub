@@ -825,3 +825,63 @@ $(document).ready(function () {
         });
     });
 });
+
+// Temporary iCUE Rain timing calibration. The renderer reads these values live;
+// no profile reload or OpenLinkHub restart is required between slider changes.
+(function () {
+    let rainCalibrationTimer = null;
+
+    function rainCalibrationPayload() {
+        return {
+            slowMs: parseFloat($('#icueRainSlow').val()),
+            normalMs: parseFloat($('#icueRainNormal').val()),
+            fastMs: parseFloat($('#icueRainFast').val())
+        };
+    }
+
+    function showRainCalibration(values) {
+        if (!values) return;
+        $('#icueRainSlow').val(Math.round(values.slowMs));
+        $('#icueRainNormal').val(Math.round(values.normalMs));
+        $('#icueRainFast').val(Math.round(values.fastMs));
+        $('#icueRainSlowValue').text(Math.round(values.slowMs) + ' ms');
+        $('#icueRainNormalValue').text(Math.round(values.normalMs) + ' ms');
+        $('#icueRainFastValue').text(Math.round(values.fastMs) + ' ms');
+    }
+
+    function loadRainCalibration() {
+        $.getJSON('/api/icue/rain-calibration', function (values) {
+            showRainCalibration(values);
+        });
+    }
+
+    function sendRainCalibration() {
+        const values = rainCalibrationPayload();
+        $('#icueRainCalibrationStatus').text('Applying live timing…');
+        $.ajax({
+            url: '/api/icue/rain-calibration',
+            type: 'POST',
+            contentType: 'application/json',
+            dataType: 'json',
+            data: JSON.stringify(values),
+            success: function (saved) {
+                showRainCalibration(saved);
+                $('#icueRainCalibrationStatus').text('Live timing applied — no profile reload required.');
+            },
+            error: function (xhr) {
+                $('#icueRainCalibrationStatus').text('Unable to apply timing: ' + xhr.responseText);
+            }
+        });
+    }
+
+    $(document).ready(function () {
+        loadRainCalibration();
+        $('#icueRainSlow, #icueRainNormal, #icueRainFast').on('input', function () {
+            const id = this.id;
+            const label = id === 'icueRainSlow' ? '#icueRainSlowValue' : (id === 'icueRainNormal' ? '#icueRainNormalValue' : '#icueRainFastValue');
+            $(label).text(Math.round(parseFloat(this.value)) + ' ms');
+            clearTimeout(rainCalibrationTimer);
+            rainCalibrationTimer = setTimeout(sendRainCalibration, 120);
+        });
+    });
+})();

@@ -61,6 +61,63 @@ var persistentLEDStates = struct {
 	byRun map[persistentStateKey]*persistentLEDState
 }{byRun: make(map[persistentStateKey]*persistentLEDState)}
 
+// RainCalibration exposes temporary, in-memory timing controls used to match
+// iCUE's Slow/Normal/Fast Rain presets on real hardware. Values are spawn
+// intervals in milliseconds. Event lifetime scales with the selected interval
+// so changing timing does not also change Rain density/overlap.
+type RainCalibration struct {
+	SlowMS   float64 `json:"slowMs"`
+	NormalMS float64 `json:"normalMs"`
+	FastMS   float64 `json:"fastMs"`
+}
+
+var rainCalibration = struct {
+	sync.RWMutex
+	values RainCalibration
+}{values: RainCalibration{SlowMS: 200, NormalMS: 100, FastMS: 200.0 / 3.0}}
+
+func GetRainCalibration() RainCalibration {
+	rainCalibration.RLock()
+	defer rainCalibration.RUnlock()
+	return rainCalibration.values
+}
+
+func SetRainCalibration(v RainCalibration) RainCalibration {
+	// Keep the diagnostic control inside a useful/safe calibration range.
+	clamp := func(x, fallback float64) float64 {
+		if x <= 0 {
+			return fallback
+		}
+		if x < 20 {
+			return 20
+		}
+		if x > 1000 {
+			return 1000
+		}
+		return x
+	}
+	current := GetRainCalibration()
+	v.SlowMS = clamp(v.SlowMS, current.SlowMS)
+	v.NormalMS = clamp(v.NormalMS, current.NormalMS)
+	v.FastMS = clamp(v.FastMS, current.FastMS)
+	rainCalibration.Lock()
+	rainCalibration.values = v
+	rainCalibration.Unlock()
+	return v
+}
+
+func rainStepDuration(speed float64) float64 {
+	v := GetRainCalibration()
+	switch {
+	case speed < 1.5:
+		return v.SlowMS / 1000.0
+	case speed < 2.5:
+		return v.NormalMS / 1000.0
+	default:
+		return v.FastMS / 1000.0
+	}
+}
+
 func persistentKey(deviceOrdinal, ledCount int, started time.Time) persistentStateKey {
 	return persistentStateKey{started: started.UnixNano(), deviceOrdinal: deviceOrdinal, ledCount: ledCount}
 }
@@ -917,7 +974,7 @@ func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, 
 }
 
 func compileLiveConcert(p *Profile, topology LEDTopology, deviceOrdinal, ledCount int) *compiledScore {
-	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.73 rain-impact-dispersal-static-opacity leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
+	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.74 rain-live-calibration-sliders leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
 	d := p.LinkDevice()
 	if d == nil || len(d.Channels) == 0 {
 		return &compiledScore{unsupported: []string{"LINK device entry missing"}}
@@ -1421,9 +1478,10 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		// iCUE Rain speed changes how quickly the same-density rain pattern cycles,
 		// rather than changing how much rain exists at once. Scale both the spawn
 		// cadence and event lifetime by the same factor so their overlap ratio stays
-		// constant at Slow/Normal/Fast. 200 ms is the calibrated Slow cadence.
-		stepDuration := 0.200 / speed
-		dropDuration := (0.55 * (0.200 / 0.115)) / speed
+		// constant at Slow/Normal/Fast. The temporary calibration controls supply the cadence for each preset.
+		stepDuration := rainStepDuration(speed)
+		// Preserve the calibrated overlap/density ratio while the timing slider moves.
+		dropDuration := stepDuration * (0.55 / 0.115)
 		currentSlot := int(math.Floor(elapsed / stepDuration))
 		period := float64(maxInt(n, 1))
 		if len(spatial) == n {
