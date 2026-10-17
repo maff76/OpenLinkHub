@@ -5,6 +5,7 @@ $(function () {
     let currentLayer = null;
     let applying = false;
     let probeLocal = 0;
+    let inspectRegion = '';
     const qxTopology = [
         {key:'front-outer', label:'Front Outer Ring', face:'front', region:'outer', start:0, count:12},
         {key:'back-outer', label:'Back Outer Ring', face:'rear', region:'outer', start:12, count:12},
@@ -33,15 +34,28 @@ $(function () {
         });
     }
 
-    function flattenLayers(data) {
-        const out = [];
-        const p = data.profile || {};
-        (p.devices || []).forEach(function (d, di) {
-            (d.channels || []).forEach(function (c, ci) {
-                (c.layers || []).forEach(function (l, li) { out.push({layer:l, deviceIndex:di, channelIndex:ci, layerIndex:li, lightingLink:false, group:'Device ' + (di+1) + ' · Ch ' + c.index}); });
-            });
+    function workspaceLayers(data) {
+        const p=data.profile||{}, out=[];
+        // Mirror renderer Profile.LinkDevice(): the workspace is about the LINK/QX
+        // lighting canvas, not every keyboard/DRAM/compatibility canvas serialized
+        // into the .cueprofile.
+        let di=(p.devices||[]).findIndex(d=>Number(d.usbVid)===6940 && Number(d.usbPid)===3135 && (d.channels||[]).length);
+        if(di<0) return out;
+        const d=p.devices[di], c=(d.channels||[])[0];
+        (c.layers||[]).forEach(function(l,li){
+            if(String(l.effect||'').toLowerCase()==='lightinglink' && (data.lightingLinkLayers||[]).length){
+                (data.lightingLinkLayers||[]).forEach(function(linked,lli){
+                    const v=Object.assign({},linked,{
+                        enabled:!!l.enabled && !!linked.enabled,
+                        selectionMode:l.selectionMode,
+                        leds:Array.isArray(l.leds)?l.leds.slice():[]
+                    });
+                    out.push({layer:v,deviceIndex:di,channelIndex:0,layerIndex:lli,lightingLink:true,selectionSource:l,selectionLayerIndex:li,group:'iCUE LINK'});
+                });
+            } else {
+                out.push({layer:l,deviceIndex:di,channelIndex:0,layerIndex:li,lightingLink:false,group:'iCUE LINK'});
+            }
         });
-        (data.lightingLinkLayers || []).forEach(function (l, li) { out.push({layer:l, deviceIndex:0, channelIndex:0, layerIndex:li, lightingLink:true, group:'Lighting Link'}); });
         return out;
     }
 
@@ -57,36 +71,16 @@ $(function () {
             $('#icueMetaDevices').text((p.summary || {}).deviceEntries ?? (p.devices || []).length);
             $('#icueMetaChannels').text((p.summary || {}).channels ?? '—');
             $('#icueMetaLayers').text((p.summary || {}).layers ?? '—');
-            const layers = flattenLayers(data), list = $('#icueLayerList').empty();
-            const groups = [];
+            const layers = workspaceLayers(data), list = $('#icueLayerList').empty();
+            $('#icueMetaLayers').text(layers.length);
             layers.forEach(function (x, i) {
-                const name = layerLabel(x.layer, i), effect = x.layer.effect || 'unknown';
-                const key = name.trim().toLowerCase() + '\u0000' + String(effect).trim().toLowerCase();
-                let g = groups.find(v => v.key === key);
-                if (!g) { g={key:key,name:name,effect:effect,items:[]}; groups.push(g); }
-                g.items.push({target:x,index:i});
+                const l=x.layer, row=$('<div class="settings-row icue-layer-row"></div>').attr('data-i',i);
+                const left=$('<span class="settings-label text-ellipsis"></span>').text((i+1)+' · '+layerLabel(l,i));
+                const right=$('<span class="icue-layer-effect"></span>').text(l.effect||'unknown');
+                row.append(left,right).on('click',function(){selectLayer(x,i);});
+                list.append(row);
             });
-            groups.forEach(function (g) {
-                const wrap=$('<div class="icue-layer-group"></div>');
-                const head=$('<div class="settings-row icue-layer-group-head"></div>');
-                head.append($('<span class="settings-label text-ellipsis"></span>').text(g.name));
-                const meta=$('<span class="icue-layer-group-meta"></span>');
-                meta.append($('<small></small>').text(g.effect));
-                if(g.items.length>1) meta.append($('<span class="icue-layer-count"></span>').text('× '+g.items.length));
-                head.append(meta); wrap.append(head);
-                const children=$('<div class="icue-layer-group-items"></div>').toggle(g.items.length===1);
-                g.items.forEach(function (item, j) {
-                    const row=$('<div class="settings-row icue-layer-row icue-layer-child"></div>').attr('data-i',item.index);
-                    row.append($('<span class="settings-label text-ellipsis"></span>').text(g.items.length>1 ? ('Instance '+(j+1)+' · '+item.target.group) : item.target.group));
-                    row.append($('<small></small>').text(g.items.length>1 ? ('Layer '+(item.target.layerIndex+1)) : g.effect));
-                    row.on('click',function(e){e.stopPropagation();selectLayer(item.target,item.index);});
-                    children.append(row);
-                });
-                wrap.append(children);
-                if(g.items.length>1) head.addClass('expandable').attr('title','Click to show/hide '+g.items.length+' individual layers').on('click',function(){children.slideToggle(120);head.toggleClass('open');});
-                else head.on('click',function(){selectLayer(g.items[0].target,g.items[0].index);});
-                list.append(wrap);
-            });
+            if(!layers.length) list.append('<div class="settings-row"><span class="settings-label">No iCUE LINK lighting layers found</span></div>');
             if (layers.length) selectLayer(layers[0], 0);
         }).fail(function (xhr) { toast.warning(xhr.responseText || 'Unable to load iCUE profile'); });
     }
@@ -94,7 +88,7 @@ $(function () {
     function selectLayer(target, index) {
         currentTarget = target; currentLayer = target.layer;
         $('.icue-layer-row').removeClass('active').filter('[data-i="' + index + '"]').addClass('active');
-        $('#icueLayerTitle').text(target.group + ' · ' + layerLabel(currentLayer, index) + ' · ' + (currentLayer.effect || 'unknown'));
+        $('#icueLayerTitle').text(layerLabel(currentLayer, index) + ' · ' + (currentLayer.effect || 'unknown'));
         $('#icueLayerEnabled').prop('checked', !!currentLayer.enabled);
         $('#icueSelectionMode').val((currentLayer.selectionMode || '').toLowerCase() === 'allleds' ? 'AllLeds' : 'ConcreteLeds');
         const p = currentLayer.parameters || {};
@@ -144,9 +138,9 @@ $(function () {
         const map=$('#icueLedMap').empty(), front=facePanel('front','Front'), rear=facePanel('rear','Rear'); let count=0;
         map.append(front.face,rear.face);
         for(let i=0;i<34;i++) {
-            const selected=localSelected(i), pos=topologySlot(i); if(selected) count++;
+            const selected=localSelected(i), pos=topologySlot(i), inspected=inspectRegion===qxSegment(i).key; if(selected) count++;
             const b=$('<button type="button" class="icue-led"></button>').text(i).attr({'aria-label':'Local LED '+i+' · '+pos.label,'title':'Local LED '+i+' · '+pos.label+' · group position '+(pos.segmentIndex+1)+'/'+pos.segmentCount+' · angular order still to verify'});
-            b.css({left:pos.x+'%',top:pos.y+'%'}); if(selected)b.addClass('selected'); if($('#icueTopologyProbe').prop('checked')&&i===probeLocal)b.addClass('probe');
+            b.css({left:pos.x+'%',top:pos.y+'%'}); if(selected){ b.addClass('selected'); const c=getColors((currentLayer||{}).parameters||{})[0]; if(c && c!=='#000000') b.css('background-color',c); } if(inspected)b.addClass('region-inspect'); if($('#icueTopologyProbe').prop('checked')&&i===probeLocal)b.addClass('probe');
             b.on('click',()=>toggleLED(i)); (pos.face==='front'?front.stage:rear.stage).append(b);
         }
         $('#icueLedCount').text(count + ' / 34 LEDs on selected fan'); updateProbeLabel();
@@ -159,6 +153,7 @@ $(function () {
     }
     function stepProbe(delta){ probeLocal=(probeLocal+delta+34)%34; renderLEDs(); }
     function selectProbeGroup(key){ const z=qxTopology.find(x=>x.key===key); if(!z)return; probeLocal=z.start; renderLEDs(); }
+    function inspectTopologyRegion(key){ inspectRegion=(inspectRegion===key?'':key); $('.icue-region-button').removeClass('active').filter('[data-region="'+inspectRegion+'"]').addClass('active'); renderLEDs(); }
     function setFanSelection(mode) {
         if (!currentLayer) return;
         const fan=parseInt($('#icueFan').val(),10), lo=fan*42, hi=lo+33;
@@ -183,7 +178,7 @@ $(function () {
     }
 
     $('#icueProfileForm').on('submit', function(e){ e.preventDefault(); const f=$('#icueProfileFile')[0].files[0]; if(!f){toast.warning('Choose a .cueprofile first');return;} const fd=new FormData();fd.append('profileFile',f);$('#btnICUEProfileUpload').prop('disabled',true);$.ajax({url:'/api/icue/upload',type:'POST',data:fd,processData:false,contentType:false,success:r=>{toast.success(r.message||'Profile imported');$('#icueProfileFile').val('');refreshProfiles(r.profile && r.profile.key ? r.profile.key : undefined);},error:x=>toast.warning(x.responseText||'Import failed'),complete:()=>$('#btnICUEProfileUpload').prop('disabled',false)}); });
-    $('#icueFan').on('change',renderLEDs); $('#icueTopologyProbe').on('change',function(){ $('#icueProbePanel').toggle(this.checked); renderLEDs(); }); $('#icueProbePrev').on('click',()=>stepProbe(-1)); $('#icueProbeNext').on('click',()=>stepProbe(1)); $('#icueProbeGroup').on('change',function(){selectProbeGroup(this.value);}); $('#icueSelectAll').on('click',()=>setFanSelection('all')); $('#icueSelectNone').on('click',()=>setFanSelection('none'));
+    $('#icueFan').on('change',renderLEDs); $('.icue-region-button').on('click',function(){inspectTopologyRegion($(this).data('region'));}); $('#icueTopologyProbe').on('change',function(){ $('#icueProbePanel').toggle(this.checked); renderLEDs(); }); $('#icueProbePrev').on('click',()=>stepProbe(-1)); $('#icueProbeNext').on('click',()=>stepProbe(1)); $('#icueProbeGroup').on('change',function(){selectProbeGroup(this.value);}); $('#icueSelectAll').on('click',()=>setFanSelection('all')); $('#icueSelectNone').on('click',()=>setFanSelection('none'));
     $('#icueLayerEnabled').on('change',function(){currentLayer.enabled=this.checked;apply({enabled:this.checked});});
     $('#icueSelectionMode').on('change',function(){currentLayer.selectionMode=this.value;renderLEDs();apply({selectionMode:this.value});});
     $('#icueRandomTest').on('change',function(){const k=('isRandom' in (currentLayer.parameters||{}))?'isRandom':'random';currentLayer.parameters=currentLayer.parameters||{};currentLayer.parameters[k]=this.checked;$('#icueParameters').val(JSON.stringify(currentLayer.parameters,null,2));apply({parameters:{[k]:this.checked}});});
