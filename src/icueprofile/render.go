@@ -22,6 +22,52 @@ type LEDPatch struct {
 	Strength float64
 }
 
+// persistentLEDState is the experimental v12.4.47 physical-LED state model.
+// A rendered LED keeps its last committed RGB value until an effect issues a
+// new command for that LED. In particular, StaticLighting seeds the state when
+// a profile starts; it is not reasserted on every renderer frame.
+type persistentLEDState struct {
+	started int64
+	leds    []RGB
+}
+
+var persistentLEDStates = struct {
+	sync.Mutex
+	byProfile map[*Profile]map[int]*persistentLEDState
+}{byProfile: make(map[*Profile]map[int]*persistentLEDState)}
+
+func loadPersistentLEDState(p *Profile, deviceOrdinal, ledCount int, started time.Time) ([]RGB, bool) {
+	persistentLEDStates.Lock()
+	defer persistentLEDStates.Unlock()
+	perDevice := persistentLEDStates.byProfile[p]
+	if perDevice == nil {
+		perDevice = make(map[int]*persistentLEDState)
+		persistentLEDStates.byProfile[p] = perDevice
+	}
+	startKey := started.UnixNano()
+	state := perDevice[deviceOrdinal]
+	if state == nil || state.started != startKey || len(state.leds) != ledCount {
+		perDevice[deviceOrdinal] = &persistentLEDState{started: startKey, leds: make([]RGB, ledCount)}
+		return make([]RGB, ledCount), false
+	}
+	out := make([]RGB, ledCount)
+	copy(out, state.leds)
+	return out, true
+}
+
+func storePersistentLEDState(p *Profile, deviceOrdinal int, started time.Time, leds []RGB) {
+	persistentLEDStates.Lock()
+	defer persistentLEDStates.Unlock()
+	perDevice := persistentLEDStates.byProfile[p]
+	if perDevice == nil {
+		perDevice = make(map[int]*persistentLEDState)
+		persistentLEDStates.byProfile[p] = perDevice
+	}
+	copyLEDs := make([]RGB, len(leds))
+	copy(copyLEDs, leds)
+	perDevice[deviceOrdinal] = &persistentLEDState{started: started.UnixNano(), leds: copyLEDs}
+}
+
 func renderLayerPatches(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64) ([]LEDPatch, bool) {
 	colors, alpha, ok := renderLayer(l, fanOrdinal, n, elapsed, spatial)
 	if !ok {
@@ -55,7 +101,7 @@ func applyPatch(dst RGB, patch LEDPatch) RGB {
 	}
 }
 
-// v12.4.46 command-clash audit. This is observational only: it does not alter
+// v12.4.47 persistent-state A/B retains the v12.4.46 command-clash audit. This is observational only: it does not alter
 // rendering. A clash means two or more layers issue an active command to the
 // same physical LED on the same renderer tick. A conflicting clash means those
 // commands request visibly different RGB values.
@@ -390,7 +436,9 @@ func selectedAt(l Layer, logicalBase, local int) bool {
 // RenderFan renders a fan using a device-specific topology supplied by the LINK layer.
 // Layers are composited bottom-to-top (reverse XML order), matching iCUE's layer stack semantics.
 func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, started time.Time, brightness float64) ([]byte, []string) {
-	out := make([]RGB, ledCount)
+	// Start from the physical LED state committed by the previous renderer tick.
+	// NO COMMAND therefore means KEEP CURRENT STATE, not reveal/rebuild Static.
+	out, stateInitialized := loadPersistentLEDState(p, deviceOrdinal, ledCount, started)
 	unsupported := map[string]bool{}
 	d := p.LinkDevice()
 	if d == nil || len(d.Channels) == 0 {
@@ -446,6 +494,11 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 	for _, li := range renderOrder {
 		l := layers[li]
 		if !l.Enabled {
+			continue
+		}
+		// Static is an initial state command. Once another effect interrupts an
+		// LED, Static must not silently reclaim it on the next 20 ms frame.
+		if stateInitialized && strings.EqualFold(l.Effect, "StaticLighting") {
 			continue
 		}
 		patches, ok := renderLayerPatches(l, deviceOrdinal, ledCount, elapsed, topologyPositions(topology, deviceOrdinal, ledCount))
@@ -636,6 +689,9 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 		}
 		contributionAudit.Unlock()
 	}
+	// Commit the unscaled physical RGB state before applying the device's global
+	// brightness limit. LEDs untouched this tick retain this state next tick.
+	storePersistentLEDState(p, deviceOrdinal, started, out)
 	if brightness <= 0 {
 		brightness = 1
 	}
