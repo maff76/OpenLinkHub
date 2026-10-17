@@ -2645,6 +2645,21 @@ func getICUEProfiles(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+// icueRainCalibration serves both GET and POST on one route. OpenLinkHub's
+// handleFunc helper registers one ServeMux pattern per call, so registering the
+// same path separately for GET and POST causes net/http to panic at startup.
+func icueRainCalibration(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		getICUERainCalibration(w, r)
+	case http.MethodPost:
+		setICUERainCalibration(w, r)
+	default:
+		w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 // getICUERainCalibration returns the temporary in-memory Rain timing controls.
 func getICUERainCalibration(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -2916,7 +2931,7 @@ func setRoutes() http.Handler {
 	handleFunc(r, "/api/keyboard/dial/getColors/", http.MethodGet, getControlDialColors)
 	handleFunc(r, "/api/getSupportedDevices", http.MethodGet, getSupportedDevices)
 	handleFunc(r, "/api/icue/profiles", http.MethodGet, getICUEProfiles)
-	handleFunc(r, "/api/icue/rain-calibration", http.MethodGet, getICUERainCalibration)
+	r.HandleFunc("/api/icue/rain-calibration", icueRainCalibration)
 	handleFunc(r, "/api/backup", http.MethodGet, backup.PerformBackup)
 	handleFunc(r, "/api/position/", http.MethodGet, getPositionData)
 	handleFunc(r, "/api/headset/getEqualizers/", http.MethodGet, getEqualizers)
@@ -3016,7 +3031,6 @@ func setRoutes() http.Handler {
 	handleFunc(r, "/api/setSupportedDevices", http.MethodPost, setSupportedDevices)
 	handleFunc(r, "/api/restore", http.MethodPost, backup.PerformRestore)
 	handleFunc(r, "/api/icue/upload", http.MethodPost, uploadICUEProfile)
-	handleFunc(r, "/api/icue/rain-calibration", http.MethodPost, setICUERainCalibration)
 	handleFunc(r, "/api/lcd/upload", http.MethodPost, lcd.PerformImageUpload)
 	handleFunc(r, "/api/headset/anc", http.MethodPost, changeActiveNoiseCancellation)
 	handleFunc(r, "/api/headset/sidetone", http.MethodPost, changeSidetone)
