@@ -2367,46 +2367,17 @@ func editorColor(c RGB) EditorColor {
 }
 
 func decodedLayerColors(l Layer) []EditorColor {
+	// Decode only fields that are known to carry authored colour data.  The
+	// parser intentionally preserves cereal collections in several shapes
+	// ([]string, []any and nested maps), so walk those values recursively rather
+	// than depending on one concrete Go type.
 	var rgb []RGB
-	// Transition curves are the richest source and are already parsed by the
-	// renderer for Static/Gradient-style authored colours.
-	for _, stop := range transitionStops(l) {
-		rgb = append(rgb, stop.C)
-	}
-	// If there is no transition curve, use the same keys and decoder that the
-	// renderer's layerColor/effectColors paths consume.
-	if len(rgb) == 0 {
-		for _, key := range []string{"colors", "color"} {
-			v, ok := l.Parameters[key]
-			if !ok {
-				continue
-			}
-			switch xs := v.(type) {
-			case []string:
-				for _, x := range xs {
-					if c, ok := parseColor(x); ok {
-						rgb = append(rgb, c)
-					}
-				}
-			default:
-				if c, ok := parseColor(v); ok {
-					rgb = append(rgb, c)
-				}
-			}
+	for _, key := range []string{"transitions", "colors", "color"} {
+		if v, ok := l.Parameters[key]; ok {
+			collectDecodedColors(v, &rgb)
 		}
 	}
-	if len(rgb) == 0 {
-		// This deliberately uses layerColor with black only as a sentinel. A
-		// genuine authored black remains valid when its source key is present.
-		for _, key := range []string{"transitions", "color", "colors"} {
-			if _, ok := l.Parameters[key]; ok {
-				if c := layerColor(l, RGB{}); true {
-					rgb = append(rgb, c)
-				}
-				break
-			}
-		}
-	}
+
 	out := make([]EditorColor, 0, len(rgb))
 	seen := map[string]bool{}
 	for _, c := range rgb {
@@ -2417,6 +2388,42 @@ func decodedLayerColors(l Layer) []EditorColor {
 		}
 	}
 	return out
+}
+
+// collectDecodedColors accepts the generic shapes produced by the cueprofile
+// parser without teaching the browser anything about Corsair serialization.
+// Only values below known colour-bearing parameter keys are passed here, which
+// prevents ordinary numeric effect parameters from being mistaken for colours.
+func collectDecodedColors(v any, out *[]RGB) {
+	switch x := v.(type) {
+	case []string:
+		for _, item := range x {
+			collectDecodedColors(item, out)
+		}
+	case []any:
+		for _, item := range x {
+			collectDecodedColors(item, out)
+		}
+	case map[string]any:
+		// Prefer explicit colour members when a structured object survives the
+		// parser, otherwise recurse so future parser enrichment remains compatible.
+		for _, key := range []string{"color", "colour", "value", "first", "second"} {
+			if item, ok := x[key]; ok {
+				collectDecodedColors(item, out)
+			}
+		}
+		for key, item := range x {
+			switch strings.ToLower(key) {
+			case "color", "colour", "value", "first", "second":
+				continue
+			}
+			collectDecodedColors(item, out)
+		}
+	default:
+		if c, ok := parseColor(v); ok {
+			*out = append(*out, c)
+		}
+	}
 }
 
 // DecodeEditorLayers exposes renderer-decoded authored values without changing
