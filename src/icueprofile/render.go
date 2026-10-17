@@ -905,7 +905,7 @@ func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, 
 }
 
 func compileLiveConcert(p *Profile, topology LEDTopology, deviceOrdinal, ledCount int) *compiledScore {
-	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.67 colorwave-calibrated-propagation leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
+	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.68 rain-spawn-calibration leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
 	d := p.LinkDevice()
 	if d == nil || len(d.Channels) == 0 {
 		return &compiledScore{unsupported: []string{"LINK device entry missing"}}
@@ -1358,7 +1358,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		}
 		random := boolParam(l.Parameters["random"], false)
 		direction := int(number(l.Parameters["direction"], 0))
-		stepDuration := 0.115 / speed
+		stepDuration := 0.200 / speed
 		dropDuration := 0.55 / math.Sqrt(speed)
 		currentSlot := int(math.Floor(elapsed / stepDuration))
 		period := float64(maxInt(n, 1))
