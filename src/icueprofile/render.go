@@ -905,7 +905,7 @@ func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, 
 }
 
 func compileLiveConcert(p *Profile, topology LEDTopology, deviceOrdinal, ledCount int) *compiledScore {
-	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.65 cadence-measurement-visual-regions leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
+	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.66 cached-profile-frame-cadence leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
 	d := p.LinkDevice()
 	if d == nil || len(d.Channels) == 0 {
 		return &compiledScore{unsupported: []string{"LINK device entry missing"}}

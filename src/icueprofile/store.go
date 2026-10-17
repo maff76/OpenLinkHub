@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 )
 
 // ImportedProfile is the compact representation exposed to the UI. The full
@@ -71,6 +73,28 @@ func Scan(configPath string) ([]ImportedProfile, map[string]string, error) {
 	return profiles, failures, nil
 }
 
+type cachedProfile struct {
+	profile *Profile
+	path    string
+	modTime time.Time
+	size    int64
+}
+
+var profileCache = struct {
+	sync.RWMutex
+	byKey map[string]cachedProfile
+}{byKey: make(map[string]cachedProfile)}
+
+func cacheKey(configPath, key string) string {
+	return filepath.Clean(configPath) + "\x00" + key
+}
+
+func invalidateProfileCache(configPath, key string) {
+	profileCache.Lock()
+	delete(profileCache.byKey, cacheKey(configPath, key))
+	profileCache.Unlock()
+}
+
 // Save validates the profile before atomically placing it in the import
 // directory. Existing profiles with the same filename are intentionally
 // replaced, making re-importing an updated Corsair profile predictable.
@@ -104,6 +128,7 @@ func Save(configPath, fileName string, data []byte) (*Profile, string, error) {
 	if err = os.Rename(tmpName, dest); err != nil {
 		return nil, "", err
 	}
+	invalidateProfileCache(configPath, ProfileKey(base))
 	return p, dest, nil
 }
 
@@ -127,8 +152,24 @@ func ProfileKey(fileName string) string {
 	return "icue-" + strings.Trim(b.String(), "-")
 }
 
-// LoadByKey resolves and parses an imported profile by its RGB mode key.
+// LoadByKey resolves an imported profile by its RGB mode key. Parsed profiles
+// are cached because this function is on the live RGB frame path: LINK calls
+// generateRgbEffect for every device every ~20 ms. Re-parsing the XML for every
+// fan on every frame can turn a nominal 50 Hz loop into ~1 Hz.
+//
+// A cheap Stat keeps direct on-disk replacements working: if size or mtime
+// changes, the profile is parsed again. Save also invalidates immediately.
 func LoadByKey(configPath, key string) (*Profile, string, error) {
+	ck := cacheKey(configPath, key)
+	profileCache.RLock()
+	cached, ok := profileCache.byKey[ck]
+	profileCache.RUnlock()
+	if ok {
+		if info, err := os.Stat(cached.path); err == nil && info.Size() == cached.size && info.ModTime().Equal(cached.modTime) {
+			return cached.profile, cached.path, nil
+		}
+	}
+
 	dir, err := EnsureDirectory(configPath)
 	if err != nil {
 		return nil, "", err
@@ -146,7 +187,16 @@ func LoadByKey(configPath, key string) (*Profile, string, error) {
 		}
 		path := filepath.Join(dir, entry.Name())
 		p, err := ParseFile(path)
-		return p, path, err
+		if err != nil {
+			return p, path, err
+		}
+		info, statErr := os.Stat(path)
+		if statErr == nil {
+			profileCache.Lock()
+			profileCache.byKey[ck] = cachedProfile{profile: p, path: path, modTime: info.ModTime(), size: info.Size()}
+			profileCache.Unlock()
+		}
+		return p, path, nil
 	}
 	return nil, "", fmt.Errorf("imported iCUE profile %q not found", key)
 }
