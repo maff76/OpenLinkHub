@@ -624,387 +624,339 @@ func selectedAt(l Layer, logicalBase, local int) bool {
 	return false
 }
 
-// RenderFan renders a fan using a device-specific topology supplied by the LINK layer.
-// Layers emit commands onto a shared timeline; XML order only breaks exact-time ties.
-func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, started time.Time, brightness float64) ([]byte, []string) {
-	// Start from the physical LED state committed by the previous renderer tick.
-	// NO COMMAND therefore means KEEP CURRENT STATE, not reveal/rebuild Static.
-	out, stateInitialized := loadPersistentLEDState(deviceOrdinal, ledCount, started)
-	unsupported := map[string]bool{}
-	d := p.LinkDevice()
-	if d == nil || len(d.Channels) == 0 {
-		return make([]byte, ledCount*3), []string{"LINK device entry missing"}
-	}
-	layers := p.expandLightingLinks(d.Channels[0].Layers)
-	// Imported profiles encode ConcreteLeds against the source machine's fan
-	// count.  Preserve exact selections for source-covered QX fans, but when
-	// the local machine has additional QX fans repeat the complete source fan
-	// selection pattern by fan ordinal.  This keeps authored per-LED phase
-	// partitions (for example Electricity's ten staggered Gradient groups)
-	// portable without inventing colours, timings, or per-profile rules.
-	sourceDeviceCount := sourceQXFanCount(layers, topology)
-	elapsed := time.Since(started).Seconds()
-	// iCUE serializes the visible stack top-to-bottom. Resolve it base-to-top:
-	// the last XML layer establishes the foundation, then each higher layer may
-	// replace only LEDs for which that effect currently has an active command.
-	// Do not regroup AllLeds and ConcreteLeds: selection describes where an
-	// effect may act, not its compositing priority.
-	renderOrder := make([]int, 0, len(layers))
-	for li := len(layers) - 1; li >= 0; li-- {
-		renderOrder = append(renderOrder, li)
-	}
-	type contributionSample struct {
-		layerIndex     int
-		effect         string
-		selection      string
-		selected       int
-		mapped         int
-		activeOutput   int
-		nonBlackOutput int
-		alphaZero      int
-		alphaPartial   int
-		alphaOpaque    int
-		alphaMin       float64
-		alphaMax       float64
-		alphaSeen      bool
-		changed        int
-		post           map[int]RGB
-	}
-	contributions := make([]contributionSample, 0, len(renderOrder))
-	// Per-frame command ownership audit. Keep this completely separate from the
-	// compositor so the diagnostic cannot change the visual result.
-	frameCommandCount := make([]int, ledCount)
-	frameFirstColor := make([]RGB, ledCount)
-	frameConflict := make([]bool, ledCount)
-	// Renderer-wide command-emission audit. These counters are fed only by
-	// explicit LEDPatch.Active events after Static/Gradient/edge-trigger handling;
-	// merely being selected or having a currently-active rendered value does not
-	// count as a command.
-	frameEffectCommands := make(map[string]int64)
-	frameEffectLEDSlots := make(map[string]map[int]struct{})
-	commandQueue := make([]LEDCommand, 0, ledCount*2)
-	// v12.4.40 global compositor A/B: use the same authored-alpha source-over
-	// rule for every lighting layer. The previous screen blend for later AllLeds
-	// effects could manufacture bright/cyan colours that are not present in any
-	// source layer. Keep the established broad-background/sparse-foreground
-	// ordering, but let each effect's own alpha determine its contribution.
+// v12.4.53 score compiler/player. Effects are recorded first, merged into one
+// master score, then playback only consumes timestamped physical-LED notes.
+type compiledScore struct {
+	duration    float64
+	notes       []LEDCommand
+	unsupported []string
+	perLayer    map[int]int
+}
 
-	for _, li := range renderOrder {
-		l := layers[li]
+type scorePlayerState struct {
+	score       *compiledScore
+	leds        []RGB
+	lastPos     float64
+	lastElapsed float64
+	started     bool
+	logBucket   int64
+}
+
+var scorePlayers = struct {
+	sync.Mutex
+	byRun map[persistentStateKey]*scorePlayerState
+}{byRun: make(map[persistentStateKey]*scorePlayerState)}
+
+func concreteCommand(col RGB, strength float64) RGB {
+	if strength < 0 {
+		strength = 0
+	}
+	if strength > 1 {
+		strength = 1
+	}
+	return RGB{R: col.R * strength, G: col.G * strength, B: col.B * strength}
+}
+
+func layerScoreDuration(l Layer) float64 {
+	// Captured iCUE layers consistently expose duration in milliseconds where it
+	// is present. It defines a candidate track length, not a live-render timeout.
+	if v := number(l.Parameters["duration"], 0) / 1000; v > 0 {
+		return v
+	}
+	return 0
+}
+
+func masterScoreDuration(layers []Layer) float64 {
+	longest := 0.0
+	for _, l := range layers {
 		if !l.Enabled {
 			continue
 		}
-		// Static is an initial state command. Once another effect interrupts an
-		// LED, Static must not silently reclaim it on the next 20 ms frame.
-		if stateInitialized && strings.EqualFold(l.Effect, "StaticLighting") {
-			continue
+		if d := layerScoreDuration(l); d > longest {
+			longest = d
 		}
-		spatialPositions := topologyPositions(topology, deviceOrdinal, ledCount)
-		patches, ok := renderLayerPatches(l, deviceOrdinal, ledCount, elapsed, spatialPositions)
-		// v12.4.48 state-command A/B: Gradient selection is only the set of LEDs
-		// the effect may command. It does not repaint those LEDs continuously.
-		// Only an authored transition-stop crossing creates a new command; all
-		// intervening frames retain the LED's previously committed physical state.
-		if strings.EqualFold(l.Effect, "GradientLighting") {
-			if eventPatches, eventOK := gradientStateChangePatches(l, ledCount, elapsed); eventOK {
-				patches = eventPatches
-				ok = true
+	}
+	if longest <= 0 {
+		longest = 1
+	}
+	return longest
+}
+
+func appendScoreNote(dst *[]LEDCommand, l Layer, li, led int, at float64, col RGB, strength float64) {
+	if at < -0.0000005 {
+		return
+	}
+	*dst = append(*dst, LEDCommand{Time: at, LED: led, Color: concreteCommand(col, strength), Strength: 1, LayerIndex: li, Effect: l.Effect})
+}
+
+func recordLayerTrack(l Layer, li, fanOrdinal, ledCount int, duration float64, topology LEDTopology, sourceDeviceCount int) ([]LEDCommand, bool) {
+	spatial := topologyPositions(topology, fanOrdinal, ledCount)
+	notes := make([]LEDCommand, 0)
+	effect := strings.ToLower(l.Effect)
+
+	// Static is one opening chord. It never repaints until the whole score loops.
+	if effect == "staticlighting" {
+		colors, alpha, ok := renderLayer(l, fanOrdinal, ledCount, 0, spatial)
+		if !ok {
+			return nil, false
+		}
+		for led := 0; led < ledCount; led++ {
+			if !selectedWithTopology(l, topology, fanOrdinal, led, sourceDeviceCount) {
+				continue
 			}
-		} else if ok && !strings.EqualFold(l.Effect, "StaticLighting") {
-			// Convert rendered activity into genuine SET events. Repeated identical
-			// activity is NO COMMAND and therefore cannot reclaim an LED changed by
-			// another layer.
-			patches = edgeTriggeredPatches(deviceOrdinal, ledCount, started, li, patches)
-			// v12.4.52: notes belong to the effect timeline, not to the renderer
-			// sampling instant. Rain keeps the visually validated v12.4.38 drop
-			// calculation but its fade changes sit on a stable timeline. ColorWave
-			// uses the exact travelling-front arrival time for each LED.
-			if strings.EqualFold(l.Effect, "RainLighting") {
-				at := rainCommandTime(elapsed)
-				for i := range patches {
-					if patches[i].Active {
-						patches[i].Time = at
-					}
+			if led < len(colors) && led < len(alpha) && alpha[led] > 0.000001 {
+				appendScoreNote(&notes, l, li, led, 0, colors[led], alpha[led])
+			}
+		}
+		return notes, true
+	}
+
+	// Gradient's authored transition stops are its notes. Record every stop in
+	// every repetition that falls inside the master score; gaps are NO COMMAND.
+	if effect == "gradientlighting" {
+		stops := transitionStops(l)
+		if len(stops) < 2 {
+			return nil, false
+		}
+		dur := layerScoreDuration(l)
+		if dur <= 0 {
+			dur = 1
+		}
+		opacity := number(l.Parameters["opacity"], 1)
+		if opacity > 1 {
+			opacity /= 255
+		}
+		if opacity < 0 {
+			opacity = 0
+		}
+		if opacity > 1 {
+			opacity = 1
+		}
+		for base := 0.0; base < duration-0.0000005; base += dur {
+			for si, st := range stops {
+				if si == len(stops)-1 && st.T >= 0.999999 {
+					continue
 				}
-			} else if strings.EqualFold(l.Effect, "ColorWaveLighting") {
-				for i := range patches {
-					if !patches[i].Active {
+				at := base + st.T*dur
+				if at < -0.0000005 || at >= duration-0.0000005 {
+					continue
+				}
+				for led := 0; led < ledCount; led++ {
+					if !selectedWithTopology(l, topology, fanOrdinal, led, sourceDeviceCount) {
 						continue
 					}
-					if at, found := colorWaveCommandTime(l, i, ledCount, elapsed, spatialPositions); found {
-						patches[i].Time = at
-					}
+					appendScoreNote(&notes, l, li, led, at, st.C, st.A*opacity)
 				}
 			}
 		}
+		return notes, true
+	}
 
+	// ColorWave records the exact instant each travelling front reaches each LED.
+	// The effect is evaluated just after that instant to obtain the front colour.
+	if effect == "colorwavelighting" {
+		speed := number(l.Parameters["speed"], 2)
+		if speed < 1 {
+			speed = 1
+		}
+		if speed > 3 {
+			speed = 3
+		}
+		step := 0.4 / speed
+		if step < 0.02 {
+			step = 0.02
+		}
+		period := float64(maxInt(ledCount, 1))
+		if len(spatial) == ledCount {
+			period = 17
+		}
+		phase := stringPhase(l.ID) * period
+		direction := int(number(l.Parameters["direction"], 2))
+		for led := 0; led < ledCount; led++ {
+			if !selectedWithTopology(l, topology, fanOrdinal, led, sourceDeviceCount) {
+				continue
+			}
+			coord := float64(led)
+			if len(spatial) == ledCount {
+				coord = spatial[led]
+			}
+			route := coord
+			if direction == 2 {
+				route = math.Mod(period-coord, period)
+			}
+			k0 := int(math.Floor((phase-route)/period)) - 1
+			k1 := int(math.Ceil((duration/step+phase-route)/period)) + 1
+			for k := k0; k <= k1; k++ {
+				at := (route + float64(k)*period - phase) * step
+				if at < -0.0000005 || at >= duration-0.0000005 {
+					continue
+				}
+				colors, alpha, ok := renderLayer(l, fanOrdinal, ledCount, math.Max(0, at+0.000001), spatial)
+				if ok && led < len(colors) && led < len(alpha) && alpha[led] > 0.000001 {
+					appendScoreNote(&notes, l, li, led, math.Max(0, at), colors[led], alpha[led])
+				}
+			}
+		}
+		return notes, true
+	}
+
+	// Rain's v12.4.38 drop progression and Wave's moving tail are already proven
+	// visual generators. For the score architecture test, record their explicit
+	// output notes on the existing 20 ms LINK command grid. Repeated same-colour
+	// notes are deliberately retained: another track may have changed that LED
+	// between them, so they are meaningful opportunities to call it back.
+	// Other supported continuous effects use the same recorder until their exact
+	// authored note cadence is decoded.
+	const q = 0.020
+	seenSupported := false
+	for at := 0.0; at < duration-0.0000005; at += q {
+		colors, alpha, ok := renderLayer(l, fanOrdinal, ledCount, at, spatial)
+		if !ok {
+			continue
+		}
+		seenSupported = true
+		for led := 0; led < ledCount; led++ {
+			if !selectedWithTopology(l, topology, fanOrdinal, led, sourceDeviceCount) {
+				continue
+			}
+			if led >= len(colors) || led >= len(alpha) || alpha[led] <= 0.000001 {
+				continue
+			}
+			appendScoreNote(&notes, l, li, led, at, colors[led], alpha[led])
+		}
+	}
+	return notes, seenSupported
+}
+
+func compileMasterScore(p *Profile, topology LEDTopology, deviceOrdinal, ledCount int) *compiledScore {
+	d := p.LinkDevice()
+	if d == nil || len(d.Channels) == 0 {
+		return &compiledScore{duration: 1, unsupported: []string{"LINK device entry missing"}, perLayer: make(map[int]int)}
+	}
+	layers := p.expandLightingLinks(d.Channels[0].Layers)
+	duration := masterScoreDuration(layers)
+	sourceDeviceCount := sourceQXFanCount(layers, topology)
+	score := &compiledScore{duration: duration, perLayer: make(map[int]int)}
+	unsupported := map[string]bool{}
+	for li, l := range layers {
+		if !l.Enabled {
+			continue
+		}
+		track, ok := recordLayerTrack(l, li, deviceOrdinal, ledCount, duration, topology, sourceDeviceCount)
 		if !ok {
 			unsupported[l.Effect] = true
 			continue
 		}
-		// Keep the existing diagnostics readable while the renderer itself now
-		// resolves explicit patches.
-		colors := make([]RGB, ledCount)
-		alpha := make([]float64, ledCount)
-		for i, patch := range patches {
-			if patch.Active {
-				colors[i] = patch.Color
-				alpha[i] = patch.Strength
-			}
-		}
-		gradientCrossed := 0
-		if strings.EqualFold(l.Effect, "GradientLighting") {
-			dur := number(l.Parameters["duration"], 1000) / 1000
-			gradientCrossed = gradientCrossings(elapsed, dur, transitionStops(l))
-		}
-		mappedThisLayer := 0
-		changedThisLayer := 0
-		contribution := contributionSample{
-			layerIndex: li,
-			effect:     l.Effect,
-			selection:  l.SelectionMode,
-			post:       make(map[int]RGB),
-		}
-		if contribution.selection == "" {
-			contribution.selection = "AllLeds"
-		}
-		for i := 0; i < ledCount; i++ {
-			if strings.EqualFold(l.SelectionMode, "AllLeds") || l.SelectionMode == "" {
-				contribution.selected++
-			} else if selectedAt(l, topologyLogicalBase(topology, deviceOrdinal), i) {
-				contribution.selected++
-			}
-			if !selectedWithTopology(l, topology, deviceOrdinal, i, sourceDeviceCount) {
-				continue
-			}
-			contribution.mapped++
-			if patches[i].Active {
-				effectKey := strings.ToLower(l.Effect)
-				frameEffectCommands[effectKey]++
-				if frameEffectLEDSlots[effectKey] == nil {
-					frameEffectLEDSlots[effectKey] = make(map[int]struct{})
-				}
-				frameEffectLEDSlots[effectKey][i] = struct{}{}
-				if frameCommandCount[i] == 0 {
-					frameFirstColor[i] = patches[i].Color
-				} else if !rgbCommandNear(frameFirstColor[i], patches[i].Color, 0.5) {
-					frameConflict[i] = true
-				}
-				frameCommandCount[i]++
-			}
-			if gradientCrossed > 0 {
-				mappedThisLayer++
-			}
-			a := alpha[i]
-			if !contribution.alphaSeen {
-				contribution.alphaMin = a
-				contribution.alphaMax = a
-				contribution.alphaSeen = true
-			} else {
-				if a < contribution.alphaMin {
-					contribution.alphaMin = a
-				}
-				if a > contribution.alphaMax {
-					contribution.alphaMax = a
-				}
-			}
-			if a <= 0.000001 {
-				contribution.alphaZero++
-			} else if a >= 0.999999 {
-				contribution.alphaOpaque++
-			} else {
-				contribution.alphaPartial++
-			}
-			if a > 0.000001 {
-				contribution.activeOutput++
-			}
-			if a > 0.000001 && (math.Abs(colors[i].R) > 0.5 || math.Abs(colors[i].G) > 0.5 || math.Abs(colors[i].B) > 0.5) {
-				contribution.nonBlackOutput++
-			}
-			if patches[i].Active {
-				at := patches[i].Time
-				if at < 0 {
-					at = elapsed
-				}
-				commandQueue = append(commandQueue, LEDCommand{Time: at, LED: i, Color: patches[i].Color, Strength: patches[i].Strength, LayerIndex: li, Effect: l.Effect})
-				contribution.changed++
-				if gradientCrossed > 0 {
-					changedThisLayer++
-				}
-			}
-		}
-		contributions = append(contributions, contribution)
-		if gradientCrossed > 0 {
-			outputDiag.Lock()
-			outputDiag.crossed += gradientCrossed
-			outputDiag.mappedLEDRefs += mappedThisLayer
-			outputDiag.changedByGradients += changedThisLayer
-			outputDiag.Unlock()
-		}
+		score.perLayer[li] = len(track)
+		score.notes = append(score.notes, track...)
 	}
-	// v12.4.51 shared timeline: execute every emitted command chronologically.
-	// For exact-time ties, XML index 0 (topmost iCUE layer) wins by executing last.
-	sort.SliceStable(commandQueue, func(i, j int) bool {
-		if math.Abs(commandQueue[i].Time-commandQueue[j].Time) > 0.0000005 {
-			return commandQueue[i].Time < commandQueue[j].Time
+	// Earlier timestamp first. For a true same-time/same-LED collision, bottom
+	// layers execute first and xml0/topmost executes last.
+	sort.SliceStable(score.notes, func(i, j int) bool {
+		a, b := score.notes[i], score.notes[j]
+		if math.Abs(a.Time-b.Time) > 0.0000005 {
+			return a.Time < b.Time
 		}
-		return commandQueue[i].LayerIndex > commandQueue[j].LayerIndex
+		if a.LED != b.LED {
+			return a.LED < b.LED
+		}
+		return a.LayerIndex > b.LayerIndex
 	})
-	exactTies := 0
-	for qi, cmd := range commandQueue {
-		if cmd.LED < 0 || cmd.LED >= len(out) {
+	for name := range unsupported {
+		score.unsupported = append(score.unsupported, name)
+	}
+	sort.Strings(score.unsupported)
+	if deviceOrdinal == 0 {
+		log.Printf("iCUE SCORE COMPILED: duration=%.6fs layers=%d notes=%d", score.duration, len(layers), len(score.notes))
+		for li, l := range layers {
+			if l.Enabled {
+				log.Printf("iCUE SCORE TRACK: xml=%d effect=%s notes=%d candidateDuration=%.6fs", li, l.Effect, score.perLayer[li], layerScoreDuration(l))
+			}
+		}
+		trueTies := 0
+		for i := 1; i < len(score.notes); i++ {
+			a, b := score.notes[i-1], score.notes[i]
+			if a.LED == b.LED && math.Abs(a.Time-b.Time) <= 0.0000005 {
+				trueTies++
+			}
+		}
+		log.Printf("iCUE SCORE MERGE: inputNotes=%d outputNotes=%d trueSameTimeSameLEDTies=%d", len(score.notes), len(score.notes), trueTies)
+	}
+	return score
+}
+
+func applyScoreRange(state *scorePlayerState, from, to float64, includeZero bool) (int, int) {
+	consumed := 0
+	changed := map[int]struct{}{}
+	for _, note := range state.score.notes {
+		if note.Time > to+0.0000005 {
+			break
+		}
+		eligible := note.Time > from+0.0000005
+		if includeZero && note.Time >= -0.0000005 {
+			eligible = true
+		}
+		if !eligible {
 			continue
 		}
-		if qi > 0 {
-			prev := commandQueue[qi-1]
-			if prev.LED == cmd.LED && math.Abs(prev.Time-cmd.Time) <= 0.0000005 {
-				exactTies++
-			}
+		if note.LED < 0 || note.LED >= len(state.leds) {
+			continue
 		}
-		out[cmd.LED] = applyPatch(out[cmd.LED], LEDPatch{Active: true, Color: cmd.Color, Strength: cmd.Strength})
+		state.leds[note.LED] = note.Color
+		consumed++
+		changed[note.LED] = struct{}{}
 	}
-	if deviceOrdinal == 0 && len(commandQueue) > 0 {
-		firstAt, lastAt := commandQueue[0].Time, commandQueue[len(commandQueue)-1].Time
-		log.Printf("iCUE timeline queue audit: elapsed=%.6f queuedCommands=%d firstCommandAt=%.6f lastCommandAt=%.6f exactTimestampSameLEDTies=%d", elapsed, len(commandQueue), firstAt, lastAt, exactTies)
-	}
+	return consumed, len(changed)
+}
 
-	// Aggregate command clashes once per rendered frame and report once per
-	// second. This tests the state-machine hypothesis directly: sparse clash
-	// rates support independent timed LED commands; heavy clashes argue against
-	// it.
-	if deviceOrdinal == 0 {
-		stats := clashStatsFor(deviceOrdinal, ledCount)
-		stats.mu.Lock()
-		b := int64(math.Floor(elapsed))
-		if stats.bucket == 0 {
-			stats.bucket = b
-		}
-		if b != stats.bucket {
-			clashPct := 0.0
-			conflictPct := 0.0
-			if stats.ledsWithCommand > 0 {
-				clashPct = 100 * float64(stats.clashLEDs) / float64(stats.ledsWithCommand)
-				conflictPct = 100 * float64(stats.conflictingLEDs) / float64(stats.ledsWithCommand)
-			}
-			log.Printf("iCUE command clash audit: frames=%d commands=%d commandedLEDSlots=%d clashLEDSlots=%d (%.2f%%) conflictingLEDSlots=%d (%.2f%%) maxCommandsPerLED=%d", stats.frames, stats.commands, stats.ledsWithCommand, stats.clashLEDs, clashPct, stats.conflictingLEDs, conflictPct, stats.maxCommandsPerLED)
-			for effect, commands := range stats.effectCommands {
-				log.Printf("iCUE command source audit: effect=%s commands=%d commandedLEDSlots=%d", effect, commands, stats.effectLEDSlots[effect])
-			}
-			for i := range stats.perLEDCommands {
-				if stats.perLEDCommands[i] > 0 {
-					log.Printf("iCUE command clash LED: led=%d commands=%d clashFrames=%d", i, stats.perLEDCommands[i], stats.perLEDClashes[i])
-				}
-			}
-			stats.frames = 0
-			stats.commands = 0
-			stats.ledsWithCommand = 0
-			stats.clashLEDs = 0
-			stats.conflictingLEDs = 0
-			stats.maxCommandsPerLED = 0
-			for k := range stats.effectCommands {
-				delete(stats.effectCommands, k)
-			}
-			for k := range stats.effectLEDSlots {
-				delete(stats.effectLEDSlots, k)
-			}
-			for i := range stats.perLEDCommands {
-				stats.perLEDCommands[i] = 0
-				stats.perLEDClashes[i] = 0
-			}
-			stats.bucket = b
-		}
-		stats.frames++
-		for effect, commands := range frameEffectCommands {
-			stats.effectCommands[effect] += commands
-			stats.effectLEDSlots[effect] += int64(len(frameEffectLEDSlots[effect]))
-		}
-		for i, ncmd := range frameCommandCount {
-			if ncmd == 0 {
-				continue
-			}
-			stats.ledsWithCommand++
-			stats.commands += int64(ncmd)
-			stats.perLEDCommands[i] += int64(ncmd)
-			if ncmd > stats.maxCommandsPerLED {
-				stats.maxCommandsPerLED = ncmd
-			}
-			if ncmd > 1 {
-				stats.clashLEDs++
-				stats.perLEDClashes[i]++
-			}
-			if frameConflict[i] {
-				stats.conflictingLEDs++
-			}
-		}
-		stats.mu.Unlock()
+// RenderFan is now only the score player. Effect algorithms run while compiling
+// the score; playback never asks Rain/Wave/ColorWave/Gradient what they look like.
+func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, started time.Time, brightness float64) ([]byte, []string) {
+	key := persistentKey(deviceOrdinal, ledCount, started)
+	scorePlayers.Lock()
+	state := scorePlayers.byRun[key]
+	if state == nil {
+		state = &scorePlayerState{score: compileMasterScore(p, topology, deviceOrdinal, ledCount), leds: make([]RGB, ledCount)}
+		scorePlayers.byRun[key] = state
 	}
-
-	// Contribution audit is observational only. It records whether each authored
-	// layer selects/maps LEDs, produces visible pixels, changes the compositor,
-	// and whether those exact post-layer pixels remain in the final composite.
-	// This distinguishes missing topology from inactive effect output and from
-	// later layers simply covering an otherwise healthy effect.
-	if deviceOrdinal == 0 {
-		bucket := int64(math.Floor(elapsed))
-		contributionAudit.Lock()
-		if contributionAudit.bucket != bucket {
-			contributionAudit.bucket = bucket
-			for _, sample := range contributions {
-				survives := 0
-				for i, post := range sample.post {
-					if i >= 0 && i < len(out) && rgbNear(out[i], post, 0.5) {
-						survives++
-					}
-				}
-				log.Printf("iCUE layer contribution: xml=%d effect=%s sel=%s selected=%d mapped=%d active=%d nonBlack=%d changed=%d survivesFinal=%d", sample.layerIndex, sample.effect, sample.selection, sample.selected, sample.mapped, sample.activeOutput, sample.nonBlackOutput, sample.changed, survives)
-				if sample.alphaSeen {
-					log.Printf("iCUE alpha coverage: xml=%d effect=%s sel=%s mapped=%d alpha0=%d alphaPartial=%d alpha255=%d alphaMin=%.4f alphaMax=%.4f", sample.layerIndex, sample.effect, sample.selection, sample.mapped, sample.alphaZero, sample.alphaPartial, sample.alphaOpaque, sample.alphaMin, sample.alphaMax)
-				}
-
-			}
-		}
-		contributionAudit.Unlock()
+	elapsed := time.Since(started).Seconds()
+	dur := state.score.duration
+	if dur <= 0 {
+		dur = 1
 	}
-	// Commit the unscaled physical RGB state before applying the device's global
-	// brightness limit. LEDs untouched this tick retain this state next tick.
-	storePersistentLEDState(deviceOrdinal, started, out)
+	pos := math.Mod(elapsed, dur)
+	if pos < 0 {
+		pos += dur
+	}
+	consumed, changed := 0, 0
+	if !state.started {
+		consumed, changed = applyScoreRange(state, -1, pos, true)
+		state.started = true
+	} else if pos+0.0000005 < state.lastPos || elapsed-state.lastElapsed >= dur {
+		c1, ch1 := applyScoreRange(state, state.lastPos, dur, false)
+		c2, ch2 := applyScoreRange(state, -1, pos, true)
+		consumed, changed = c1+c2, ch1+ch2
+	} else {
+		consumed, changed = applyScoreRange(state, state.lastPos, pos, false)
+	}
+	state.lastPos, state.lastElapsed = pos, elapsed
+	bucket := int64(math.Floor(elapsed))
+	if deviceOrdinal == 0 && bucket != state.logBucket {
+		log.Printf("iCUE SCORE PLAYBACK: elapsed=%.6f position=%.6f/%.6f notesConsumed=%d ledTouches=%d", elapsed, pos, dur, consumed, changed)
+		state.logBucket = bucket
+	}
+	leds := append([]RGB(nil), state.leds...)
+	unsupported := append([]string(nil), state.score.unsupported...)
+	scorePlayers.Unlock()
+
 	if brightness <= 0 {
 		brightness = 1
 	}
 	buf := make([]byte, 0, ledCount*3)
-	for _, c := range out {
+	for _, c := range leds {
 		buf = append(buf, byte(clamp(c.R*brightness)), byte(clamp(c.G*brightness)), byte(clamp(c.B*brightness)))
 	}
-	outputDiag.Lock()
-	prevBuf := outputDiag.previous[deviceOrdinal]
-	if len(prevBuf) == len(buf) {
-		for i := 0; i+2 < len(buf); i += 3 {
-			if buf[i] != prevBuf[i] || buf[i+1] != prevBuf[i+1] || buf[i+2] != prevBuf[i+2] {
-				outputDiag.finalChangedLEDs++
-			}
-		}
-	}
-	copyBuf := make([]byte, len(buf))
-	copy(copyBuf, buf)
-	outputDiag.previous[deviceOrdinal] = copyBuf
-	bucket := int64(math.Floor(elapsed))
-	if outputDiag.bucket == 0 {
-		outputDiag.bucket = bucket
-	}
-	if bucket != outputDiag.bucket {
-		log.Printf("iCUE Gradient pipeline: crossedEvents=%d mappedLEDRefs=%d changedByGradientComposition=%d finalBufferChangedLEDs=%d", outputDiag.crossed, outputDiag.mappedLEDRefs, outputDiag.changedByGradients, outputDiag.finalChangedLEDs)
-		outputDiag.bucket = bucket
-		outputDiag.crossed = 0
-		outputDiag.mappedLEDRefs = 0
-		outputDiag.changedByGradients = 0
-		outputDiag.finalChangedLEDs = 0
-	}
-	outputDiag.Unlock()
-	names := make([]string, 0, len(unsupported))
-	for n := range unsupported {
-		names = append(names, n)
-	}
-	return buf, names
+	return buf, unsupported
 }
 
 func selectedWithTopology(l Layer, topology LEDTopology, deviceOrdinal, local, sourceDeviceCount int) bool {
