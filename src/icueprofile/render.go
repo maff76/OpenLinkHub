@@ -587,13 +587,6 @@ func (p *Profile) RenderDRAM(moduleOrdinal, ledCount int, started time.Time, bri
 	}
 	layers := p.expandLightingLinks(d.Channels[0].Layers)
 	logicalBase := moduleOrdinal * ledCount
-	logical := make([]int, ledCount)
-	for local := 0; local < ledCount; local++ {
-		logical[local] = logicalBase + local
-	}
-	log.Printf("iCUE LED TOPOLOGY AUDIT: topology=DRAM rendererOrdinal=%d leds=%d localToLogical=%v", moduleOrdinal, ledCount, logical)
-	staticFrame := auditCanvasStaticOpeningFrame(layers, logicalBase, ledCount, moduleOrdinal)
-	log.Printf("iCUE STATIC FRAME AUDIT: topology=DRAM rendererOrdinal=%d leds=%d preLiveRGB=%v", moduleOrdinal, ledCount, auditRGBHex(staticFrame))
 	return renderCanvas(layers, logicalBase, ledCount, moduleOrdinal, started, brightness)
 }
 
@@ -1349,91 +1342,20 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 			state.rainActive[ti] = make([]bool, ledCount)
 		}
 		scorePlayers.byRun[key] = state
-		if topology != nil && strings.EqualFold(topology.Name(), "QX") {
-			log.Printf("iCUE LIVE STATE AUDIT: v12.4.74f topology=%s rendererOrdinal=%d stateDeviceOrdinal=%d leds=%d keyStarted=%d keyDeviceOrdinal=%d keyLedCount=%d state=%p", topology.Name(), deviceOrdinal, state.deviceOrdinal, ledCount, key.started, key.deviceOrdinal, key.ledCount, state)
-		}
 	}
 	elapsed := time.Since(started).Seconds()
-	from := state.lastElapsed
-	consumed, changed := 0, 0
 	if !state.started {
-		consumed, changed = applyAbsoluteRange(state, 0, elapsed, true)
+		_, _ = applyAbsoluteRange(state, 0, elapsed, true)
 		state.started = true
 	} else if elapsed+0.0000005 < state.lastElapsed {
 		for i := range state.leds {
 			state.leds[i] = RGB{}
 		}
-		consumed, changed = applyAbsoluteRange(state, 0, elapsed, true)
-		from = 0
+		_, _ = applyAbsoluteRange(state, 0, elapsed, true)
 	} else {
-		consumed, changed = applyAbsoluteRange(state, state.lastElapsed, elapsed, false)
-	}
-	// Measure the actual RenderFan invocation cadence independently of the
-	// once-per-second playback diagnostic. This tells us whether the renderer is
-	// really being called near the hardware output cadence or whether upstream
-	// scheduling is starving it.
-	if state.started && from > 0 && elapsed >= from {
-		delta := elapsed - from
-		if delta > 0 {
-			state.renderCalls++
-			state.renderDeltaSum += delta
-			if state.renderDeltaMin == 0 || delta < state.renderDeltaMin {
-				state.renderDeltaMin = delta
-			}
-			if delta > state.renderDeltaMax {
-				state.renderDeltaMax = delta
-			}
-		}
-	}
-	if deviceOrdinal == 0 && elapsed-state.renderCadenceAt >= 1.0 && state.renderCalls > 0 {
-		window := elapsed - state.renderCadenceAt
-		avg := state.renderDeltaSum / float64(state.renderCalls)
-		fps := 0.0
-		if window > 0 {
-			fps = float64(state.renderCalls) / window
-		}
-		log.Printf("iCUE RENDER CADENCE: device=%d leds=%d window=%.3fs calls=%d callsPerSecond=%.1f deltaAvg=%.3fms deltaMin=%.3fms deltaMax=%.3fms", deviceOrdinal, ledCount, window, state.renderCalls, fps, avg*1000, state.renderDeltaMin*1000, state.renderDeltaMax*1000)
-		state.renderCalls = 0
-		state.renderDeltaSum = 0
-		state.renderDeltaMin = 0
-		state.renderDeltaMax = 0
-		state.renderCadenceAt = elapsed
-	}
-	// v12.4.74f diagnostic: follow the ten authored orange QX LEDs (local 24-33)
-	// through live playback. This is observational only. It proves whether the
-	// renderer ordinal/42-ID block survives into the live state and whether Rain
-	// restores each orange LED to the colour it had before the transient.
-	if state.topology != nil && strings.EqualFold(state.topology.Name(), "QX") && ledCount >= 34 && elapsed-state.orangeAuditAt >= 1.0 {
-		entries := make([]string, 0, 10)
-		for led := 24; led <= 33 && led < len(state.leds); led++ {
-			logical := -1
-			if id, ok := state.topology.LogicalLED(state.deviceOrdinal, led); ok {
-				logical = id
-			}
-			rainActive := false
-			rainBase := RGB{}
-			rainLast := RGB{}
-			for ti, track := range state.score.tracks {
-				if !strings.EqualFold(track.effect, "RainLighting") || ti >= len(state.rainActive) || led >= len(state.rainActive[ti]) {
-					continue
-				}
-				if state.rainActive[ti][led] {
-					rainActive = true
-					rainBase = state.rainBase[ti][led]
-					rainLast = state.rainLast[ti][led]
-				}
-			}
-			entries = append(entries, fmt.Sprintf("L%d->ID%d cur=#%02X%02X%02X rain=%t base=#%02X%02X%02X last=#%02X%02X%02X", led, logical, byte(clamp(state.leds[led].R)), byte(clamp(state.leds[led].G)), byte(clamp(state.leds[led].B)), rainActive, byte(clamp(rainBase.R)), byte(clamp(rainBase.G)), byte(clamp(rainBase.B)), byte(clamp(rainLast.R)), byte(clamp(rainLast.G)), byte(clamp(rainLast.B))))
-		}
-		log.Printf("iCUE ORANGE LIVE AUDIT: v12.4.74f rendererOrdinal=%d stateDeviceOrdinal=%d keyDeviceOrdinal=%d leds=%d orange=[%s]", deviceOrdinal, state.deviceOrdinal, key.deviceOrdinal, ledCount, strings.Join(entries, " | "))
-		state.orangeAuditAt = elapsed
+		_, _ = applyAbsoluteRange(state, state.lastElapsed, elapsed, false)
 	}
 	state.lastElapsed = elapsed
-	bucket := int64(math.Floor(elapsed))
-	if deviceOrdinal == 0 && bucket != state.logBucket {
-		log.Printf("iCUE LIVE PLAYBACK: device=%d leds=%d concertTime=%.6f from=%.6f concertEnd=NEVER notesConsumed=%d ledTouches=%d performers=%d storedDiscreteNotes=%d", deviceOrdinal, ledCount, elapsed, from, consumed, changed, len(state.score.tracks), state.score.totalNotes)
-		state.logBucket = bucket
-	}
 	leds := append([]RGB(nil), state.leds...)
 	unsupported := append([]string(nil), state.score.unsupported...)
 	scorePlayers.Unlock()
@@ -2350,7 +2272,6 @@ type EditorLayer struct {
 	Colors        []EditorColor  `json:"colors"`
 	PrimaryColor  *EditorColor   `json:"primaryColor,omitempty"`
 	RawParameters map[string]any `json:"rawParameters,omitempty"`
-	Trace         map[string]any `json:"trace,omitempty"`
 }
 
 func editorColor(c RGB) EditorColor {
@@ -2367,83 +2288,53 @@ func editorColor(c RGB) EditorColor {
 	return EditorColor{Hex: fmt.Sprintf("#%02x%02x%02x", r, g, b), R: c.R, G: c.G, B: c.B}
 }
 
-func decodedLayerColors(l Layer) []EditorColor {
-	// Decode only fields that are known to carry authored colour data.  The
-	// parser intentionally preserves cereal collections in several shapes
-	// ([]string, []any and nested maps), so walk those values recursively rather
-	// than depending on one concrete Go type.
-	var rgb []RGB
-	for _, key := range []string{"transitions", "colors", "color"} {
-		if v, ok := l.Parameters[key]; ok {
-			collectDecodedColors(v, &rgb)
+func rendererDecodedLayerColors(l Layer) []EditorColor {
+	// The editor must not independently interpret Corsair serialization. Ask the
+	// exact same helpers used by renderLayer for the authored effect colours and
+	// use NaN sentinels so a missing colour is distinguishable from authored black.
+	missing := RGB{R: math.NaN(), G: math.NaN(), B: math.NaN()}
+	valid := func(c RGB) bool {
+		return !math.IsNaN(c.R) && !math.IsNaN(c.G) && !math.IsNaN(c.B)
+	}
+	appendUnique := func(out []EditorColor, c RGB) []EditorColor {
+		if !valid(c) {
+			return out
 		}
+		e := editorColor(c)
+		for _, existing := range out {
+			if strings.EqualFold(existing.Hex, e.Hex) {
+				return out
+			}
+		}
+		return append(out, e)
 	}
 
-	out := make([]EditorColor, 0, len(rgb))
-	seen := map[string]bool{}
-	for _, c := range rgb {
-		e := editorColor(c)
-		if !seen[e.Hex] {
-			seen[e.Hex] = true
-			out = append(out, e)
+	var out []EditorColor
+	switch strings.ToLower(l.Effect) {
+	case "staticlighting", "blinklighting", "breathelighting", "marqueelighting", "visorlighting":
+		out = appendUnique(out, layerColor(l, missing))
+	default:
+		c1, c2 := effectColors(l, missing, missing)
+		out = appendUnique(out, c1)
+		out = appendUnique(out, c2)
+		// Several single-colour effects use layerColor rather than effectColors.
+		// This fallback is still renderer-owned decoding, not browser inference.
+		if len(out) == 0 {
+			out = appendUnique(out, layerColor(l, missing))
 		}
 	}
 	return out
 }
 
-// collectDecodedColors accepts the generic shapes produced by the cueprofile
-// parser without teaching the browser anything about Corsair serialization.
-// Only values below known colour-bearing parameter keys are passed here, which
-// prevents ordinary numeric effect parameters from being mistaken for colours.
-func collectDecodedColors(v any, out *[]RGB) {
-	switch x := v.(type) {
-	case []string:
-		for _, item := range x {
-			collectDecodedColors(item, out)
-		}
-	case []any:
-		for _, item := range x {
-			collectDecodedColors(item, out)
-		}
-	case map[string]any:
-		// Prefer explicit colour members when a structured object survives the
-		// parser, otherwise recurse so future parser enrichment remains compatible.
-		for _, key := range []string{"color", "colour", "value", "first", "second"} {
-			if item, ok := x[key]; ok {
-				collectDecodedColors(item, out)
-			}
-		}
-		for key, item := range x {
-			switch strings.ToLower(key) {
-			case "color", "colour", "value", "first", "second":
-				continue
-			}
-			collectDecodedColors(item, out)
-		}
-	default:
-		if c, ok := parseColor(v); ok {
-			*out = append(*out, c)
-		}
-	}
-}
-
-// DecodeEditorLayers exposes renderer-decoded authored values without changing
-// the parsed Layer objects used for playback. This is the canonical API bridge
-// between cueprofile parsing, rendering and the profile editor.
+// DecodeEditorLayers exposes the renderer's canonical authored values without
+// changing the parsed Layer objects used for playback. RawParameters remains
+// alongside the decoded model so the workspace can always show exactly what
+// the source profile contained.
 func DecodeEditorLayers(layers []Layer) []EditorLayer {
 	out := make([]EditorLayer, 0, len(layers))
 	for i, l := range layers {
-		colors := decodedLayerColors(l)
-		decoderInputs := map[string]any{}
-		for _, key := range []string{"transitions", "colors", "color"} {
-			if v, ok := l.Parameters[key]; ok {
-				decoderInputs[key] = map[string]any{"type": fmt.Sprintf("%T", v), "value": v}
-			}
-		}
-		e := EditorLayer{Index: i, Name: l.Name, Effect: l.Effect, EffectName: l.EffectName, Enabled: l.Enabled, SelectionMode: l.SelectionMode, LEDs: append([]string(nil), l.LEDs...), Colors: colors, RawParameters: l.Parameters, Trace: map[string]any{
-			"parser":  l.ParserTrace,
-			"decoder": map[string]any{"inputs": decoderInputs, "decodedColors": colors, "decodedCount": len(colors)},
-		}}
+		colors := rendererDecodedLayerColors(l)
+		e := EditorLayer{Index: i, Name: l.Name, Effect: l.Effect, EffectName: l.EffectName, Enabled: l.Enabled, SelectionMode: l.SelectionMode, LEDs: append([]string(nil), l.LEDs...), Colors: colors, RawParameters: l.Parameters}
 		if len(colors) > 0 {
 			c := colors[0]
 			e.PrimaryColor = &c
