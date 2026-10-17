@@ -131,6 +131,58 @@ func edgeTriggeredPatches(deviceOrdinal, ledCount int, started time.Time, layerI
 	return out
 }
 
+// colorWaveCommandTime returns the exact profile-timeline time at which the
+// travelling ColorWave front most recently reached this LED.  v12.4.52 uses
+// this instead of stamping the command with the renderer frame time, so a
+// ColorWave note can correctly interrupt Rain/Wave/Gradient notes inside the
+// same hardware-output interval.
+func colorWaveCommandTime(l Layer, led, n int, elapsed float64, spatial []float64) (float64, bool) {
+	speed := number(l.Parameters["speed"], 2)
+	if speed < 1 {
+		speed = 1
+	}
+	if speed > 3 {
+		speed = 3
+	}
+	stepSeconds := 0.4 / speed
+	if stepSeconds < 0.02 {
+		stepSeconds = 0.02
+	}
+	direction := int(number(l.Parameters["direction"], 2))
+	coord := float64(led)
+	period := float64(maxInt(n, 1))
+	if len(spatial) == n {
+		coord = spatial[led]
+		period = 17.0
+	}
+	routeCoord := coord
+	if direction == 2 {
+		routeCoord = math.Mod(period-coord, period)
+	}
+	phase := stringPhase(l.ID) * period
+	front := elapsed/stepSeconds + phase
+	cycle := math.Floor((front - routeCoord) / period)
+	frontPos := routeCoord + cycle*period
+	eventTime := (frontPos - phase) * stepSeconds
+	if eventTime < -0.000001 || eventTime > elapsed+0.000001 {
+		return 0, false
+	}
+	return eventTime, true
+}
+
+// rainCommandTime maps Rain's continuously fading drop state onto a canonical
+// effect timeline rather than the wall-clock instant RenderFan happened to run.
+// The 20 ms quantum is only a timestamp grid for the already-validated v12.4.38
+// fade progression; it is not ownership and does not prevent another effect's
+// timestamped command from interrupting Rain between Rain notes.
+func rainCommandTime(elapsed float64) float64 {
+	const q = 0.020
+	if elapsed <= 0 {
+		return 0
+	}
+	return math.Floor(elapsed/q) * q
+}
+
 func renderLayerPatches(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64) ([]LEDPatch, bool) {
 	colors, alpha, ok := renderLayer(l, fanOrdinal, n, elapsed, spatial)
 	if !ok {
@@ -647,7 +699,8 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 		if stateInitialized && strings.EqualFold(l.Effect, "StaticLighting") {
 			continue
 		}
-		patches, ok := renderLayerPatches(l, deviceOrdinal, ledCount, elapsed, topologyPositions(topology, deviceOrdinal, ledCount))
+		spatialPositions := topologyPositions(topology, deviceOrdinal, ledCount)
+		patches, ok := renderLayerPatches(l, deviceOrdinal, ledCount, elapsed, spatialPositions)
 		// v12.4.48 state-command A/B: Gradient selection is only the set of LEDs
 		// the effect may command. It does not repaint those LEDs continuously.
 		// Only an authored transition-stop crossing creates a new command; all
@@ -662,6 +715,27 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 			// activity is NO COMMAND and therefore cannot reclaim an LED changed by
 			// another layer.
 			patches = edgeTriggeredPatches(deviceOrdinal, ledCount, started, li, patches)
+			// v12.4.52: notes belong to the effect timeline, not to the renderer
+			// sampling instant. Rain keeps the visually validated v12.4.38 drop
+			// calculation but its fade changes sit on a stable timeline. ColorWave
+			// uses the exact travelling-front arrival time for each LED.
+			if strings.EqualFold(l.Effect, "RainLighting") {
+				at := rainCommandTime(elapsed)
+				for i := range patches {
+					if patches[i].Active {
+						patches[i].Time = at
+					}
+				}
+			} else if strings.EqualFold(l.Effect, "ColorWaveLighting") {
+				for i := range patches {
+					if !patches[i].Active {
+						continue
+					}
+					if at, found := colorWaveCommandTime(l, i, ledCount, elapsed, spatialPositions); found {
+						patches[i].Time = at
+					}
+				}
+			}
 		}
 
 		if !ok {
@@ -790,7 +864,8 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 		out[cmd.LED] = applyPatch(out[cmd.LED], LEDPatch{Active: true, Color: cmd.Color, Strength: cmd.Strength})
 	}
 	if deviceOrdinal == 0 && len(commandQueue) > 0 {
-		log.Printf("iCUE timeline queue audit: elapsed=%.6f queuedCommands=%d exactTimestampSameLEDTies=%d", elapsed, len(commandQueue), exactTies)
+		firstAt, lastAt := commandQueue[0].Time, commandQueue[len(commandQueue)-1].Time
+		log.Printf("iCUE timeline queue audit: elapsed=%.6f queuedCommands=%d firstCommandAt=%.6f lastCommandAt=%.6f exactTimestampSameLEDTies=%d", elapsed, len(commandQueue), firstAt, lastAt, exactTies)
 	}
 
 	// Aggregate command clashes once per rendered frame and report once per
