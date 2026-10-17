@@ -638,6 +638,7 @@ type scorePlayerState struct {
 	leds        []RGB
 	lastPos     float64
 	lastElapsed float64
+	lastCycle   int64
 	started     bool
 	logBucket   int64
 }
@@ -672,7 +673,16 @@ func masterScoreDuration(layers []Layer) float64 {
 		if !l.Enabled {
 			continue
 		}
-		if d := layerScoreDuration(l); d > longest {
+		d := layerScoreDuration(l)
+		// ColorWave is a continuous front generator. The serialized duration is
+		// tested as the launch interval, not as the lifetime of a travelling
+		// front. With two alternating authored colours the smallest complete
+		// repeating phrase is therefore two launches. This lets fronts cross the
+		// score boundary instead of being restarted after one second.
+		if strings.EqualFold(l.Effect, "ColorWaveLighting") && d > 0 {
+			d *= 2
+		}
+		if d > longest {
 			longest = d
 		}
 	}
@@ -752,12 +762,13 @@ func recordLayerTrack(l Layer, li, fanOrdinal, ledCount int, duration float64, t
 		return notes, true
 	}
 
-	// v12.4.55 ColorWave timing probe: test the hypothesis that iCUE's
-	// Slow/Medium/Fast value primarily controls how soon the NEXT colour front
-	// launches, rather than making one front traverse the route 1x/2x/3x faster.
-	// The serialized duration is therefore treated as the speed=1 launch interval.
-	// Front travel is held at the old reference/normal cadence (200 ms per route
-	// position) so the three Profile 15 layers differ only in launch spacing.
+	// v12.4.57 ColorWave propagation probe. The guide describes Color Wave as
+	// a wave with a speed control, so restore the measured 1:2:3 propagation
+	// relationship: Slow=400 ms/position, Medium=200 ms/position and
+	// Fast=133.333 ms/position. The serialized duration is tested separately as
+	// the interval between colour-front launches. Travelling fronts are allowed
+	// to cross the score boundary; launches before t=0 are recorded when their
+	// arrivals fall inside this cycle.
 	if effect == "colorwavelighting" {
 		speed := number(l.Parameters["speed"], 2)
 		if speed < 1 {
@@ -766,12 +777,11 @@ func recordLayerTrack(l Layer, li, fanOrdinal, ledCount int, duration float64, t
 		if speed > 3 {
 			speed = 3
 		}
-		travelStep := 0.200
-		launchBase := layerScoreDuration(l)
-		if launchBase <= 0 {
-			launchBase = 1
+		travelStep := 0.400 / speed
+		launchInterval := layerScoreDuration(l)
+		if launchInterval <= 0 {
+			launchInterval = 1
 		}
-		launchInterval := launchBase / speed
 		period := float64(maxInt(ledCount, 1))
 		if len(spatial) == ledCount {
 			period = 17
@@ -780,10 +790,6 @@ func recordLayerTrack(l Layer, li, fanOrdinal, ledCount int, duration float64, t
 		c1, c2 := effectColors(l, RGB{R: 255}, RGB{B: 255})
 		random := boolParam(l.Parameters["random"], false)
 
-		// Record every front that can arrive inside one master-score cycle. Fronts
-		// launched before t=0 are included when their travel reaches an LED after 0;
-		// this makes the repeating score seamless instead of truncating travelling
-		// fronts at the loop boundary.
 		maxTravel := period * travelStep
 		firstFront := int(math.Floor(-maxTravel/launchInterval)) - 1
 		lastFront := int(math.Ceil(duration/launchInterval)) + 1
@@ -856,17 +862,16 @@ func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, 
 		if speed > 3 {
 			speed = 3
 		}
-		travelStep := 0.200
+		travelStep := 0.400 / speed
 		period := float64(maxInt(ledCount, 1))
 		if len(topologyPositions(topology, fanOrdinal, ledCount)) == ledCount {
 			period = 17
 		}
-		launchBase := layerScoreDuration(l)
-		if launchBase <= 0 {
-			launchBase = 1
+		launchInterval := layerScoreDuration(l)
+		if launchInterval <= 0 {
+			launchInterval = 1
 		}
-		launchInterval := launchBase / speed
-		log.Printf("iCUE SCORE TIMING: xml=%d effect=%s speed=%.3f travelStep=%.6fs traversal=%.6fs launchInterval=%.6fs serializedDuration=%.6fs model=launch-rate-probe", li, l.Effect, speed, travelStep, travelStep*period, launchInterval, layerScoreDuration(l))
+		log.Printf("iCUE SCORE TIMING: xml=%d effect=%s speed=%.3f travelStep=%.6fs traversal=%.6fs launchInterval=%.6fs serializedDuration=%.6fs model=propagation-probe", li, l.Effect, speed, travelStep, travelStep*period, launchInterval, layerScoreDuration(l))
 	case "wavelighting":
 		velocity := number(l.Parameters["velocity"], 100)
 		if velocity == 0 {
@@ -1000,31 +1005,63 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 	if dur <= 0 {
 		dur = 1
 	}
-	pos := math.Mod(elapsed, dur)
+	// Track the absolute score cycle separately from the position inside it.
+	// A renderer can legitimately go more than one score duration between calls
+	// (device startup, scheduling, hotplug, etc.).  Comparing only modulo positions
+	// made that look like a normal wrap and could replay overlapping ranges.
+	cycle := int64(math.Floor(elapsed / dur))
+	pos := elapsed - float64(cycle)*dur
 	if pos < 0 {
+		cycle--
 		pos += dur
 	}
 	consumed, changed := 0, 0
 	from := state.lastPos
+	cycleDelta := int64(0)
 	wrapped := false
 	if !state.started {
 		from = 0
 		consumed, changed = applyScoreRange(state, -1, pos, true)
 		state.started = true
-	} else if pos+0.0000005 < state.lastPos || elapsed-state.lastElapsed >= dur {
-		wrapped = true
-		c1, ch1 := applyScoreRange(state, state.lastPos, dur, false)
-		c2, ch2 := applyScoreRange(state, -1, pos, true)
-		consumed, changed = c1+c2, ch1+ch2
 	} else {
-		consumed, changed = applyScoreRange(state, state.lastPos, pos, false)
+		cycleDelta = cycle - state.lastCycle
+		switch {
+		case cycleDelta <= 0:
+			// Normal playback inside one cycle.  If elapsed ever moves backwards,
+			// rebuild deterministically from the beginning rather than inventing a wrap.
+			if cycleDelta < 0 || pos+0.0000005 < state.lastPos {
+				for i := range state.leds {
+					state.leds[i] = RGB{}
+				}
+				consumed, changed = applyScoreRange(state, -1, pos, true)
+				from = 0
+			} else {
+				consumed, changed = applyScoreRange(state, state.lastPos, pos, false)
+			}
+		case cycleDelta == 1:
+			wrapped = true
+			c1, ch1 := applyScoreRange(state, state.lastPos, dur, false)
+			c2, ch2 := applyScoreRange(state, -1, pos, true)
+			consumed, changed = c1+c2, ch1+ch2
+		default:
+			// More than one whole deterministic score cycle was skipped.  Earlier
+			// skipped cycles cannot affect the final physical state: the last complete
+			// cycle supersedes them. Replay exactly one complete cycle, then the
+			// current partial cycle. This also bounds work after a long scheduling gap.
+			wrapped = true
+			c1, ch1 := applyScoreRange(state, -1, dur, true)
+			c2, ch2 := applyScoreRange(state, -1, pos, true)
+			consumed, changed = c1+c2, ch1+ch2
+		}
 	}
-	state.lastPos, state.lastElapsed = pos, elapsed
+	state.lastPos, state.lastElapsed, state.lastCycle = pos, elapsed, cycle
 	bucket := int64(math.Floor(elapsed))
 	if deviceOrdinal == 0 && bucket != state.logBucket {
-		log.Printf("iCUE SCORE PLAYBACK: elapsed=%.6f from=%.6f to=%.6f/%.6f wrapped=%t notesConsumed=%d ledTouches=%d scoreNotes=%d", elapsed, from, pos, dur, wrapped, consumed, changed, len(state.score.notes))
-		if consumed > len(state.score.notes) {
-			log.Printf("iCUE SCORE INVARIANT FAILURE: notesConsumed=%d scoreNotes=%d", consumed, len(state.score.notes))
+		log.Printf("iCUE SCORE PLAYBACK: device=%d leds=%d cycle=%d cycleDelta=%d elapsed=%.6f from=%.6f to=%.6f/%.6f wrapped=%t notesConsumed=%d ledTouches=%d scoreNotes=%d", deviceOrdinal, ledCount, cycle, cycleDelta, elapsed, from, pos, dur, wrapped, consumed, changed, len(state.score.notes))
+		// Crossing one boundary can legitimately consume a tail plus a head.
+		// More than two score lengths worth of notes is never needed by this player.
+		if consumed > 2*len(state.score.notes) {
+			log.Printf("iCUE SCORE INVARIANT FAILURE: device=%d leds=%d cycleDelta=%d notesConsumed=%d scoreNotes=%d", deviceOrdinal, ledCount, cycleDelta, consumed, len(state.score.notes))
 		}
 		state.logBucket = bucket
 	}
