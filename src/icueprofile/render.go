@@ -801,7 +801,16 @@ func appendScoreNote(dst *[]LEDCommand, l Layer, li, led int, at float64, col RG
 	if at < -0.0000005 {
 		return
 	}
-	*dst = append(*dst, LEDCommand{Time: at, LED: led, Color: concreteCommand(col, strength), Strength: 1, LayerIndex: li, Effect: l.Effect})
+	if strength < 0 {
+		strength = 0
+	}
+	if strength > 1 {
+		strength = 1
+	}
+	// One-shot Static notes retain their authored opacity. The opening score is
+	// applied bottom->top at t=0, so opacity reveals the already-established
+	// lower opening state instead of pre-multiplying the colour against black.
+	*dst = append(*dst, LEDCommand{Time: at, LED: led, Color: col, Strength: strength, LayerIndex: li, Effect: l.Effect})
 }
 
 func recordLayerTrack(l Layer, li, fanOrdinal, ledCount int, duration float64, topology LEDTopology, sourceDeviceCount int) ([]LEDCommand, bool) {
@@ -858,8 +867,8 @@ func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, 
 		if speed <= 0 {
 			speed = 1
 		}
-		log.Printf("iCUE TRACK TIMING: leds=%d xml=%d effect=%s speed=%.3f spawnInterval=%.6fs eventLifetime=%.6fs phrase=%.6fs model=event-rain-v12.4.38", ledCount, li, l.Effect, speed, 0.115/speed, 0.55/math.Sqrt(speed), repeat)
-		logBase("event-rain-v12.4.38", "speed=spawn-cadence; drop-lifetime=event-lifetime; serialized-duration-not-repeat")
+		log.Printf("iCUE TRACK TIMING: leds=%d xml=%d effect=%s speed=%.3f spawnInterval=%.6fs eventLifetime=%.6fs phrase=%.6fs model=rain-impact-dispersal-v12.4.73", ledCount, li, l.Effect, speed, 0.200/speed, (0.55*(0.200/0.115))/speed, repeat)
+		logBase("rain-impact-dispersal-v12.4.73", "same-density-speed-cycle; colour1=impact; colour2=dispersal; transient-restore; serialized-duration-not-repeat")
 	case "colorwavelighting":
 		speed := number(l.Parameters["speed"], 2)
 		if speed < 1 {
@@ -908,7 +917,7 @@ func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, 
 }
 
 func compileLiveConcert(p *Profile, topology LEDTopology, deviceOrdinal, ledCount int) *compiledScore {
-	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.72 rain-speed-cycle-transient-audit leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
+	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.73 rain-impact-dispersal-static-opacity leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
 	d := p.LinkDevice()
 	if d == nil || len(d.Channels) == 0 {
 		return &compiledScore{unsupported: []string{"LINK device entry missing"}}
@@ -1141,7 +1150,14 @@ func applyAbsoluteRange(state *scorePlayerState, from, to float64, includeStart 
 		if n.LED < 0 || n.LED >= len(state.leds) {
 			continue
 		}
-		state.leds[n.LED] = n.Color
+		if strings.EqualFold(n.Effect, "StaticLighting") {
+			// Static is an opening command only. Its sole authored modifier is
+			// opacity, which composites this opening command over the physical state
+			// established by lower Static layers at the same t=0 timestamp.
+			state.leds[n.LED] = mixRGB(state.leds[n.LED], n.Color, n.Strength)
+		} else {
+			state.leds[n.LED] = n.Color
+		}
 		consumed++
 		changed[n.LED] = struct{}{}
 	}
@@ -1419,7 +1435,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 				coord = spatial[i]
 			}
 			best := 0.0
-			bestMix := 0.0
+			bestNorm := 0.0
 			// Six recent spawn slots is the same bounded history used by native
 			// OpenLinkHub Rain. Each slot is a discrete event that fades out.
 			for back := 0; back < 6; back++ {
@@ -1452,14 +1468,29 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 				intensity := math.Pow(1-norm, 1.9)
 				if intensity > best {
 					best = intensity
-					bestMix = hash(slot, i+17)
+					bestNorm = norm
 				}
 			}
 			if best <= 0 {
 				a[i] = 0
 				continue
 			}
-			c[i] = mixRGB(c1, c2, bestMix)
+			// iCUE Rain uses its two authored colours as phases of one drop, not
+			// as a random per-drop colour choice: colour 1 is the initial impact,
+			// then colour 2 is the dispersal/tail. Keep a short impact hold and a
+			// smooth hand-off so the transition is visible without introducing a
+			// hard colour flash. The transient alpha still controls the dispersal
+			// strength and the player restores the interrupted physical colour when
+			// the event finishes (unless a newer performer superseded it).
+			phaseMix := 0.0
+			if bestNorm > 0.25 {
+				phaseMix = (bestNorm - 0.25) / 0.15
+				if phaseMix > 1 {
+					phaseMix = 1
+				}
+				phaseMix = phaseMix * phaseMix * (3 - 2*phaseMix)
+			}
+			c[i] = mixRGB(c1, c2, phaseMix)
 			a[i] *= best
 		}
 		applyLayerOpacity(l, a)
