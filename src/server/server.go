@@ -2832,11 +2832,33 @@ func icueProfileWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
+		decodedLayers := icueprofile.DecodeEditorProfileLayers(profile)
+		editorTrace := make([]map[string]interface{}, 0, len(decodedLayers))
+		for i, layer := range decodedLayers {
+			colors := make([]string, 0, len(layer.Colors))
+			for _, color := range layer.Colors {
+				colors = append(colors, color.Hex)
+			}
+			primary := ""
+			if layer.PrimaryColor != nil {
+				primary = layer.PrimaryColor.Hex
+			}
+			trace := map[string]interface{}{
+				"index": i, "name": layer.Name, "effect": layer.Effect,
+				"colors": colors, "primaryColor": primary, "source": "compiled-authored-layer",
+			}
+			editorTrace = append(editorTrace, trace)
+			logger.Log(logger.Fields{
+				"profile": profile.Name, "layer": i, "name": layer.Name, "effect": layer.Effect,
+				"colors": colors, "primaryColor": primary, "source": "compiled-authored-layer",
+			}).Info("iCUE editor API layer")
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"key": key, "fileName": filepath.Base(path), "profile": profile,
 			"lightingLinkLayers":        profile.LightingLinkLayers,
-			"decodedLightingLinkLayers": icueprofile.DecodeEditorProfileLayers(profile),
+			"decodedLightingLinkLayers": decodedLayers,
+			"editorTrace":               editorTrace,
 		})
 	case http.MethodPost:
 		var edit icueprofile.RuntimeLayerEdit
