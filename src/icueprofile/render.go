@@ -828,6 +828,59 @@ func recordLayerTrack(l Layer, li, fanOrdinal, ledCount int, duration float64, t
 	return notes, seenSupported
 }
 
+func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, ledCount int) {
+	effect := strings.ToLower(l.Effect)
+	switch effect {
+	case "colorwavelighting":
+		speed := number(l.Parameters["speed"], 2)
+		if speed < 1 {
+			speed = 1
+		}
+		if speed > 3 {
+			speed = 3
+		}
+		step := 0.4 / speed
+		period := float64(maxInt(ledCount, 1))
+		if len(topologyPositions(topology, fanOrdinal, ledCount)) == ledCount {
+			period = 17
+		}
+		log.Printf("iCUE SCORE TIMING: xml=%d effect=%s speed=%.3f ledStep=%.6fs routePeriod=%.3f frontRepeat=%.6fs serializedDuration=%.6fs", li, l.Effect, speed, step, period, step*period, layerScoreDuration(l))
+	case "wavelighting":
+		velocity := number(l.Parameters["velocity"], 100)
+		if velocity == 0 {
+			velocity = 100
+		}
+		tail := number(l.Parameters["tailLength"], 4)
+		if tail <= 0 {
+			tail = 1
+		}
+		coords := topologyPositions(topology, fanOrdinal, ledCount)
+		if len(coords) != ledCount {
+			coords = make([]float64, ledCount)
+			for i := range coords {
+				coords[i] = float64(i)
+			}
+		}
+		span := float64(maxInt(ledCount, 1))
+		if len(coords) > 0 {
+			minC, maxC := coords[0], coords[0]
+			for _, x := range coords[1:] {
+				if x < minC {
+					minC = x
+				}
+				if x > maxC {
+					maxC = x
+				}
+			}
+			span = maxC - minC + 1
+		}
+		natural := (span + tail) / math.Abs(velocity)
+		log.Printf("iCUE SCORE TIMING: xml=%d effect=%s velocity=%.3f tail=%.3f naturalRepeat=%.6fs serializedDuration=%.6fs", li, l.Effect, velocity, tail, natural, layerScoreDuration(l))
+	default:
+		log.Printf("iCUE SCORE TIMING: xml=%d effect=%s serializedDuration=%.6fs", li, l.Effect, layerScoreDuration(l))
+	}
+}
+
 func compileMasterScore(p *Profile, topology LEDTopology, deviceOrdinal, ledCount int) *compiledScore {
 	d := p.LinkDevice()
 	if d == nil || len(d.Channels) == 0 {
@@ -871,6 +924,7 @@ func compileMasterScore(p *Profile, topology LEDTopology, deviceOrdinal, ledCoun
 		for li, l := range layers {
 			if l.Enabled {
 				log.Printf("iCUE SCORE TRACK: xml=%d effect=%s notes=%d candidateDuration=%.6fs", li, l.Effect, score.perLayer[li], layerScoreDuration(l))
+				logScoreTimingCandidate(li, l, topology, deviceOrdinal, ledCount)
 			}
 		}
 		trueTies := 0
@@ -893,7 +947,7 @@ func applyScoreRange(state *scorePlayerState, from, to float64, includeZero bool
 			break
 		}
 		eligible := note.Time > from+0.0000005
-		if includeZero && note.Time >= -0.0000005 {
+		if includeZero && note.Time >= -0.0000005 && note.Time <= to+0.0000005 {
 			eligible = true
 		}
 		if !eligible {
@@ -929,10 +983,14 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 		pos += dur
 	}
 	consumed, changed := 0, 0
+	from := state.lastPos
+	wrapped := false
 	if !state.started {
+		from = 0
 		consumed, changed = applyScoreRange(state, -1, pos, true)
 		state.started = true
 	} else if pos+0.0000005 < state.lastPos || elapsed-state.lastElapsed >= dur {
+		wrapped = true
 		c1, ch1 := applyScoreRange(state, state.lastPos, dur, false)
 		c2, ch2 := applyScoreRange(state, -1, pos, true)
 		consumed, changed = c1+c2, ch1+ch2
@@ -942,7 +1000,10 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 	state.lastPos, state.lastElapsed = pos, elapsed
 	bucket := int64(math.Floor(elapsed))
 	if deviceOrdinal == 0 && bucket != state.logBucket {
-		log.Printf("iCUE SCORE PLAYBACK: elapsed=%.6f position=%.6f/%.6f notesConsumed=%d ledTouches=%d", elapsed, pos, dur, consumed, changed)
+		log.Printf("iCUE SCORE PLAYBACK: elapsed=%.6f from=%.6f to=%.6f/%.6f wrapped=%t notesConsumed=%d ledTouches=%d scoreNotes=%d", elapsed, from, pos, dur, wrapped, consumed, changed, len(state.score.notes))
+		if consumed > len(state.score.notes) {
+			log.Printf("iCUE SCORE INVARIANT FAILURE: notesConsumed=%d scoreNotes=%d", consumed, len(state.score.notes))
+		}
 		state.logBucket = bucket
 	}
 	leds := append([]RGB(nil), state.leds...)
