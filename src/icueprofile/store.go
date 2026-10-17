@@ -13,6 +13,7 @@ import (
 // ImportedProfile is the compact representation exposed to the UI. The full
 // parsed profile remains available by parsing Path when the renderer needs it.
 type ImportedProfile struct {
+	Key           string         `json:"key"`
 	FileName      string         `json:"fileName"`
 	Name          string         `json:"name"`
 	ID            string         `json:"id,omitempty"`
@@ -61,7 +62,7 @@ func Scan(configPath string) ([]ImportedProfile, map[string]string, error) {
 			continue
 		}
 		profiles = append(profiles, ImportedProfile{
-			FileName: entry.Name(), Name: p.Name, ID: p.ID,
+			Key: ProfileKey(entry.Name()), FileName: entry.Name(), Name: p.Name, ID: p.ID,
 			DeviceEntries: p.Summary.DeviceEntries, Channels: p.Summary.Channels,
 			Layers: p.Summary.Layers, EnabledLayers: p.Summary.EnabledLayers,
 			Effects: p.Summary.Effects, Compatibility: BuildCompatibility(p.Summary.Effects),

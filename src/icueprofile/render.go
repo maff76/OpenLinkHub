@@ -2540,3 +2540,78 @@ func hsv(h, s, v float64) RGB {
 	}
 	return RGB{r * 255, g * 255, b * 255}
 }
+
+// RuntimeLayerEdit is a non-persistent live editor patch. It deliberately
+// changes only the cached parsed profile in memory; the source .cueprofile is
+// never rewritten. Re-uploading the file or restarting OpenLinkHub restores
+// the authored iCUE values.
+type RuntimeLayerEdit struct {
+	DeviceIndex   int            `json:"deviceIndex"`
+	ChannelIndex  int            `json:"channelIndex"`
+	LayerIndex    int            `json:"layerIndex"`
+	LightingLink  bool           `json:"lightingLink"`
+	Enabled       *bool          `json:"enabled,omitempty"`
+	SelectionMode *string        `json:"selectionMode,omitempty"`
+	LEDs          *[]string      `json:"leds,omitempty"`
+	Parameters    map[string]any `json:"parameters,omitempty"`
+}
+
+// ApplyRuntimeLayerEdit applies a temporary layer patch and drops compiled live
+// concerts so the next hardware frame recompiles from the edited values. The
+// scorePlayers lock is also the RenderFan compile lock, which prevents a live
+// renderer from reading the layer while it is being changed.
+func ApplyRuntimeLayerEdit(p *Profile, edit RuntimeLayerEdit) (Layer, error) {
+	if p == nil {
+		return Layer{}, fmt.Errorf("profile is nil")
+	}
+	scorePlayers.Lock()
+	defer scorePlayers.Unlock()
+
+	var layer *Layer
+	if edit.LightingLink {
+		if edit.LayerIndex < 0 || edit.LayerIndex >= len(p.LightingLinkLayers) {
+			return Layer{}, fmt.Errorf("lighting-link layer %d is out of range", edit.LayerIndex)
+		}
+		layer = &p.LightingLinkLayers[edit.LayerIndex]
+	} else {
+		if edit.DeviceIndex < 0 || edit.DeviceIndex >= len(p.Devices) {
+			return Layer{}, fmt.Errorf("device %d is out of range", edit.DeviceIndex)
+		}
+		dev := &p.Devices[edit.DeviceIndex]
+		if edit.ChannelIndex < 0 || edit.ChannelIndex >= len(dev.Channels) {
+			return Layer{}, fmt.Errorf("channel %d is out of range", edit.ChannelIndex)
+		}
+		ch := &dev.Channels[edit.ChannelIndex]
+		if edit.LayerIndex < 0 || edit.LayerIndex >= len(ch.Layers) {
+			return Layer{}, fmt.Errorf("layer %d is out of range", edit.LayerIndex)
+		}
+		layer = &ch.Layers[edit.LayerIndex]
+	}
+
+	if edit.Enabled != nil {
+		layer.Enabled = *edit.Enabled
+	}
+	if edit.SelectionMode != nil {
+		layer.SelectionMode = strings.TrimSpace(*edit.SelectionMode)
+	}
+	if edit.LEDs != nil {
+		layer.LEDs = append([]string(nil), (*edit.LEDs)...)
+	}
+	if layer.Parameters == nil {
+		layer.Parameters = map[string]any{}
+	}
+	for k, v := range edit.Parameters {
+		if strings.TrimSpace(k) != "" {
+			layer.Parameters[k] = v
+		}
+	}
+
+	// A parameter/selection change can alter both discrete notes and continuous
+	// performers. Rebuild every current concert rather than attempting to patch
+	// compiled state in place. The profile source on disk remains untouched.
+	scorePlayers.byRun = make(map[persistentStateKey]*scorePlayerState)
+	persistentLEDStates.Lock()
+	persistentLEDStates.byRun = make(map[persistentStateKey]*persistentLEDState)
+	persistentLEDStates.Unlock()
+	return *layer, nil
+}

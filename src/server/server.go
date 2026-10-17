@@ -2715,12 +2715,72 @@ func uploadICUEProfile(w http.ResponseWriter, r *http.Request) {
 		"status":  1,
 		"message": "iCUE profile imported successfully",
 		"profile": map[string]interface{}{
-			"fileName": filepath.Base(dest), "name": profile.Name, "id": profile.ID,
+			"key": icueprofile.ProfileKey(filepath.Base(dest)), "fileName": filepath.Base(dest), "name": profile.Name, "id": profile.ID,
 			"deviceEntries": profile.Summary.DeviceEntries, "channels": profile.Summary.Channels,
 			"layers": profile.Summary.Layers, "enabledLayers": profile.Summary.EnabledLayers,
 			"effects": profile.Summary.Effects,
 		},
 	})
+}
+
+// icueProfileWorkspace serves profile details and temporary live edits. Runtime
+// edits never rewrite the imported .cueprofile; they exist only in the parsed
+// profile cache and are discarded on restart/re-upload.
+func icueProfileWorkspace(w http.ResponseWriter, r *http.Request) {
+	key := strings.TrimSpace(r.URL.Query().Get("key"))
+	if key == "" {
+		http.Error(w, "Missing iCUE profile key", http.StatusBadRequest)
+		return
+	}
+	profile, path, err := icueprofile.LoadByKey(config.GetConfig().ConfigPath, key)
+	if err != nil {
+		http.Error(w, "Unable to load iCUE profile: "+err.Error(), http.StatusNotFound)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"key": key, "fileName": filepath.Base(path), "profile": profile,
+			"lightingLinkLayers": profile.LightingLinkLayers,
+		})
+	case http.MethodPost:
+		var edit icueprofile.RuntimeLayerEdit
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&edit); err != nil {
+			http.Error(w, "Unable to read live layer edit: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		layer, err := icueprofile.ApplyRuntimeLayerEdit(profile, edit)
+		if err != nil {
+			http.Error(w, "Unable to apply live layer edit: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": 1, "layer": layer, "persistent": false})
+	default:
+		w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// uiICUEProfiles is the dedicated iCUE import, inspection and live-test workspace.
+func uiICUEProfiles(w http.ResponseWriter, _ *http.Request) {
+	web := templates.Web{}
+	web.Title = dashboard.GetDashboard().PageTitle
+	web.Devices = devices.GetDevices()
+	web.BuildInfo = version.GetBuildInfo()
+	web.SystemInfo = systeminfo.GetInfo()
+	web.Dashboard = dashboard.GetDashboard()
+	web.CpuTemp = dashboard.GetDashboard().TemperatureToString(temperatures.GetCpuTemperature())
+	web.GpuTemp = dashboard.GetDashboard().TemperatureToString(temperatures.GetGpuTemperature())
+	web.Page = "icueProfiles"
+	t := templates.GetTemplate()
+	for header := range headers {
+		w.Header().Set(headers[header].Key, headers[header].Value)
+	}
+	if err := t.ExecuteTemplate(w, "icue-profiles.html", web); err != nil {
+		(&Response{Code: http.StatusInternalServerError, Message: language.GetValue("txtUnableToServeWebContent")}).Send(w)
+	}
 }
 
 // uiSettings handles index page
@@ -2931,6 +2991,7 @@ func setRoutes() http.Handler {
 	handleFunc(r, "/api/keyboard/dial/getColors/", http.MethodGet, getControlDialColors)
 	handleFunc(r, "/api/getSupportedDevices", http.MethodGet, getSupportedDevices)
 	handleFunc(r, "/api/icue/profiles", http.MethodGet, getICUEProfiles)
+	r.HandleFunc("/api/icue/profile", icueProfileWorkspace)
 	r.HandleFunc("/api/icue/rain-calibration", icueRainCalibration)
 	handleFunc(r, "/api/backup", http.MethodGet, backup.PerformBackup)
 	handleFunc(r, "/api/position/", http.MethodGet, getPositionData)
@@ -3083,6 +3144,7 @@ func setRoutes() http.Handler {
 		handleFunc(r, "/color", http.MethodGet, uiColorOverview)
 		handleFunc(r, "/scheduler", http.MethodGet, uiSchedulerOverview)
 		handleFunc(r, "/rgb", http.MethodGet, uiRgbEditor)
+		handleFunc(r, "/icueProfiles", http.MethodGet, uiICUEProfiles)
 		handleFunc(r, "/rgbCluster", http.MethodGet, uiRgbCluster)
 		handleFunc(r, "/macros", http.MethodGet, uiMacrosOverview)
 		handleFunc(r, "/lcd", http.MethodGet, uiLcdOverview)
