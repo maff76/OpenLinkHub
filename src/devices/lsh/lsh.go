@@ -37,12 +37,6 @@ import (
 	"github.com/sstallion/go-hid"
 )
 
-// iCUE QX physical-output probe state. v12.4.74d intentionally replaces only
-// imported-iCUE QX output with one moving purple LED so local output 0..33 can
-// be compared across every connected QX fan. TITAN, DRAM and non-iCUE modes
-// are untouched. Remove this diagnostic once the hardware ordering is captured.
-var icueQXTopologyProbeLast sync.Map
-
 type V2DeviceModel struct {
 	Name        string
 	LedChannels uint8
@@ -264,6 +258,7 @@ type Device struct {
 	instance               *common.Device
 	stopOnce               sync.Once
 	Psu                    bool
+	icueTopologyAuditOnce  sync.Once
 }
 
 var (
@@ -840,6 +835,61 @@ func (d *Device) loadICUEProfiles() {
 
 // qxOrdinal maps the current LINK QX ordering onto the 42-id stride observed
 // in iCUE captures. Only QX devices participate in this logical canvas.
+func (d *Device) auditICUELinkTopology() {
+	d.icueTopologyAuditOnce.Do(func() {
+		keys := make([]int, 0, len(d.Devices))
+		for k := range d.Devices {
+			keys = append(keys, k)
+		}
+		sort.Ints(keys)
+
+		qxGlobal := 0
+		qxByPort := make(map[uint8]int)
+		for _, k := range keys {
+			dev := d.Devices[k]
+			if dev == nil || dev.LedChannels == 0 {
+				continue
+			}
+			name := strings.ToLower(dev.Name)
+			isQX := strings.Contains(name, "qx")
+			isTitan := strings.Contains(name, "titan") || dev.TitanAIO
+			if !isQX && !isTitan {
+				continue
+			}
+
+			fields := logger.Fields{
+				"mapKey":       k,
+				"channelId":    dev.ChannelId,
+				"portId":       dev.PortId,
+				"position":     dev.Position,
+				"deviceId":     dev.DeviceId,
+				"name":         dev.Name,
+				"label":        dev.Label,
+				"leds":         dev.LedChannels,
+				"containsPump": dev.ContainsPump,
+				"titanAIO":     dev.TitanAIO,
+			}
+			if isQX {
+				portOrdinal := qxByPort[dev.PortId]
+				fields["family"] = "QX"
+				fields["qxGlobalOrdinal"] = qxGlobal
+				fields["qxPortOrdinal"] = portOrdinal
+				fields["logicalStartGlobal42"] = qxGlobal * 42
+				fields["logicalEndGlobal42"] = qxGlobal*42 + 33
+				fields["reservedGlobal42"] = fmt.Sprintf("%d-%d", qxGlobal*42+34, qxGlobal*42+41)
+				fields["logicalStartPort42"] = portOrdinal * 42
+				fields["logicalEndPort42"] = portOrdinal*42 + 33
+				fields["reservedPort42"] = fmt.Sprintf("%d-%d", portOrdinal*42+34, portOrdinal*42+41)
+				qxByPort[dev.PortId] = portOrdinal + 1
+				qxGlobal++
+			} else {
+				fields["family"] = "TITAN"
+			}
+			logger.Log(fields).Info("iCUE LINK IDENTITY AUDIT: v12.4.74e")
+		}
+	})
+}
+
 func (d *Device) qxOrdinal(channelID int) int {
 	keys := make([]int, 0)
 	for k, dev := range d.Devices {
@@ -4999,6 +5049,7 @@ func (d *Device) setDeviceColor() {
 func (d *Device) generateRgbEffect(k int, channels uint8, startTime *time.Time, rgbProfile string, subDeviceId int) []byte {
 	buff := make([]byte, 0)
 	if strings.HasPrefix(rgbProfile, "icue-") {
+		d.auditICUELinkTopology()
 		profile, _, err := icueprofile.LoadByKey(pwd, rgbProfile)
 		if err != nil {
 			logger.Log(logger.Fields{"error": err, "profile": rgbProfile}).Warn("Unable to load imported iCUE profile")
@@ -5006,26 +5057,6 @@ func (d *Device) generateRgbEffect(k int, channels uint8, startTime *time.Time, 
 		}
 		ordinal := d.qxOrdinal(k)
 		topology := icueprofile.TopologyForDevice(d.Devices[k].Name, int(channels))
-
-		// v12.4.74d diagnostic: drive the same renderer-local QX LED on every
-		// QX fan. A fan's mounting orientation is deliberately NOT compensated:
-		// local LED N must remain local LED N on every identical QX device.
-		// The probe advances every 500 ms through local outputs 0..33.
-		if topology != nil && topology.Name() == "QX" && int(channels) == 34 {
-			probeLED := int(time.Since(*startTime)/(500*time.Millisecond)) % int(channels)
-			output := make([]byte, int(channels)*3)
-			base := probeLED * 3
-			output[base], output[base+1], output[base+2] = 160, 0, 255
-
-			probeKey := fmt.Sprintf("%s:%d", d.Serial, k)
-			if previous, loaded := icueQXTopologyProbeLast.LoadOrStore(probeKey, probeLED); !loaded || previous.(int) != probeLED {
-				icueQXTopologyProbeLast.Store(probeKey, probeLED)
-				dev := d.Devices[k]
-				logicalLED, _ := topology.LogicalLED(ordinal, probeLED)
-				logger.Log(logger.Fields{"channel": k, "qxOrdinal": ordinal, "name": dev.Name, "deviceId": dev.DeviceId, "portId": dev.PortId, "position": dev.Position, "label": dev.Label, "localLED": probeLED, "logicalLED": logicalLED}).Info("iCUE QX PHYSICAL PROBE: v12.4.74d")
-			}
-			return output
-		}
 		brightness := rgb.GetBrightnessValueFloat(*d.DeviceProfile.BrightnessSlider)
 		if d.GlobalBrightness != 0 {
 			brightness = d.GlobalBrightness
