@@ -26,28 +26,41 @@ type LEDPatch struct {
 // A rendered LED keeps its last committed RGB value until an effect issues a
 // new command for that LED. In particular, StaticLighting seeds the state when
 // a profile starts; it is not reasserted on every renderer frame.
-type persistentLEDState struct {
-	started int64
-	leds    []RGB
+type layerCommandState struct {
+	active []bool
+	color  []RGB
 }
 
+type persistentLEDState struct {
+	leds   []RGB
+	layers map[int]*layerCommandState
+}
+
+type persistentStateKey struct {
+	started       int64
+	deviceOrdinal int
+	ledCount      int
+}
+
+// Key persistent state by the profile-run start timestamp rather than *Profile.
+// The caller may materialize/copy Profile values between frames; the run start
+// is the stable identity of one lighting execution.
 var persistentLEDStates = struct {
 	sync.Mutex
-	byProfile map[*Profile]map[int]*persistentLEDState
-}{byProfile: make(map[*Profile]map[int]*persistentLEDState)}
+	byRun map[persistentStateKey]*persistentLEDState
+}{byRun: make(map[persistentStateKey]*persistentLEDState)}
 
-func loadPersistentLEDState(p *Profile, deviceOrdinal, ledCount int, started time.Time) ([]RGB, bool) {
+func persistentKey(deviceOrdinal, ledCount int, started time.Time) persistentStateKey {
+	return persistentStateKey{started: started.UnixNano(), deviceOrdinal: deviceOrdinal, ledCount: ledCount}
+}
+
+func loadPersistentLEDState(deviceOrdinal, ledCount int, started time.Time) ([]RGB, bool) {
 	persistentLEDStates.Lock()
 	defer persistentLEDStates.Unlock()
-	perDevice := persistentLEDStates.byProfile[p]
-	if perDevice == nil {
-		perDevice = make(map[int]*persistentLEDState)
-		persistentLEDStates.byProfile[p] = perDevice
-	}
-	startKey := started.UnixNano()
-	state := perDevice[deviceOrdinal]
-	if state == nil || state.started != startKey || len(state.leds) != ledCount {
-		perDevice[deviceOrdinal] = &persistentLEDState{started: startKey, leds: make([]RGB, ledCount)}
+	key := persistentKey(deviceOrdinal, ledCount, started)
+	state := persistentLEDStates.byRun[key]
+	if state == nil {
+		persistentLEDStates.byRun[key] = &persistentLEDState{leds: make([]RGB, ledCount), layers: make(map[int]*layerCommandState)}
 		return make([]RGB, ledCount), false
 	}
 	out := make([]RGB, ledCount)
@@ -55,17 +68,56 @@ func loadPersistentLEDState(p *Profile, deviceOrdinal, ledCount int, started tim
 	return out, true
 }
 
-func storePersistentLEDState(p *Profile, deviceOrdinal int, started time.Time, leds []RGB) {
+func storePersistentLEDState(deviceOrdinal int, started time.Time, leds []RGB) {
 	persistentLEDStates.Lock()
 	defer persistentLEDStates.Unlock()
-	perDevice := persistentLEDStates.byProfile[p]
-	if perDevice == nil {
-		perDevice = make(map[int]*persistentLEDState)
-		persistentLEDStates.byProfile[p] = perDevice
+	key := persistentKey(deviceOrdinal, len(leds), started)
+	state := persistentLEDStates.byRun[key]
+	if state == nil {
+		state = &persistentLEDState{layers: make(map[int]*layerCommandState)}
+		persistentLEDStates.byRun[key] = state
 	}
-	copyLEDs := make([]RGB, len(leds))
-	copy(copyLEDs, leds)
-	perDevice[deviceOrdinal] = &persistentLEDState{started: started.UnixNano(), leds: copyLEDs}
+	state.leds = append(state.leds[:0], leds...)
+}
+
+// edgeTriggeredPatches turns a layer's rendered activity into explicit state
+// changes. Remaining active with the same colour is NO COMMAND. Becoming
+// active, or changing colour while active, is SET RGB. Becoming inactive is
+// also NO COMMAND: it never reveals/rebuilds a lower layer.
+func edgeTriggeredPatches(deviceOrdinal, ledCount int, started time.Time, layerIndex int, patches []LEDPatch) []LEDPatch {
+	persistentLEDStates.Lock()
+	defer persistentLEDStates.Unlock()
+	key := persistentKey(deviceOrdinal, ledCount, started)
+	state := persistentLEDStates.byRun[key]
+	if state == nil {
+		state = &persistentLEDState{leds: make([]RGB, ledCount), layers: make(map[int]*layerCommandState)}
+		persistentLEDStates.byRun[key] = state
+	}
+	if state.layers == nil {
+		state.layers = make(map[int]*layerCommandState)
+	}
+	prev := state.layers[layerIndex]
+	if prev == nil || len(prev.active) != ledCount {
+		prev = &layerCommandState{active: make([]bool, ledCount), color: make([]RGB, ledCount)}
+		state.layers[layerIndex] = prev
+	}
+	out := make([]LEDPatch, ledCount)
+	for i := 0; i < ledCount && i < len(patches); i++ {
+		cur := patches[i]
+		if cur.Active {
+			// Compare the actual command colour after command strength. This keeps
+			// continuous fades alive while suppressing repeated identical commands.
+			cmd := applyPatch(RGB{}, cur)
+			if !prev.active[i] || !rgbCommandNear(prev.color[i], cmd, 0.5) {
+				out[i] = LEDPatch{Active: true, Color: cmd, Strength: 1}
+			}
+			prev.active[i] = true
+			prev.color[i] = cmd
+		} else {
+			prev.active[i] = false
+		}
+	}
+	return out
 }
 
 func renderLayerPatches(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64) ([]LEDPatch, bool) {
@@ -102,24 +154,23 @@ func gradientStateChangePatches(l Layer, n int, elapsed float64) ([]LEDPatch, bo
 		dur = 1
 	}
 	const frameWindow = 0.025
-	prev := elapsed - frameWindow
-	if prev < 0 {
-		prev = 0
+	prevTime := elapsed - frameWindow
+	if prevTime < 0 {
+		prevTime = 0
 	}
 	var event *transitionStop
-	startCycle := int(math.Floor(prev / dur))
+	startCycle := int(math.Floor(prevTime / dur))
 	endCycle := int(math.Floor(elapsed / dur))
 	for cycle := startCycle; cycle <= endCycle; cycle++ {
 		base := float64(cycle) * dur
 		for si := range stops {
 			st := &stops[si]
-			// A terminal 1.0 stop is the next cycle's 0.0 boundary.
 			if si == len(stops)-1 && st.T >= 0.999999 {
 				continue
 			}
 			eventTime := base + st.T*dur
-			if eventTime > prev && eventTime <= elapsed {
-				event = st // if several cross in one frame, commit the latest authored state
+			if eventTime > prevTime && eventTime <= elapsed {
+				event = st
 			}
 		}
 	}
@@ -129,8 +180,6 @@ func gradientStateChangePatches(l Layer, n int, elapsed float64) ([]LEDPatch, bo
 	}
 	strength := event.A
 	if strength <= 0.000001 {
-		// Authored alpha zero is no visible command, not an instruction to reveal
-		// or rebuild a lower layer.
 		return patches, true
 	}
 	if strength > 1 {
@@ -507,7 +556,7 @@ func selectedAt(l Layer, logicalBase, local int) bool {
 func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, started time.Time, brightness float64) ([]byte, []string) {
 	// Start from the physical LED state committed by the previous renderer tick.
 	// NO COMMAND therefore means KEEP CURRENT STATE, not reveal/rebuild Static.
-	out, stateInitialized := loadPersistentLEDState(p, deviceOrdinal, ledCount, started)
+	out, stateInitialized := loadPersistentLEDState(deviceOrdinal, ledCount, started)
 	unsupported := map[string]bool{}
 	d := p.LinkDevice()
 	if d == nil || len(d.Channels) == 0 {
@@ -580,6 +629,11 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 				patches = eventPatches
 				ok = true
 			}
+		} else if ok && !strings.EqualFold(l.Effect, "StaticLighting") {
+			// Convert rendered activity into genuine SET events. Repeated identical
+			// activity is NO COMMAND and therefore cannot reclaim an LED changed by
+			// another layer.
+			patches = edgeTriggeredPatches(deviceOrdinal, ledCount, started, li, patches)
 		}
 
 		if !ok {
@@ -770,7 +824,7 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 	}
 	// Commit the unscaled physical RGB state before applying the device's global
 	// brightness limit. LEDs untouched this tick retain this state next tick.
-	storePersistentLEDState(p, deviceOrdinal, started, out)
+	storePersistentLEDState(deviceOrdinal, started, out)
 	if brightness <= 0 {
 		brightness = 1
 	}
