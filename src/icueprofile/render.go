@@ -2350,6 +2350,7 @@ type EditorLayer struct {
 	Colors        []EditorColor  `json:"colors"`
 	PrimaryColor  *EditorColor   `json:"primaryColor,omitempty"`
 	RawParameters map[string]any `json:"rawParameters,omitempty"`
+	Trace         map[string]any `json:"trace,omitempty"`
 }
 
 func editorColor(c RGB) EditorColor {
@@ -2433,7 +2434,16 @@ func DecodeEditorLayers(layers []Layer) []EditorLayer {
 	out := make([]EditorLayer, 0, len(layers))
 	for i, l := range layers {
 		colors := decodedLayerColors(l)
-		e := EditorLayer{Index: i, Name: l.Name, Effect: l.Effect, EffectName: l.EffectName, Enabled: l.Enabled, SelectionMode: l.SelectionMode, LEDs: append([]string(nil), l.LEDs...), Colors: colors, RawParameters: l.Parameters}
+		decoderInputs := map[string]any{}
+		for _, key := range []string{"transitions", "colors", "color"} {
+			if v, ok := l.Parameters[key]; ok {
+				decoderInputs[key] = map[string]any{"type": fmt.Sprintf("%T", v), "value": v}
+			}
+		}
+		e := EditorLayer{Index: i, Name: l.Name, Effect: l.Effect, EffectName: l.EffectName, Enabled: l.Enabled, SelectionMode: l.SelectionMode, LEDs: append([]string(nil), l.LEDs...), Colors: colors, RawParameters: l.Parameters, Trace: map[string]any{
+			"parser":  l.ParserTrace,
+			"decoder": map[string]any{"inputs": decoderInputs, "decodedColors": colors, "decodedCount": len(colors)},
+		}}
 		if len(colors) > 0 {
 			c := colors[0]
 			e.PrimaryColor = &c

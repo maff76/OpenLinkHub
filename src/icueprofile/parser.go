@@ -76,6 +76,7 @@ type Layer struct {
 	Effect           string         `json:"effect"`
 	EffectName       string         `json:"effectName,omitempty"`
 	Parameters       map[string]any `json:"parameters,omitempty"`
+	ParserTrace      map[string]any `json:"-"`
 	StartOnKeyPress  bool           `json:"startOnKeyPress,omitempty"`
 	StartWithProfile bool           `json:"startWithProfile,omitempty"`
 	StopOnKeyPress   bool           `json:"stopOnKeyPress,omitempty"`
@@ -285,6 +286,7 @@ func parseLightingLinkPropertyLayer(entry *Node, typeNames map[int]string) *Laye
 	}
 	l.EffectName = findFirstField(effectData, "name")
 	l.Parameters = extractParameters(effectData)
+	l.ParserTrace = buildLayerParserTrace(effectData, l.Parameters)
 	if l.Effect == "" {
 		l.Effect = "UnknownLighting"
 	}
@@ -352,6 +354,33 @@ func extractParameters(effect *Node) map[string]any {
 		}
 	}
 	return result
+}
+
+func buildLayerParserTrace(effect *Node, parameters map[string]any) map[string]any {
+	trace := map[string]any{}
+	xmlFields := map[string]any{}
+	for _, key := range []string{"transitions", "colors", "color"} {
+		nodes := descendants(effect, key)
+		if len(nodes) == 0 {
+			continue
+		}
+		entries := make([]map[string]any, 0, len(nodes))
+		for _, n := range nodes {
+			entries = append(entries, map[string]any{
+				"node":   n.XMLName.Local,
+				"text":   strings.TrimSpace(n.Text),
+				"leaves": collectLeafValues(n),
+			})
+		}
+		xmlFields[key] = entries
+	}
+	trace["xmlColorFields"] = xmlFields
+	paramTypes := map[string]string{}
+	for key, value := range parameters {
+		paramTypes[key] = fmt.Sprintf("%T", value)
+	}
+	trace["parameterTypes"] = paramTypes
+	return trace
 }
 
 func scalar(s string) any {
