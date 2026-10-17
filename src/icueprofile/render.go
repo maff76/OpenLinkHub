@@ -55,6 +55,45 @@ func applyPatch(dst RGB, patch LEDPatch) RGB {
 	}
 }
 
+// v12.4.46 command-clash audit. This is observational only: it does not alter
+// rendering. A clash means two or more layers issue an active command to the
+// same physical LED on the same renderer tick. A conflicting clash means those
+// commands request visibly different RGB values.
+type commandClashStats struct {
+	mu                sync.Mutex
+	bucket            int64
+	frames            int64
+	commands          int64
+	ledsWithCommand   int64
+	clashLEDs         int64
+	conflictingLEDs   int64
+	maxCommandsPerLED int
+	perLEDCommands    []int64
+	perLEDClashes     []int64
+}
+
+var commandClashAudit = map[int]*commandClashStats{}
+var commandClashAuditMu sync.Mutex
+
+func clashStatsFor(deviceOrdinal, ledCount int) *commandClashStats {
+	commandClashAuditMu.Lock()
+	defer commandClashAuditMu.Unlock()
+	s := commandClashAudit[deviceOrdinal]
+	if s == nil {
+		s = &commandClashStats{}
+		commandClashAudit[deviceOrdinal] = s
+	}
+	if len(s.perLEDCommands) != ledCount {
+		s.perLEDCommands = make([]int64, ledCount)
+		s.perLEDClashes = make([]int64, ledCount)
+	}
+	return s
+}
+
+func rgbCommandNear(a, b RGB, eps float64) bool {
+	return math.Abs(a.R-b.R) <= eps && math.Abs(a.G-b.G) <= eps && math.Abs(a.B-b.B) <= eps
+}
+
 var ledNumber = regexp.MustCompile(`(?i)Led_Cmd_Led(\d+)$`)
 
 // v12.4.45 patch resolver: effects generate sparse LED patches against a shared
@@ -393,6 +432,11 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 		post           map[int]RGB
 	}
 	contributions := make([]contributionSample, 0, len(renderOrder))
+	// Per-frame command ownership audit. Keep this completely separate from the
+	// compositor so the diagnostic cannot change the visual result.
+	frameCommandCount := make([]int, ledCount)
+	frameFirstColor := make([]RGB, ledCount)
+	frameConflict := make([]bool, ledCount)
 	// v12.4.40 global compositor A/B: use the same authored-alpha source-over
 	// rule for every lighting layer. The previous screen blend for later AllLeds
 	// effects could manufacture bright/cyan colours that are not present in any
@@ -446,6 +490,14 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 				continue
 			}
 			contribution.mapped++
+			if patches[i].Active {
+				if frameCommandCount[i] == 0 {
+					frameFirstColor[i] = patches[i].Color
+				} else if !rgbCommandNear(frameFirstColor[i], patches[i].Color, 0.5) {
+					frameConflict[i] = true
+				}
+				frameCommandCount[i]++
+			}
 			if gradientCrossed > 0 {
 				mappedThisLayer++
 			}
@@ -500,6 +552,64 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 			outputDiag.Unlock()
 		}
 	}
+	// Aggregate command clashes once per rendered frame and report once per
+	// second. This tests the state-machine hypothesis directly: sparse clash
+	// rates support independent timed LED commands; heavy clashes argue against
+	// it.
+	if deviceOrdinal == 0 {
+		stats := clashStatsFor(deviceOrdinal, ledCount)
+		stats.mu.Lock()
+		b := int64(math.Floor(elapsed))
+		if stats.bucket == 0 {
+			stats.bucket = b
+		}
+		if b != stats.bucket {
+			clashPct := 0.0
+			conflictPct := 0.0
+			if stats.ledsWithCommand > 0 {
+				clashPct = 100 * float64(stats.clashLEDs) / float64(stats.ledsWithCommand)
+				conflictPct = 100 * float64(stats.conflictingLEDs) / float64(stats.ledsWithCommand)
+			}
+			log.Printf("iCUE command clash audit: frames=%d commands=%d commandedLEDSlots=%d clashLEDSlots=%d (%.2f%%) conflictingLEDSlots=%d (%.2f%%) maxCommandsPerLED=%d", stats.frames, stats.commands, stats.ledsWithCommand, stats.clashLEDs, clashPct, stats.conflictingLEDs, conflictPct, stats.maxCommandsPerLED)
+			for i := range stats.perLEDCommands {
+				if stats.perLEDCommands[i] > 0 {
+					log.Printf("iCUE command clash LED: led=%d commands=%d clashFrames=%d", i, stats.perLEDCommands[i], stats.perLEDClashes[i])
+				}
+			}
+			stats.frames = 0
+			stats.commands = 0
+			stats.ledsWithCommand = 0
+			stats.clashLEDs = 0
+			stats.conflictingLEDs = 0
+			stats.maxCommandsPerLED = 0
+			for i := range stats.perLEDCommands {
+				stats.perLEDCommands[i] = 0
+				stats.perLEDClashes[i] = 0
+			}
+			stats.bucket = b
+		}
+		stats.frames++
+		for i, ncmd := range frameCommandCount {
+			if ncmd == 0 {
+				continue
+			}
+			stats.ledsWithCommand++
+			stats.commands += int64(ncmd)
+			stats.perLEDCommands[i] += int64(ncmd)
+			if ncmd > stats.maxCommandsPerLED {
+				stats.maxCommandsPerLED = ncmd
+			}
+			if ncmd > 1 {
+				stats.clashLEDs++
+				stats.perLEDClashes[i]++
+			}
+			if frameConflict[i] {
+				stats.conflictingLEDs++
+			}
+		}
+		stats.mu.Unlock()
+	}
+
 	// Contribution audit is observational only. It records whether each authored
 	// layer selects/maps LEDs, produces visible pixels, changes the compositor,
 	// and whether those exact post-layer pixels remain in the final composite.
