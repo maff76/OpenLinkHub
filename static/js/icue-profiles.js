@@ -4,6 +4,13 @@ $(function () {
     let currentTarget = null;
     let currentLayer = null;
     let applying = false;
+    let probeLocal = 0;
+    const qxTopology = [
+        {key:'front-outer', label:'Front Outer Ring', face:'front', region:'outer', start:0, count:12},
+        {key:'back-outer', label:'Back Outer Ring', face:'rear', region:'outer', start:12, count:12},
+        {key:'front-inner', label:'Front Inner Ring', face:'front', region:'inner', start:24, count:6},
+        {key:'back-inner', label:'Back Inner Ring', face:'rear', region:'inner', start:30, count:4}
+    ];
 
     function esc(s) { return $('<div>').text(s == null ? '' : String(s)).html(); }
     function layerLabel(l, i) { return (l.name && l.name.trim()) || l.effectName || l.effect || ('Layer ' + (i + 1)); }
@@ -95,11 +102,41 @@ $(function () {
         const fan = parseInt($('#icueFan').val(),10), logical = fan * 42 + local;
         return (currentLayer.leds || []).some(x => { const m=String(x).match(/(\d+)\s*$/); return m && parseInt(m[1],10)===logical; });
     }
-    function renderLEDs() {
-        const map=$('#icueLedMap').empty(); let count=0;
-        for(let i=0;i<34;i++) { const selected=localSelected(i); if(selected) count++; const b=$('<button type="button" class="icue-led"></button>').text(i).attr('aria-label','LED '+i); if(selected)b.addClass('selected'); b.on('click',()=>toggleLED(i)); map.append(b); }
-        $('#icueLedCount').text(count + ' / 34 LEDs on selected fan');
+    // Confirmed QX segment boundaries from OpenLinkHub. Angular start/direction remain to verify.
+    function qxSegment(local) { return qxTopology.find(z => local >= z.start && local < z.start + z.count); }
+    function topologySlot(local) {
+        const z=qxSegment(local);
+        if(!z)return {face:'front',x:50,y:50,region:'unknown',label:'Unknown',segmentIndex:0,segmentCount:1};
+        const n=local-z.start, radius=z.region==='outer'?39:20;
+        const a=(-90+(360*n/z.count))*Math.PI/180;
+        return {face:z.face,x:50+radius*Math.cos(a),y:50+radius*Math.sin(a),region:z.region,label:z.label,segmentIndex:n,segmentCount:z.count};
     }
+    function facePanel(name,label) {
+        const face=$('<div class="icue-face"></div>').attr('data-face',name);
+        face.append($('<div class="icue-face-title"></div>').text(label));
+        const stage=$('<div class="icue-fan-stage"></div>');
+        stage.append('<div class="icue-fan-ring"></div><div class="icue-fan-ring inner"></div><div class="icue-sidebar left"></div><div class="icue-sidebar right"></div>');
+        face.append(stage); return {face:face,stage:stage};
+    }
+    function renderLEDs() {
+        const map=$('#icueLedMap').empty(), front=facePanel('front','Front'), rear=facePanel('rear','Rear'); let count=0;
+        map.append(front.face,rear.face);
+        for(let i=0;i<34;i++) {
+            const selected=localSelected(i), pos=topologySlot(i); if(selected) count++;
+            const b=$('<button type="button" class="icue-led"></button>').text(i).attr({'aria-label':'Local LED '+i+' · '+pos.label,'title':'Local LED '+i+' · '+pos.label+' · group position '+(pos.segmentIndex+1)+'/'+pos.segmentCount+' · angular order still to verify'});
+            b.css({left:pos.x+'%',top:pos.y+'%'}); if(selected)b.addClass('selected'); if($('#icueTopologyProbe').prop('checked')&&i===probeLocal)b.addClass('probe');
+            b.on('click',()=>toggleLED(i)); (pos.face==='front'?front.stage:rear.stage).append(b);
+        }
+        $('#icueLedCount').text(count + ' / 34 LEDs on selected fan'); updateProbeLabel();
+    }
+    function updateProbeLabel(){
+        const fan=parseInt($('#icueFan').val(),10)||0, z=qxSegment(probeLocal), n=z?probeLocal-z.start:0;
+        $('#icueProbeLed').text('Local LED '+probeLocal+' · Logical '+(fan*42+probeLocal));
+        $('#icueProbeZone').text(z?z.label+' · candidate order '+(n+1)+'/'+z.count:'Unknown zone');
+        $('#icueProbeGroup').val(z?z.key:'front-outer');
+    }
+    function stepProbe(delta){ probeLocal=(probeLocal+delta+34)%34; renderLEDs(); }
+    function selectProbeGroup(key){ const z=qxTopology.find(x=>x.key===key); if(!z)return; probeLocal=z.start; renderLEDs(); }
     function setFanSelection(mode) {
         if (!currentLayer) return;
         const fan=parseInt($('#icueFan').val(),10), lo=fan*42, hi=lo+33;
@@ -124,7 +161,7 @@ $(function () {
     }
 
     $('#icueProfileForm').on('submit', function(e){ e.preventDefault(); const f=$('#icueProfileFile')[0].files[0]; if(!f){toast.warning('Choose a .cueprofile first');return;} const fd=new FormData();fd.append('profileFile',f);$('#btnICUEProfileUpload').prop('disabled',true);$.ajax({url:'/api/icue/upload',type:'POST',data:fd,processData:false,contentType:false,success:r=>{toast.success(r.message||'Profile imported');$('#icueProfileFile').val('');refreshProfiles(r.profile && r.profile.key ? r.profile.key : undefined);},error:x=>toast.warning(x.responseText||'Import failed'),complete:()=>$('#btnICUEProfileUpload').prop('disabled',false)}); });
-    $('#icueFan').on('change',renderLEDs); $('#icueSelectAll').on('click',()=>setFanSelection('all')); $('#icueSelectNone').on('click',()=>setFanSelection('none'));
+    $('#icueFan').on('change',renderLEDs); $('#icueTopologyProbe').on('change',function(){ $('#icueProbePanel').toggle(this.checked); renderLEDs(); }); $('#icueProbePrev').on('click',()=>stepProbe(-1)); $('#icueProbeNext').on('click',()=>stepProbe(1)); $('#icueProbeGroup').on('change',function(){selectProbeGroup(this.value);}); $('#icueSelectAll').on('click',()=>setFanSelection('all')); $('#icueSelectNone').on('click',()=>setFanSelection('none'));
     $('#icueLayerEnabled').on('change',function(){currentLayer.enabled=this.checked;apply({enabled:this.checked});});
     $('#icueSelectionMode').on('change',function(){currentLayer.selectionMode=this.value;renderLEDs();apply({selectionMode:this.value});});
     $('#icueRandomTest').on('change',function(){const k=('isRandom' in (currentLayer.parameters||{}))?'isRandom':'random';currentLayer.parameters=currentLayer.parameters||{};currentLayer.parameters[k]=this.checked;$('#icueParameters').val(JSON.stringify(currentLayer.parameters,null,2));apply({parameters:{[k]:this.checked}});});
