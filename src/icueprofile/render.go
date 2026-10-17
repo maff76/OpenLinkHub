@@ -136,7 +136,16 @@ func gradientStateChangePatches(l Layer, n int, elapsed float64) ([]LEDPatch, bo
 	if strength > 1 {
 		strength = 1
 	}
-	layerOpacity := clamp01(number(l.Parameters["opacity"], 1))
+	layerOpacity := number(l.Parameters["opacity"], 1)
+	if layerOpacity > 1 {
+		layerOpacity /= 255
+	}
+	if layerOpacity < 0 {
+		layerOpacity = 0
+	}
+	if layerOpacity > 1 {
+		layerOpacity = 1
+	}
 	strength *= layerOpacity
 	if strength <= 0.000001 {
 		return patches, true
