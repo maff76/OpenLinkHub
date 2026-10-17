@@ -2836,7 +2836,7 @@ func icueProfileWorkspace(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"key": key, "fileName": filepath.Base(path), "profile": profile,
 			"lightingLinkLayers":        profile.LightingLinkLayers,
-			"decodedLightingLinkLayers": icueprofile.DecodeEditorLayers(profile.LightingLinkLayers),
+			"decodedLightingLinkLayers": icueprofile.DecodeEditorProfileLayers(profile),
 		})
 	case http.MethodPost:
 		var edit icueprofile.RuntimeLayerEdit

@@ -1032,52 +1032,13 @@ func auditCanvasStaticOpeningFrame(layers []Layer, logicalBase, ledCount, ordina
 }
 
 func compileLiveConcert(p *Profile, topology LEDTopology, deviceOrdinal, ledCount int) *compiledScore {
-	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.74g cyclic-spatial-distance-fix leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
 	d := p.LinkDevice()
 	if d == nil || len(d.Channels) == 0 {
 		return &compiledScore{unsupported: []string{"LINK device entry missing"}}
 	}
 	layers := p.expandLightingLinks(d.Channels[0].Layers)
 	sourceDeviceCount := sourceQXFanCount(layers, topology)
-	if topology != nil {
-		logical := make([]int, 0, ledCount)
-		for local := 0; local < ledCount; local++ {
-			if id, ok := topology.LogicalLED(deviceOrdinal, local); ok {
-				logical = append(logical, id)
-			} else {
-				logical = append(logical, -1)
-			}
-		}
-		log.Printf("iCUE LED TOPOLOGY AUDIT: topology=%s rendererOrdinal=%d leds=%d localToLogical=%v", topology.Name(), deviceOrdinal, ledCount, logical)
-		staticFrame := auditStaticOpeningFrame(layers, topology, deviceOrdinal, ledCount, sourceDeviceCount)
-		log.Printf("iCUE STATIC FRAME AUDIT: topology=%s rendererOrdinal=%d leds=%d preLiveRGB=%v", topology.Name(), deviceOrdinal, ledCount, auditRGBHex(staticFrame))
-	}
-	// v12.4.74b diagnostic: prove whether a ConcreteLeds Static mask is
-	// actually identical across QX ordinals before changing any mapping.
-	// This is intentionally observational only: it does not alter selection.
-	if topology != nil && strings.EqualFold(topology.Name(), "QX") {
-		for li, l := range layers {
-			if !l.Enabled || !strings.EqualFold(l.Effect, "StaticLighting") || !strings.EqualFold(l.SelectionMode, "ConcreteLeds") {
-				continue
-			}
-			selected := make([]int, 0, ledCount)
-			logicalIDs := make([]int, 0, ledCount)
-			for local := 0; local < ledCount; local++ {
-				if !selectedWithTopology(l, topology, deviceOrdinal, local, sourceDeviceCount) {
-					continue
-				}
-				selected = append(selected, local)
-				mappedOrdinal := deviceOrdinal
-				if sourceDeviceCount > 0 && deviceOrdinal >= sourceDeviceCount {
-					mappedOrdinal = deviceOrdinal % sourceDeviceCount
-				}
-				if logical, ok := topology.LogicalLED(mappedOrdinal, local); ok {
-					logicalIDs = append(logicalIDs, logical)
-				}
-			}
-			log.Printf("iCUE CONCRETE MAP AUDIT: device=%d xml=%d effect=%s sourceQXFans=%d authoredRefs=%d selectedCount=%d localLEDs=%v logicalLEDs=%v", deviceOrdinal, li, l.Effect, sourceDeviceCount, len(l.LEDs), len(selected), selected, logicalIDs)
-		}
-	}
+	// Renderer diagnostics intentionally stay out of the frame/compile path.
 	score := &compiledScore{}
 	unsupported := map[string]bool{}
 	for li, l := range layers {
@@ -1105,14 +1066,11 @@ func compileLiveConcert(p *Profile, topology LEDTopology, deviceOrdinal, ledCoun
 		})
 		score.tracks = append(score.tracks, compiledTrack{layerIndex: li, effect: l.Effect, repeat: repeat, oneShot: oneShot, live: !oneShot, layer: l, notes: trackNotes})
 		score.totalNotes += len(trackNotes)
-		log.Printf("iCUE TRACK COMPILED: leds=%d xml=%d effect=%s notes=%d repeat=%.6fs oneShot=%t live=%t", ledCount, li, l.Effect, len(trackNotes), repeat, oneShot, !oneShot)
-		logScoreTimingCandidate(li, l, topology, deviceOrdinal, ledCount, repeat, oneShot)
 	}
 	for name := range unsupported {
 		score.unsupported = append(score.unsupported, name)
 	}
 	sort.Strings(score.unsupported)
-	log.Printf("iCUE LIVE CONCERT READY: leds=%d rendererOrdinal=%d performers=%d storedDiscreteNotes=%d concertEnd=NEVER sharedClock=absolute allPerformers=LIVE propagationClock=ABSOLUTE phraseClock=INDEPENDENT", ledCount, deviceOrdinal, len(score.tracks), score.totalNotes)
 	return score
 }
 
@@ -2335,6 +2293,69 @@ func DecodeEditorLayers(layers []Layer) []EditorLayer {
 	for i, l := range layers {
 		colors := rendererDecodedLayerColors(l)
 		e := EditorLayer{Index: i, Name: l.Name, Effect: l.Effect, EffectName: l.EffectName, Enabled: l.Enabled, SelectionMode: l.SelectionMode, LEDs: append([]string(nil), l.LEDs...), Colors: colors, RawParameters: l.Parameters}
+		if len(colors) > 0 {
+			c := colors[0]
+			e.PrimaryColor = &c
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// DecodeEditorProfileLayers builds the workspace model from the same expanded
+// authored layers and compile path used by LINK playback. In particular, static
+// colours are taken from the actual compiled opening notes, before layers are
+// composited into a device frame. This keeps XML/authored layer identity intact
+// while making the editor consume the exact value the renderer compiled.
+func DecodeEditorProfileLayers(p *Profile) []EditorLayer {
+	if p == nil {
+		return nil
+	}
+	authored := p.LightingLinkLayers
+	if len(authored) == 0 {
+		return nil
+	}
+
+	// Use the real LINK LightingLink wrapper when present so selection semantics
+	// match playback. The expanded slice preserves authored LightingLink order,
+	// therefore xml index remains the stable bridge back to the editor layer.
+	compiled := authored
+	if d := p.LinkDevice(); d != nil && len(d.Channels) > 0 {
+		expanded := p.expandLightingLinks(d.Channels[0].Layers)
+		if len(expanded) == len(authored) {
+			compiled = expanded
+		}
+	}
+
+	out := make([]EditorLayer, 0, len(authored))
+	topology := LEDTopology(qxTopology{})
+	sourceDeviceCount := sourceQXFanCount(compiled, topology)
+	for i, source := range authored {
+		renderLayerSource := source
+		if i < len(compiled) {
+			renderLayerSource = compiled[i]
+		}
+
+		colors := rendererDecodedLayerColors(renderLayerSource)
+		if strings.EqualFold(renderLayerSource.Effect, "StaticLighting") {
+			// Static is the strongest proof point: recordLayerTrack is the exact
+			// compiler used by playback. Pull unique colours from its notes rather
+			// than decoding Parameters a second time.
+			notes, ok := recordLayerTrack(renderLayerSource, i, 0, topology.LEDCount(), 0, topology, sourceDeviceCount)
+			if ok && len(notes) > 0 {
+				colors = colors[:0]
+				seen := map[string]bool{}
+				for _, note := range notes {
+					c := editorColor(note.Color)
+					if !seen[strings.ToLower(c.Hex)] {
+						seen[strings.ToLower(c.Hex)] = true
+						colors = append(colors, c)
+					}
+				}
+			}
+		}
+
+		e := EditorLayer{Index: i, Name: source.Name, Effect: source.Effect, EffectName: source.EffectName, Enabled: source.Enabled, SelectionMode: source.SelectionMode, LEDs: append([]string(nil), source.LEDs...), Colors: colors, RawParameters: source.Parameters}
 		if len(colors) > 0 {
 			c := colors[0]
 			e.PrimaryColor = &c
