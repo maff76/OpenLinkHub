@@ -2648,6 +2648,11 @@ func getICUEEditorDevices(w http.ResponseWriter, _ *http.Request) {
 		Topology  string `json:"topology,omitempty"`
 	}
 	out := make([]editorDevice, 0)
+	qxNumber, titanNumber, memoryNumber, linkNumber := 0, 0, 0, 0
+	validLabel := func(label string) bool {
+		v := strings.TrimSpace(label)
+		return v != "" && !strings.EqualFold(v, "Set Label") && !strings.EqualFold(v, "SetLabel")
+	}
 	for serial, registered := range devices.GetDevices() {
 		switch d := registered.GetDevice.(type) {
 		case *lshdevice.Device:
@@ -2669,9 +2674,28 @@ func getICUEEditorDevices(w http.ResponseWriter, _ *http.Request) {
 				if strings.Contains(lower, "titan") && dev.LedChannels == 20 {
 					kind, topology = "titan", "titan20"
 				}
-				name := strings.TrimSpace(dev.Label)
-				if name == "" {
-					name = dev.Name
+				name := ""
+				if validLabel(dev.Label) {
+					name = strings.TrimSpace(dev.Label)
+				} else {
+					switch kind {
+					case "qx":
+						qxNumber++
+						name = fmt.Sprintf("QX %d", qxNumber)
+					case "titan":
+						titanNumber++
+						if titanNumber == 1 {
+							name = "TITAN"
+						} else {
+							name = fmt.Sprintf("TITAN %d", titanNumber)
+						}
+					default:
+						linkNumber++
+						name = strings.TrimSpace(dev.Name)
+						if name == "" || strings.EqualFold(name, "Set Label") {
+							name = fmt.Sprintf("LINK Device %d", linkNumber)
+						}
+					}
 				}
 				out = append(out, editorDevice{Key: fmt.Sprintf("%s:%d", serial, k), Parent: registered.Product, Name: name, Kind: kind, LEDs: int(dev.LedChannels), ChannelID: k, PortID: int(dev.PortId), Topology: topology})
 			}
@@ -2686,12 +2710,10 @@ func getICUEEditorDevices(w http.ResponseWriter, _ *http.Request) {
 				if dev == nil || dev.LedChannels == 0 {
 					continue
 				}
-				name := strings.TrimSpace(dev.Label)
-				if name == "" {
-					name = dev.Name
-				}
-				if name == "" {
-					name = fmt.Sprintf("DIMM %d", k+1)
+				memoryNumber++
+				name := fmt.Sprintf("Memory %d", memoryNumber)
+				if validLabel(dev.Label) {
+					name = strings.TrimSpace(dev.Label)
 				}
 				out = append(out, editorDevice{Key: fmt.Sprintf("%s:%d", serial, k), Parent: registered.Product, Name: name, Kind: "memory", LEDs: int(dev.LedChannels), ChannelID: k, Topology: "linear"})
 			}
