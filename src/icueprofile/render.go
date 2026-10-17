@@ -624,7 +624,7 @@ func selectedAt(l Layer, logicalBase, local int) bool {
 	return false
 }
 
-// v12.4.61 live-concert sequencer.
+// v12.4.62 live-concert sequencer.
 //
 // The profile is an open-ended performance: selecting a profile starts a new
 // concert at t=0 and changing/stopping the profile ends it. There is no master
@@ -636,6 +636,8 @@ type compiledTrack struct {
 	effect     string
 	repeat     float64
 	oneShot    bool
+	live       bool
+	layer      Layer
 	notes      []LEDCommand
 }
 
@@ -646,11 +648,14 @@ type compiledScore struct {
 }
 
 type scorePlayerState struct {
-	score       *compiledScore
-	leds        []RGB
-	lastElapsed float64
-	started     bool
-	logBucket   int64
+	score             *compiledScore
+	topology          LEDTopology
+	deviceOrdinal     int
+	sourceDeviceCount int
+	leds              []RGB
+	lastElapsed       float64
+	started           bool
+	logBucket         int64
 }
 
 var scorePlayers = struct {
@@ -804,36 +809,15 @@ func recordLayerTrack(l Layer, li, fanOrdinal, ledCount int, duration float64, t
 		return notes, true
 	}
 
-	// The guide defines Gradient as a smooth fade between Lighting Box nodes.
-	// Generate the performed phrase, not just sparse control points. 20 ms is the
-	// output-command grid, while authored node times remain the interpolation axis.
+	// Gradient is a live continuous performer. Do not pre-record a 20 ms RGB
+	// grid: the player samples the authored Lighting Box curve directly at the
+	// current absolute concert time. This keeps the phrase independent while
+	// avoiding thousands of synthetic notes per renderer.
 	if effect == "gradientlighting" {
-		stops := transitionStops(l)
-		if len(stops) < 2 {
+		if len(transitionStops(l)) < 2 {
 			return nil, false
 		}
-		opacity := number(l.Parameters["opacity"], 1)
-		if opacity > 1 {
-			opacity /= 255
-		}
-		if opacity < 0 {
-			opacity = 0
-		}
-		if opacity > 1 {
-			opacity = 1
-		}
-		const q = 0.020
-		for at := 0.0; at < duration-0.0000005; at += q {
-			t := at / duration
-			col, a := sampleTransitionStops(stops, t)
-			for led := 0; led < ledCount; led++ {
-				if !selectedWithTopology(l, topology, fanOrdinal, led, sourceDeviceCount) {
-					continue
-				}
-				appendScoreNote(&notes, l, li, led, at, col, a*opacity)
-			}
-		}
-		return notes, true
+		return nil, true
 	}
 
 	// ColorWave: the authored duration is the independently repeating phrase period;
@@ -926,8 +910,8 @@ func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, 
 		logBase("conductor-opening-state", "profile-start-only; never-repeats-with-other-tracks; holds-until-overwritten")
 	case "gradientlighting":
 		stops := transitionStops(l)
-		log.Printf("iCUE TRACK TIMING: leds=%d xml=%d effect=%s stops=%d phrase=%.6fs interpolation=smooth commandGrid=0.020s model=guide-gradient", ledCount, li, l.Effect, len(stops), repeat)
-		logBase("guide-gradient", "lighting-time=phrase-axis; nodes=control-points; smooth-interpolation-between-nodes")
+		log.Printf("iCUE TRACK TIMING: leds=%d xml=%d effect=%s stops=%d phrase=%.6fs interpolation=smooth evaluation=LIVE model=guide-gradient", ledCount, li, l.Effect, len(stops), repeat)
+		logBase("guide-gradient", "lighting-time=phrase-axis; nodes=control-points; smooth-live-interpolation; no-pre-recorded-grid")
 	case "rainlighting":
 		speed := number(l.Parameters["speed"], 1)
 		if speed <= 0 {
@@ -972,7 +956,7 @@ func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, 
 }
 
 func compileLiveConcert(p *Profile, topology LEDTopology, deviceOrdinal, ledCount int) *compiledScore {
-	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.61 independent-infinite-phrases leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
+	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.62 live-performers-independent-phrases leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
 	d := p.LinkDevice()
 	if d == nil || len(d.Channels) == 0 {
 		return &compiledScore{unsupported: []string{"LINK device entry missing"}}
@@ -1004,16 +988,16 @@ func compileLiveConcert(p *Profile, topology LEDTopology, deviceOrdinal, ledCoun
 			}
 			return trackNotes[i].LayerIndex > trackNotes[j].LayerIndex
 		})
-		score.tracks = append(score.tracks, compiledTrack{layerIndex: li, effect: l.Effect, repeat: repeat, oneShot: oneShot, notes: trackNotes})
+		score.tracks = append(score.tracks, compiledTrack{layerIndex: li, effect: l.Effect, repeat: repeat, oneShot: oneShot, live: strings.EqualFold(l.Effect, "GradientLighting"), layer: l, notes: trackNotes})
 		score.totalNotes += len(trackNotes)
-		log.Printf("iCUE TRACK COMPILED: leds=%d xml=%d effect=%s notes=%d repeat=%.6fs oneShot=%t", ledCount, li, l.Effect, len(trackNotes), repeat, oneShot)
+		log.Printf("iCUE TRACK COMPILED: leds=%d xml=%d effect=%s notes=%d repeat=%.6fs oneShot=%t live=%t", ledCount, li, l.Effect, len(trackNotes), repeat, oneShot, strings.EqualFold(l.Effect, "GradientLighting"))
 		logScoreTimingCandidate(li, l, topology, deviceOrdinal, ledCount, repeat, oneShot)
 	}
 	for name := range unsupported {
 		score.unsupported = append(score.unsupported, name)
 	}
 	sort.Strings(score.unsupported)
-	log.Printf("iCUE LIVE CONCERT READY: leds=%d rendererOrdinal=%d performers=%d storedPhraseNotes=%d concertEnd=NEVER sharedClock=absolute", ledCount, deviceOrdinal, len(score.tracks), score.totalNotes)
+	log.Printf("iCUE LIVE CONCERT READY: leds=%d rendererOrdinal=%d performers=%d storedDiscreteNotes=%d concertEnd=NEVER sharedClock=absolute liveContinuous=enabled", ledCount, deviceOrdinal, len(score.tracks), score.totalNotes)
 	return score
 }
 
@@ -1065,6 +1049,51 @@ func collectTrackRange(track compiledTrack, from, to float64, includeStart bool,
 	return count
 }
 
+func applyLiveContinuous(state *scorePlayerState, at float64) int {
+	changed := map[int]struct{}{}
+	// All live continuous performers issue their value at the same absolute
+	// instant. Apply bottom-to-top so xml0/topmost wins exact-time ties.
+	for ti := len(state.score.tracks) - 1; ti >= 0; ti-- {
+		track := state.score.tracks[ti]
+		if !track.live || track.repeat <= 0 {
+			continue
+		}
+		local := math.Mod(at, track.repeat)
+		if local < 0 {
+			local += track.repeat
+		}
+		if strings.EqualFold(track.effect, "GradientLighting") {
+			stops := transitionStops(track.layer)
+			if len(stops) < 2 {
+				continue
+			}
+			col, alpha := sampleTransitionStops(stops, local/track.repeat)
+			opacity := number(track.layer.Parameters["opacity"], 1)
+			if opacity > 1 {
+				opacity /= 255
+			}
+			if opacity < 0 {
+				opacity = 0
+			}
+			if opacity > 1 {
+				opacity = 1
+			}
+			strength := alpha * opacity
+			if strength <= 0.000001 {
+				continue
+			}
+			for led := 0; led < len(state.leds); led++ {
+				if !selectedWithTopology(track.layer, state.topology, state.deviceOrdinal, led, state.sourceDeviceCount) {
+					continue
+				}
+				state.leds[led] = concreteCommand(col, strength)
+				changed[led] = struct{}{}
+			}
+		}
+	}
+	return len(changed)
+}
+
 func applyAbsoluteRange(state *scorePlayerState, from, to float64, includeStart bool) (int, int) {
 	events := make([]absoluteScoreNote, 0)
 	for _, track := range state.score.tracks {
@@ -1093,6 +1122,10 @@ func applyAbsoluteRange(state *scorePlayerState, from, to float64, includeStart 
 		consumed++
 		changed[n.LED] = struct{}{}
 	}
+	liveChanged := applyLiveContinuous(state, to)
+	if liveChanged > len(changed) {
+		return consumed, liveChanged
+	}
 	return consumed, len(changed)
 }
 
@@ -1103,7 +1136,13 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 	scorePlayers.Lock()
 	state := scorePlayers.byRun[key]
 	if state == nil {
-		state = &scorePlayerState{score: compileLiveConcert(p, topology, deviceOrdinal, ledCount), leds: make([]RGB, ledCount)}
+		score := compileLiveConcert(p, topology, deviceOrdinal, ledCount)
+		d := p.LinkDevice()
+		sourceCount := 0
+		if d != nil && len(d.Channels) > 0 {
+			sourceCount = sourceQXFanCount(p.expandLightingLinks(d.Channels[0].Layers), topology)
+		}
+		state = &scorePlayerState{score: score, topology: topology, deviceOrdinal: deviceOrdinal, sourceDeviceCount: sourceCount, leds: make([]RGB, ledCount)}
 		scorePlayers.byRun[key] = state
 	}
 	elapsed := time.Since(started).Seconds()
@@ -1124,7 +1163,7 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 	state.lastElapsed = elapsed
 	bucket := int64(math.Floor(elapsed))
 	if deviceOrdinal == 0 && bucket != state.logBucket {
-		log.Printf("iCUE LIVE PLAYBACK: device=%d leds=%d concertTime=%.6f from=%.6f concertEnd=NEVER notesConsumed=%d ledTouches=%d performers=%d storedPhraseNotes=%d", deviceOrdinal, ledCount, elapsed, from, consumed, changed, len(state.score.tracks), state.score.totalNotes)
+		log.Printf("iCUE LIVE PLAYBACK: device=%d leds=%d concertTime=%.6f from=%.6f concertEnd=NEVER notesConsumed=%d ledTouches=%d performers=%d storedDiscreteNotes=%d", deviceOrdinal, ledCount, elapsed, from, consumed, changed, len(state.score.tracks), state.score.totalNotes)
 		state.logBucket = bucket
 	}
 	leds := append([]RGB(nil), state.leds...)
