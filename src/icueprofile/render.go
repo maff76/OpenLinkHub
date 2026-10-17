@@ -215,7 +215,7 @@ func colorWaveCommandTime(l Layer, led, n int, elapsed float64, spatial []float6
 	}
 	routeCoord := coord
 	if direction == 2 {
-		routeCoord = math.Mod(period-coord, period)
+		routeCoord = wrapPeriodic(period-coord, period)
 	}
 	phase := stringPhase(l.ID) * period
 	front := elapsed/stepSeconds + phase
@@ -1659,10 +1659,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 				// before measuring circular distance. The previous min(d, period-d)
 				// becomes negative once d > period, which made every Rain LED on QX1+
 				// look active at once.
-				delta := math.Mod(coord-target, period)
-				if delta < 0 {
-					delta += period
-				}
+				delta := wrapPeriodic(coord-target, period)
 				d := math.Min(delta, period-delta)
 				if d > 0.55 {
 					continue
@@ -1747,7 +1744,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 			// is intentionally longer than the per-LED progression interval.
 			routeCoord := coord
 			if sign < 0 {
-				routeCoord = math.Mod(period-coord, period)
+				routeCoord = wrapPeriodic(period-coord, period)
 			}
 			// Separate ColorWave layers are independent streams. Starting every
 			// stream at route position zero makes otherwise valid patches land on
@@ -2485,6 +2482,24 @@ func boolParam(v any, d bool) bool {
 	}
 	return d
 }
+
+// wrapPeriodic maps a global topology coordinate/delta into one positive
+// effect-local period. Spatial topologies may span multiple physical devices,
+// while periodic effects such as Rain and ColorWave repeat on a compact route.
+// Go's math.Mod preserves the sign of a negative dividend, so using it directly
+// for reverse-direction coordinates can leak negative route positions into
+// event/pass calculations on later devices.
+func wrapPeriodic(x, period float64) float64 {
+	if period <= 0 {
+		return 0
+	}
+	x = math.Mod(x, period)
+	if x < 0 {
+		x += period
+	}
+	return x
+}
+
 func clamp(x float64) float64 {
 	if x < 0 {
 		return 0
