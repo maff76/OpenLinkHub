@@ -624,7 +624,7 @@ func selectedAt(l Layer, logicalBase, local int) bool {
 	return false
 }
 
-// v12.4.62 live-concert sequencer.
+// v12.4.63 full live-performer concert sequencer.
 //
 // The profile is an open-ended performance: selecting a profile starts a new
 // concert at t=0 and changing/stopping the profile ends it. There is no master
@@ -739,8 +739,66 @@ func trackRepeatDuration(l Layer, topology LEDTopology, fanOrdinal, ledCount int
 			d = 1
 		}
 		return d, false
+	case "ripplelighting":
+		// Experimental iCUE Ripple performer. The historical iCUE guide defines
+		// Ripple as an expanding effect with independent Tail and Velocity controls.
+		// For LINK's 1-D topology we start each repeated phrase at route origin and
+		// expand in both directions. Authored transition stops shape the tail.
+		// This is intentionally a probe until a captured Ripple profile establishes
+		// the exact serialized origin/direction semantics.
+		velocity := math.Abs(number(l.Parameters["velocity"], 100))
+		if velocity <= 0.000001 {
+			velocity = 100
+		}
+		tail := number(l.Parameters["tailLength"], 4)
+		if tail <= 0 {
+			tail = 1
+		}
+		stops := transitionStops(l)
+		if len(stops) == 0 {
+			col := layerColor(l, RGB{R: 255, G: 255, B: 255})
+			stops = []transitionStop{{0, col, 0}, {1, col, 1}}
+		}
+		coords := spatial
+		if len(coords) != n {
+			coords = make([]float64, n)
+			for i := range coords {
+				coords[i] = float64(i)
+			}
+		}
+		minC, maxC := coords[0], coords[0]
+		for _, x := range coords[1:] {
+			if x < minC {
+				minC = x
+			}
+			if x > maxC {
+				maxC = x
+			}
+		}
+		span := maxC - minC + 1
+		radius := math.Mod(elapsed*velocity, span+tail)
+		for i, x := range coords {
+			dist := math.Abs(x - minC)
+			d := radius - dist
+			if d < 0 || d > tail {
+				a[i] = 0
+				continue
+			}
+			t := d / tail
+			col, alpha := sampleTransitionStops(stops, t)
+			c[i] = col
+			a[i] *= alpha
+		}
+		applyLayerOpacity(l, a)
+		return c, a, true
 	case "wavelighting":
 		return waveTrackRepeat(l, topology, fanOrdinal, ledCount), false
+	case "ripplelighting":
+		d := layerScoreDuration(l)
+		if d <= 0 {
+			d = waveTrackRepeat(l, topology, fanOrdinal, ledCount)
+		}
+		return d, false
 	case "rainlighting":
 		// Rain is an event generator, not a duration sweep. Use a deterministic
 		// event phrase long enough to retain the validated v12.4.38 cadence/fade;
@@ -809,94 +867,18 @@ func recordLayerTrack(l Layer, li, fanOrdinal, ledCount int, duration float64, t
 		return notes, true
 	}
 
-	// Gradient is a live continuous performer. Do not pre-record a 20 ms RGB
-	// grid: the player samples the authored Lighting Box curve directly at the
-	// current absolute concert time. This keeps the phrase independent while
-	// avoiding thousands of synthetic notes per renderer.
-	if effect == "gradientlighting" {
-		if len(transitionStops(l)) < 2 {
-			return nil, false
-		}
-		return nil, true
+	// Every non-static lighting effect is a live performer in v12.4.63. The
+	// layer keeps only its authored parameters and independent phrase period;
+	// it is evaluated directly from the shared absolute concert clock. There is
+	// no pre-recorded 20 ms command grid and no finite master score.
+	//
+	// Validate support once at t=0. RippleLighting is handled by renderLayer's
+	// experimental guide-derived performer below.
+	_, _, ok := renderLayer(l, fanOrdinal, ledCount, 0, spatial)
+	if !ok {
+		return nil, false
 	}
-
-	// ColorWave: the authored duration is the independently repeating phrase period;
-	// speed controls propagation within that phrase. There is no master reset.
-	if effect == "colorwavelighting" {
-		speed := number(l.Parameters["speed"], 2)
-		if speed < 1 {
-			speed = 1
-		}
-		if speed > 3 {
-			speed = 3
-		}
-		travelStep := 0.400 / speed
-		launchInterval := duration
-		if launchInterval <= 0 {
-			launchInterval = 1
-		}
-		period := float64(maxInt(ledCount, 1))
-		if len(spatial) == ledCount {
-			period = 17
-		}
-		direction := int(number(l.Parameters["direction"], 2))
-		c1, c2 := effectColors(l, RGB{R: 255}, RGB{B: 255})
-		random := boolParam(l.Parameters["random"], false)
-		maxTravel := period * travelStep
-		firstFront := int(math.Floor(-maxTravel/launchInterval)) - 1
-		lastFront := int(math.Ceil(duration/launchInterval)) + 1
-		for frontIndex := firstFront; frontIndex <= lastFront; frontIndex++ {
-			launchAt := float64(frontIndex) * launchInterval
-			col := c1
-			if random {
-				col = hsv(hash(frontIndex, fanOrdinal*131+17), 1, 1)
-			} else if frontIndex&1 != 0 {
-				col = c2
-			}
-			for led := 0; led < ledCount; led++ {
-				if !selectedWithTopology(l, topology, fanOrdinal, led, sourceDeviceCount) {
-					continue
-				}
-				coord := float64(led)
-				if len(spatial) == ledCount {
-					coord = spatial[led]
-				}
-				route := coord
-				if direction == 2 {
-					route = math.Mod(period-coord, period)
-				}
-				at := launchAt + route*travelStep
-				if at < -0.0000005 || at >= duration-0.0000005 {
-					continue
-				}
-				appendScoreNote(&notes, l, li, led, math.Max(0, at), col, 1)
-			}
-		}
-		return notes, true
-	}
-
-	// Rain v12.4.38, Wave v12.4.39 and remaining continuous effects are recorded
-	// as explicit commands over their own phrase. Repeated same-colour commands
-	// are retained because another track may have interrupted that LED meanwhile.
-	const q = 0.020
-	seenSupported := false
-	for at := 0.0; at < duration-0.0000005; at += q {
-		colors, alpha, ok := renderLayer(l, fanOrdinal, ledCount, at, spatial)
-		if !ok {
-			continue
-		}
-		seenSupported = true
-		for led := 0; led < ledCount; led++ {
-			if !selectedWithTopology(l, topology, fanOrdinal, led, sourceDeviceCount) {
-				continue
-			}
-			if led >= len(colors) || led >= len(alpha) || alpha[led] <= 0.000001 {
-				continue
-			}
-			appendScoreNote(&notes, l, li, led, at, colors[led], alpha[led])
-		}
-	}
-	return notes, seenSupported
+	return nil, true
 }
 
 func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, ledCount int, repeat float64, oneShot bool) {
@@ -950,13 +932,24 @@ func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, 
 		}
 		log.Printf("iCUE LIVE PHRASE: leds=%d xml=%d effect=%s velocity=%.3f tail=%.3f phrase=%.6fs serializedDuration=%.6fs model=guide-velocity-tail-wave", ledCount, li, l.Effect, velocity, tail, repeat, serialized)
 		logBase("guide-velocity-tail-wave", "lighting-time=independent-repeat-period; velocity=travel-speed; tail=wave-tail; no-master-loop")
+	case "ripplelighting":
+		velocity := number(l.Parameters["velocity"], 100)
+		if velocity == 0 {
+			velocity = 100
+		}
+		tail := number(l.Parameters["tailLength"], 4)
+		if tail <= 0 {
+			tail = 1
+		}
+		log.Printf("iCUE LIVE PHRASE: leds=%d xml=%d effect=%s velocity=%.3f tail=%.3f phrase=%.6fs model=guide-ripple-probe", ledCount, li, l.Effect, velocity, tail, repeat)
+		logBase("guide-ripple-probe", "lighting-time=independent-repeat-period; velocity=ripple-travel; tail=ripple-tail; EXPERIMENTAL")
 	default:
-		logBase("independent-track", "track-repeats-independently; 20ms=command-recorder-grid-not-master-clock")
+		logBase("independent-track", "live-performer; phrase-repeats-independently; no-pre-recorded-grid; no-master-clock")
 	}
 }
 
 func compileLiveConcert(p *Profile, topology LEDTopology, deviceOrdinal, ledCount int) *compiledScore {
-	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.62 live-performers-independent-phrases leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
+	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.63 all-live-performers-ripple-probe leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
 	d := p.LinkDevice()
 	if d == nil || len(d.Channels) == 0 {
 		return &compiledScore{unsupported: []string{"LINK device entry missing"}}
@@ -988,16 +981,16 @@ func compileLiveConcert(p *Profile, topology LEDTopology, deviceOrdinal, ledCoun
 			}
 			return trackNotes[i].LayerIndex > trackNotes[j].LayerIndex
 		})
-		score.tracks = append(score.tracks, compiledTrack{layerIndex: li, effect: l.Effect, repeat: repeat, oneShot: oneShot, live: strings.EqualFold(l.Effect, "GradientLighting"), layer: l, notes: trackNotes})
+		score.tracks = append(score.tracks, compiledTrack{layerIndex: li, effect: l.Effect, repeat: repeat, oneShot: oneShot, live: !oneShot, layer: l, notes: trackNotes})
 		score.totalNotes += len(trackNotes)
-		log.Printf("iCUE TRACK COMPILED: leds=%d xml=%d effect=%s notes=%d repeat=%.6fs oneShot=%t live=%t", ledCount, li, l.Effect, len(trackNotes), repeat, oneShot, strings.EqualFold(l.Effect, "GradientLighting"))
+		log.Printf("iCUE TRACK COMPILED: leds=%d xml=%d effect=%s notes=%d repeat=%.6fs oneShot=%t live=%t", ledCount, li, l.Effect, len(trackNotes), repeat, oneShot, !oneShot)
 		logScoreTimingCandidate(li, l, topology, deviceOrdinal, ledCount, repeat, oneShot)
 	}
 	for name := range unsupported {
 		score.unsupported = append(score.unsupported, name)
 	}
 	sort.Strings(score.unsupported)
-	log.Printf("iCUE LIVE CONCERT READY: leds=%d rendererOrdinal=%d performers=%d storedDiscreteNotes=%d concertEnd=NEVER sharedClock=absolute liveContinuous=enabled", ledCount, deviceOrdinal, len(score.tracks), score.totalNotes)
+	log.Printf("iCUE LIVE CONCERT READY: leds=%d rendererOrdinal=%d performers=%d storedDiscreteNotes=%d concertEnd=NEVER sharedClock=absolute allPerformers=LIVE", ledCount, deviceOrdinal, len(score.tracks), score.totalNotes)
 	return score
 }
 
@@ -1051,8 +1044,9 @@ func collectTrackRange(track compiledTrack, from, to float64, includeStart bool,
 
 func applyLiveContinuous(state *scorePlayerState, at float64) int {
 	changed := map[int]struct{}{}
-	// All live continuous performers issue their value at the same absolute
-	// instant. Apply bottom-to-top so xml0/topmost wins exact-time ties.
+	// Every active non-static layer is performed live at the current absolute
+	// concert time. Each performer wraps only its own phrase. Apply bottom-to-top
+	// so xml0/topmost wins when performers issue commands at the same instant.
 	for ti := len(state.score.tracks) - 1; ti >= 0; ti-- {
 		track := state.score.tracks[ti]
 		if !track.live || track.repeat <= 0 {
@@ -1062,33 +1056,20 @@ func applyLiveContinuous(state *scorePlayerState, at float64) int {
 		if local < 0 {
 			local += track.repeat
 		}
-		if strings.EqualFold(track.effect, "GradientLighting") {
-			stops := transitionStops(track.layer)
-			if len(stops) < 2 {
+		spatial := topologyPositions(state.topology, state.deviceOrdinal, len(state.leds))
+		colors, alpha, ok := renderLayer(track.layer, state.deviceOrdinal, len(state.leds), local, spatial)
+		if !ok {
+			continue
+		}
+		for led := 0; led < len(state.leds); led++ {
+			if !selectedWithTopology(track.layer, state.topology, state.deviceOrdinal, led, state.sourceDeviceCount) {
 				continue
 			}
-			col, alpha := sampleTransitionStops(stops, local/track.repeat)
-			opacity := number(track.layer.Parameters["opacity"], 1)
-			if opacity > 1 {
-				opacity /= 255
+			if led >= len(colors) || led >= len(alpha) || alpha[led] <= 0.000001 {
+				continue // NO COMMAND: retain current physical LED state.
 			}
-			if opacity < 0 {
-				opacity = 0
-			}
-			if opacity > 1 {
-				opacity = 1
-			}
-			strength := alpha * opacity
-			if strength <= 0.000001 {
-				continue
-			}
-			for led := 0; led < len(state.leds); led++ {
-				if !selectedWithTopology(track.layer, state.topology, state.deviceOrdinal, led, state.sourceDeviceCount) {
-					continue
-				}
-				state.leds[led] = concreteCommand(col, strength)
-				changed[led] = struct{}{}
-			}
+			state.leds[led] = concreteCommand(colors[led], alpha[led])
+			changed[led] = struct{}{}
 		}
 	}
 	return len(changed)
