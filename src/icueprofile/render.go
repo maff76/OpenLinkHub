@@ -624,12 +624,13 @@ func selectedAt(l Layer, logicalBase, local int) bool {
 	return false
 }
 
-// v12.4.60 independent-track score compiler/player.
+// v12.4.61 live-concert sequencer.
 //
-// The iCUE guide and the hardware tests point to an orchestra/sequencer model:
-// every lighting layer has its own phrase/repeat clock, while all tracks share
-// one absolute performance clock and one persistent bank of physical LED state.
-// A track reaching its repeat point never rewinds any other track.
+// The profile is an open-ended performance: selecting a profile starts a new
+// concert at t=0 and changing/stopping the profile ends it. There is no master
+// score length. Each effect performs its own finite phrase and repeats that phrase
+// forever on the shared absolute clock. A phrase boundary never rewinds another
+// effect. Static is the conductor's opening tap and is emitted only at concert start.
 type compiledTrack struct {
 	layerIndex int
 	effect     string
@@ -675,6 +676,14 @@ func layerScoreDuration(l Layer) float64 {
 }
 
 func waveTrackRepeat(l Layer, topology LEDTopology, fanOrdinal, ledCount int) float64 {
+	// The authored duration is the Wave performer's phrase/repeat period. Velocity
+	// and Tail describe what happens inside that phrase; they do not define when
+	// the whole concert or another effect repeats.
+	if d := layerScoreDuration(l); d > 0 {
+		return d
+	}
+	// Defensive fallback for profiles with no captured phrase time: use one natural
+	// spatial pass rather than inventing a global/master duration.
 	velocity := math.Abs(number(l.Parameters["velocity"], 100))
 	if velocity <= 0.000001 {
 		velocity = 100
@@ -718,13 +727,13 @@ func trackRepeatDuration(l Layer, topology LEDTopology, fanOrdinal, ledCount int
 		}
 		return d, false
 	case "colorwavelighting":
-		// Still a hypothesis: duration is the colour-front launch interval.
-		// Two alternating authored colours form the smallest complete phrase.
+		// The captured lighting time is this ColorWave performer's phrase period.
+		// Speed remains the propagation control inside the phrase.
 		d := layerScoreDuration(l)
 		if d <= 0 {
 			d = 1
 		}
-		return 2 * d, false
+		return d, false
 	case "wavelighting":
 		return waveTrackRepeat(l, topology, fanOrdinal, ledCount), false
 	case "rainlighting":
@@ -827,8 +836,8 @@ func recordLayerTrack(l Layer, li, fanOrdinal, ledCount int, duration float64, t
 		return notes, true
 	}
 
-	// ColorWave: speed controls propagation. Duration-as-launch-interval remains
-	// explicitly a hypothesis until a controlled iCUE test proves that field.
+	// ColorWave: the authored duration is the independently repeating phrase period;
+	// speed controls propagation within that phrase. There is no master reset.
 	if effect == "colorwavelighting" {
 		speed := number(l.Parameters["speed"], 2)
 		if speed < 1 {
@@ -838,7 +847,7 @@ func recordLayerTrack(l Layer, li, fanOrdinal, ledCount int, duration float64, t
 			speed = 3
 		}
 		travelStep := 0.400 / speed
-		launchInterval := layerScoreDuration(l)
+		launchInterval := duration
 		if launchInterval <= 0 {
 			launchInterval = 1
 		}
@@ -943,8 +952,9 @@ func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, 
 		if launch <= 0 {
 			launch = 1
 		}
-		log.Printf("iCUE TRACK TIMING: leds=%d xml=%d effect=%s speed=%.3f travelStep=%.6fs traversal=%.6fs launchInterval=%.6fs phrase=%.6fs model=propagation-probe", ledCount, li, l.Effect, speed, step, step*period, launch, repeat)
-		logBase("propagation-probe", "guide-speed=propagation; duration-as-launch-interval=HYPOTHESIS; fronts-may-overlap")
+		log.Printf("iCUE LIVE PHRASE: leds=%d xml=%d effect=%s speed=%.3f travelStep=%.6fs traversal=%.6fs phrase=%.6fs model=guide-speed-live-phrase", ledCount, li, l.Effect, speed, step, step*period, repeat)
+		_ = launch
+		logBase("guide-speed-live-phrase", "lighting-time=independent-repeat-period; speed=propagation; no-master-loop")
 	case "wavelighting":
 		velocity := number(l.Parameters["velocity"], 100)
 		if velocity == 0 {
@@ -954,15 +964,15 @@ func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, 
 		if tail <= 0 {
 			tail = 1
 		}
-		log.Printf("iCUE TRACK TIMING: leds=%d xml=%d effect=%s velocity=%.3f tail=%.3f phrase=%.6fs serializedDuration=%.6fs model=guide-velocity-tail-wave", ledCount, li, l.Effect, velocity, tail, repeat, serialized)
-		logBase("guide-velocity-tail-wave", "velocity=travel-speed; tail=wave-tail; continuous-wave; serialized-duration-not-motion-reset")
+		log.Printf("iCUE LIVE PHRASE: leds=%d xml=%d effect=%s velocity=%.3f tail=%.3f phrase=%.6fs serializedDuration=%.6fs model=guide-velocity-tail-wave", ledCount, li, l.Effect, velocity, tail, repeat, serialized)
+		logBase("guide-velocity-tail-wave", "lighting-time=independent-repeat-period; velocity=travel-speed; tail=wave-tail; no-master-loop")
 	default:
 		logBase("independent-track", "track-repeats-independently; 20ms=command-recorder-grid-not-master-clock")
 	}
 }
 
-func compileMasterScore(p *Profile, topology LEDTopology, deviceOrdinal, ledCount int) *compiledScore {
-	log.Printf("iCUE SCORE BUILD: v12.4.60 independent-orchestra-tracks leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
+func compileLiveConcert(p *Profile, topology LEDTopology, deviceOrdinal, ledCount int) *compiledScore {
+	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.61 independent-infinite-phrases leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
 	d := p.LinkDevice()
 	if d == nil || len(d.Channels) == 0 {
 		return &compiledScore{unsupported: []string{"LINK device entry missing"}}
@@ -1003,7 +1013,7 @@ func compileMasterScore(p *Profile, topology LEDTopology, deviceOrdinal, ledCoun
 		score.unsupported = append(score.unsupported, name)
 	}
 	sort.Strings(score.unsupported)
-	log.Printf("iCUE SCORE COMPILED: leds=%d rendererOrdinal=%d tracks=%d storedNotes=%d masterLoop=NONE sharedClock=absolute", ledCount, deviceOrdinal, len(score.tracks), score.totalNotes)
+	log.Printf("iCUE LIVE CONCERT READY: leds=%d rendererOrdinal=%d performers=%d storedPhraseNotes=%d concertEnd=NEVER sharedClock=absolute", ledCount, deviceOrdinal, len(score.tracks), score.totalNotes)
 	return score
 }
 
@@ -1086,14 +1096,14 @@ func applyAbsoluteRange(state *scorePlayerState, from, to float64, includeStart 
 	return consumed, len(changed)
 }
 
-// RenderFan is only the sequencer/player. Tracks repeat independently on one
-// shared absolute clock; there is deliberately no master score modulo/reset.
+// RenderFan advances the live concert. Every performer repeats only its own phrase
+// on one absolute clock. The concert itself has no end or master modulo/reset.
 func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, started time.Time, brightness float64) ([]byte, []string) {
 	key := persistentKey(deviceOrdinal, ledCount, started)
 	scorePlayers.Lock()
 	state := scorePlayers.byRun[key]
 	if state == nil {
-		state = &scorePlayerState{score: compileMasterScore(p, topology, deviceOrdinal, ledCount), leds: make([]RGB, ledCount)}
+		state = &scorePlayerState{score: compileLiveConcert(p, topology, deviceOrdinal, ledCount), leds: make([]RGB, ledCount)}
 		scorePlayers.byRun[key] = state
 	}
 	elapsed := time.Since(started).Seconds()
@@ -1114,7 +1124,7 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 	state.lastElapsed = elapsed
 	bucket := int64(math.Floor(elapsed))
 	if deviceOrdinal == 0 && bucket != state.logBucket {
-		log.Printf("iCUE SCORE PLAYBACK: device=%d leds=%d elapsed=%.6f from=%.6f masterLoop=NONE notesConsumed=%d ledTouches=%d tracks=%d storedNotes=%d", deviceOrdinal, ledCount, elapsed, from, consumed, changed, len(state.score.tracks), state.score.totalNotes)
+		log.Printf("iCUE LIVE PLAYBACK: device=%d leds=%d concertTime=%.6f from=%.6f concertEnd=NEVER notesConsumed=%d ledTouches=%d performers=%d storedPhraseNotes=%d", deviceOrdinal, ledCount, elapsed, from, consumed, changed, len(state.score.tracks), state.score.totalNotes)
 		state.logBucket = bucket
 	}
 	leds := append([]RGB(nil), state.leds...)
