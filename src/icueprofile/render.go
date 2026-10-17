@@ -624,21 +624,30 @@ func selectedAt(l Layer, logicalBase, local int) bool {
 	return false
 }
 
-// v12.4.53 score compiler/player. Effects are recorded first, merged into one
-// master score, then playback only consumes timestamped physical-LED notes.
+// v12.4.60 independent-track score compiler/player.
+//
+// The iCUE guide and the hardware tests point to an orchestra/sequencer model:
+// every lighting layer has its own phrase/repeat clock, while all tracks share
+// one absolute performance clock and one persistent bank of physical LED state.
+// A track reaching its repeat point never rewinds any other track.
+type compiledTrack struct {
+	layerIndex int
+	effect     string
+	repeat     float64
+	oneShot    bool
+	notes      []LEDCommand
+}
+
 type compiledScore struct {
-	duration    float64
-	notes       []LEDCommand
+	tracks      []compiledTrack
 	unsupported []string
-	perLayer    map[int]int
+	totalNotes  int
 }
 
 type scorePlayerState struct {
 	score       *compiledScore
 	leds        []RGB
-	lastPos     float64
 	lastElapsed float64
-	lastCycle   int64
 	started     bool
 	logBucket   int64
 }
@@ -659,37 +668,102 @@ func concreteCommand(col RGB, strength float64) RGB {
 }
 
 func layerScoreDuration(l Layer) float64 {
-	// Captured iCUE layers consistently expose duration in milliseconds where it
-	// is present. It defines a candidate track length, not a live-render timeout.
 	if v := number(l.Parameters["duration"], 0) / 1000; v > 0 {
 		return v
 	}
 	return 0
 }
 
-func masterScoreDuration(layers []Layer) float64 {
-	longest := 0.0
-	for _, l := range layers {
-		if !l.Enabled {
-			continue
+func waveTrackRepeat(l Layer, topology LEDTopology, fanOrdinal, ledCount int) float64 {
+	velocity := math.Abs(number(l.Parameters["velocity"], 100))
+	if velocity <= 0.000001 {
+		velocity = 100
+	}
+	tail := number(l.Parameters["tailLength"], 4)
+	if tail <= 0 {
+		tail = 1
+	}
+	coords := topologyPositions(topology, fanOrdinal, ledCount)
+	span := float64(maxInt(ledCount, 1))
+	if len(coords) > 0 {
+		minC, maxC := coords[0], coords[0]
+		for _, x := range coords[1:] {
+			if x < minC {
+				minC = x
+			}
+			if x > maxC {
+				maxC = x
+			}
 		}
+		span = maxC - minC + 1
+	}
+	r := (span + tail) / velocity
+	if r <= 0.020 {
+		r = 0.020
+	}
+	return r
+}
+
+// trackRepeatDuration deliberately keeps each effect's phrase clock separate.
+// Serialized duration is used only where the guide/profile semantics support it.
+func trackRepeatDuration(l Layer, topology LEDTopology, fanOrdinal, ledCount int) (float64, bool) {
+	effect := strings.ToLower(l.Effect)
+	switch effect {
+	case "staticlighting":
+		return 0, true
+	case "gradientlighting":
 		d := layerScoreDuration(l)
-		// ColorWave is a continuous front generator. The serialized duration is
-		// tested as the launch interval, not as the lifetime of a travelling
-		// front. With two alternating authored colours the smallest complete
-		// repeating phrase is therefore two launches. This lets fronts cross the
-		// score boundary instead of being restarted after one second.
-		if strings.EqualFold(l.Effect, "ColorWaveLighting") && d > 0 {
-			d *= 2
+		if d <= 0 {
+			d = 1
 		}
-		if d > longest {
-			longest = d
+		return d, false
+	case "colorwavelighting":
+		// Still a hypothesis: duration is the colour-front launch interval.
+		// Two alternating authored colours form the smallest complete phrase.
+		d := layerScoreDuration(l)
+		if d <= 0 {
+			d = 1
 		}
+		return 2 * d, false
+	case "wavelighting":
+		return waveTrackRepeat(l, topology, fanOrdinal, ledCount), false
+	case "rainlighting":
+		// Rain is an event generator, not a duration sweep. Use a deterministic
+		// event phrase long enough to retain the validated v12.4.38 cadence/fade;
+		// serialized duration does not control this repeat.
+		speed := number(l.Parameters["speed"], 1)
+		if speed <= 0 {
+			speed = 1
+		}
+		return 16 * (0.115 / speed), false
+	case "blinklighting", "breathelighting":
+		d := layerScoreDuration(l)
+		if d <= 0 {
+			d = 1
+		}
+		return d, false
+	case "colorshiftlighting", "colorpulselighting", "rainbowlighting", "rainbowwavelighting", "rainbowchannellighting":
+		speed := discreteSpeed(l)
+		return capturedPeriod(l, 4.0/math.Pow(2, speed-1)), false
+	case "spiralrainbowlighting":
+		speed := number(l.Parameters["speed"], 2)
+		if speed <= 0 {
+			speed = 2
+		}
+		return capturedPeriod(l, 2.0*math.Pow(2, 2-speed)), false
+	case "watercolorlighting", "watercolorspectrumlighting":
+		d := layerScoreDuration(l)
+		if d <= 0 {
+			d = 2
+		}
+		return d, false
+	default:
+		d := layerScoreDuration(l)
+		if d <= 0 {
+			d = 1
+		}
+		return d, false
 	}
-	if longest <= 0 {
-		longest = 1
-	}
-	return longest
 }
 
 func appendScoreNote(dst *[]LEDCommand, l Layer, li, led int, at float64, col RGB, strength float64) {
@@ -704,7 +778,7 @@ func recordLayerTrack(l Layer, li, fanOrdinal, ledCount int, duration float64, t
 	notes := make([]LEDCommand, 0)
 	effect := strings.ToLower(l.Effect)
 
-	// Static is one opening chord. It never repaints until the whole score loops.
+	// Static is the conductor's opening tap: establish initial physical state once.
 	if effect == "staticlighting" {
 		colors, alpha, ok := renderLayer(l, fanOrdinal, ledCount, 0, spatial)
 		if !ok {
@@ -721,16 +795,13 @@ func recordLayerTrack(l Layer, li, fanOrdinal, ledCount int, duration float64, t
 		return notes, true
 	}
 
-	// Gradient's authored transition stops are its notes. Record every stop in
-	// every repetition that falls inside the master score; gaps are NO COMMAND.
+	// The guide defines Gradient as a smooth fade between Lighting Box nodes.
+	// Generate the performed phrase, not just sparse control points. 20 ms is the
+	// output-command grid, while authored node times remain the interpolation axis.
 	if effect == "gradientlighting" {
 		stops := transitionStops(l)
 		if len(stops) < 2 {
 			return nil, false
-		}
-		dur := layerScoreDuration(l)
-		if dur <= 0 {
-			dur = 1
 		}
 		opacity := number(l.Parameters["opacity"], 1)
 		if opacity > 1 {
@@ -742,33 +813,22 @@ func recordLayerTrack(l Layer, li, fanOrdinal, ledCount int, duration float64, t
 		if opacity > 1 {
 			opacity = 1
 		}
-		for base := 0.0; base < duration-0.0000005; base += dur {
-			for si, st := range stops {
-				if si == len(stops)-1 && st.T >= 0.999999 {
+		const q = 0.020
+		for at := 0.0; at < duration-0.0000005; at += q {
+			t := at / duration
+			col, a := sampleTransitionStops(stops, t)
+			for led := 0; led < ledCount; led++ {
+				if !selectedWithTopology(l, topology, fanOrdinal, led, sourceDeviceCount) {
 					continue
 				}
-				at := base + st.T*dur
-				if at < -0.0000005 || at >= duration-0.0000005 {
-					continue
-				}
-				for led := 0; led < ledCount; led++ {
-					if !selectedWithTopology(l, topology, fanOrdinal, led, sourceDeviceCount) {
-						continue
-					}
-					appendScoreNote(&notes, l, li, led, at, st.C, st.A*opacity)
-				}
+				appendScoreNote(&notes, l, li, led, at, col, a*opacity)
 			}
 		}
 		return notes, true
 	}
 
-	// v12.4.57 ColorWave propagation probe. The guide describes Color Wave as
-	// a wave with a speed control, so restore the measured 1:2:3 propagation
-	// relationship: Slow=400 ms/position, Medium=200 ms/position and
-	// Fast=133.333 ms/position. The serialized duration is tested separately as
-	// the interval between colour-front launches. Travelling fronts are allowed
-	// to cross the score boundary; launches before t=0 are recorded when their
-	// arrivals fall inside this cycle.
+	// ColorWave: speed controls propagation. Duration-as-launch-interval remains
+	// explicitly a hypothesis until a controlled iCUE test proves that field.
 	if effect == "colorwavelighting" {
 		speed := number(l.Parameters["speed"], 2)
 		if speed < 1 {
@@ -789,7 +849,6 @@ func recordLayerTrack(l Layer, li, fanOrdinal, ledCount int, duration float64, t
 		direction := int(number(l.Parameters["direction"], 2))
 		c1, c2 := effectColors(l, RGB{R: 255}, RGB{B: 255})
 		random := boolParam(l.Parameters["random"], false)
-
 		maxTravel := period * travelStep
 		firstFront := int(math.Floor(-maxTravel/launchInterval)) - 1
 		lastFront := int(math.Ceil(duration/launchInterval)) + 1
@@ -823,13 +882,9 @@ func recordLayerTrack(l Layer, li, fanOrdinal, ledCount int, duration float64, t
 		return notes, true
 	}
 
-	// Rain's v12.4.38 drop progression and Wave's moving tail are already proven
-	// visual generators. For the score architecture test, record their explicit
-	// output notes on the existing 20 ms LINK command grid. Repeated same-colour
-	// notes are deliberately retained: another track may have changed that LED
-	// between them, so they are meaningful opportunities to call it back.
-	// Other supported continuous effects use the same recorder until their exact
-	// authored note cadence is decoded.
+	// Rain v12.4.38, Wave v12.4.39 and remaining continuous effects are recorded
+	// as explicit commands over their own phrase. Repeated same-colour commands
+	// are retained because another track may have interrupted that LED meanwhile.
 	const q = 0.020
 	seenSupported := false
 	for at := 0.0; at < duration-0.0000005; at += q {
@@ -851,28 +906,26 @@ func recordLayerTrack(l Layer, li, fanOrdinal, ledCount int, duration float64, t
 	return notes, seenSupported
 }
 
-func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, ledCount int) {
+func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, ledCount int, repeat float64, oneShot bool) {
 	effect := strings.ToLower(l.Effect)
 	serialized := layerScoreDuration(l)
 	logBase := func(model, timing string) {
-		log.Printf("iCUE SCORE EFFECT: leds=%d xml=%d effect=%s serializedDuration=%.6fs model=%s timing=%s", ledCount, li, l.Effect, serialized, model, timing)
+		log.Printf("iCUE TRACK EFFECT: leds=%d xml=%d effect=%s repeat=%.6fs oneShot=%t serializedDuration=%.6fs model=%s timing=%s", ledCount, li, l.Effect, repeat, oneShot, serialized, model, timing)
 	}
 	switch effect {
 	case "staticlighting":
-		logBase("one-shot-command", "profile-start; no-repeat-within-track; holds-until-overwritten")
+		logBase("conductor-opening-state", "profile-start-only; never-repeats-with-other-tracks; holds-until-overwritten")
 	case "gradientlighting":
 		stops := transitionStops(l)
-		log.Printf("iCUE SCORE TIMING: leds=%d xml=%d effect=%s stops=%d phraseDuration=%.6fs interpolation=smooth serializedDuration=%.6fs model=authored-transition", ledCount, li, l.Effect, len(stops), serialized, serialized)
-		logBase("authored-transition", "duration=transition-phrase; smooth-interpolation-required; gaps=no-command")
+		log.Printf("iCUE TRACK TIMING: leds=%d xml=%d effect=%s stops=%d phrase=%.6fs interpolation=smooth commandGrid=0.020s model=guide-gradient", ledCount, li, l.Effect, len(stops), repeat)
+		logBase("guide-gradient", "lighting-time=phrase-axis; nodes=control-points; smooth-interpolation-between-nodes")
 	case "rainlighting":
 		speed := number(l.Parameters["speed"], 1)
 		if speed <= 0 {
 			speed = 1
 		}
-		spawn := 0.115 / speed
-		life := 0.55 / math.Sqrt(speed)
-		log.Printf("iCUE SCORE TIMING: leds=%d xml=%d effect=%s speed=%.3f spawnInterval=%.6fs eventLifetime=%.6fs serializedDuration=%.6fs model=event-rain-v12.4.38", ledCount, li, l.Effect, speed, spawn, life, serialized)
-		logBase("event-rain-v12.4.38", "speed=spawn-cadence; drop-lifetime=event-lifetime; serialized-duration-not-spatial-sweep")
+		log.Printf("iCUE TRACK TIMING: leds=%d xml=%d effect=%s speed=%.3f spawnInterval=%.6fs eventLifetime=%.6fs phrase=%.6fs model=event-rain-v12.4.38", ledCount, li, l.Effect, speed, 0.115/speed, 0.55/math.Sqrt(speed), repeat)
+		logBase("event-rain-v12.4.38", "speed=spawn-cadence; drop-lifetime=event-lifetime; serialized-duration-not-repeat")
 	case "colorwavelighting":
 		speed := number(l.Parameters["speed"], 2)
 		if speed < 1 {
@@ -881,17 +934,17 @@ func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, 
 		if speed > 3 {
 			speed = 3
 		}
-		travelStep := 0.400 / speed
+		step := 0.400 / speed
 		period := float64(maxInt(ledCount, 1))
 		if len(topologyPositions(topology, fanOrdinal, ledCount)) == ledCount {
 			period = 17
 		}
-		launchInterval := serialized
-		if launchInterval <= 0 {
-			launchInterval = 1
+		launch := serialized
+		if launch <= 0 {
+			launch = 1
 		}
-		log.Printf("iCUE SCORE TIMING: leds=%d xml=%d effect=%s speed=%.3f travelStep=%.6fs traversal=%.6fs launchInterval=%.6fs serializedDuration=%.6fs model=propagation-probe", ledCount, li, l.Effect, speed, travelStep, travelStep*period, launchInterval, serialized)
-		logBase("propagation-probe", "speed=propagation-velocity; duration-as-launch-interval=HYPOTHESIS; travelling-front-not-killed-by-duration")
+		log.Printf("iCUE TRACK TIMING: leds=%d xml=%d effect=%s speed=%.3f travelStep=%.6fs traversal=%.6fs launchInterval=%.6fs phrase=%.6fs model=propagation-probe", ledCount, li, l.Effect, speed, step, step*period, launch, repeat)
+		logBase("propagation-probe", "guide-speed=propagation; duration-as-launch-interval=HYPOTHESIS; fronts-may-overlap")
 	case "wavelighting":
 		velocity := number(l.Parameters["velocity"], 100)
 		if velocity == 0 {
@@ -901,146 +954,140 @@ func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, 
 		if tail <= 0 {
 			tail = 1
 		}
-		coords := topologyPositions(topology, fanOrdinal, ledCount)
-		if len(coords) != ledCount {
-			coords = make([]float64, ledCount)
-			for i := range coords {
-				coords[i] = float64(i)
-			}
-		}
-		span := float64(maxInt(ledCount, 1))
-		if len(coords) > 0 {
-			minC, maxC := coords[0], coords[0]
-			for _, x := range coords[1:] {
-				if x < minC {
-					minC = x
-				}
-				if x > maxC {
-					maxC = x
-				}
-			}
-			span = maxC - minC + 1
-		}
-		natural := (span + tail) / math.Abs(velocity)
-		log.Printf("iCUE SCORE TIMING: leds=%d xml=%d effect=%s velocity=%.3f tail=%.3f traversalCandidate=%.6fs serializedDuration=%.6fs model=velocity-wave", ledCount, li, l.Effect, velocity, tail, natural, serialized)
-		logBase("velocity-wave", "velocity=propagation; tail=spatial-tail; serialized-duration-not-motion-reset")
-	case "blinklighting":
-		logBase("whole-selection-cycle", "duration=current-cycle-candidate; on-half/off-half; off-currently-no-command")
-	case "breathelighting":
-		logBase("whole-selection-cycle", "duration=current-breathe-cycle; continuous-alpha-sampled-at-output-grid")
-	case "colorshiftlighting", "colorpulselighting", "rainbowlighting":
-		speed := discreteSpeed(l)
-		period := capturedPeriod(l, 4.0/math.Pow(2, speed-1))
-		log.Printf("iCUE SCORE TIMING: leds=%d xml=%d effect=%s speed=%.3f cycleCandidate=%.6fs serializedDuration=%.6fs model=continuous-cycle", ledCount, li, l.Effect, speed, period, serialized)
-		logBase("continuous-cycle", "speed-derived-cycle=CURRENT-MODEL; exact-authored-command-cadence-unproven")
-	case "rainbowwavelighting", "rainbowchannellighting":
-		speed := discreteSpeed(l)
-		period := capturedPeriod(l, 4.0/math.Pow(2, speed-1))
-		log.Printf("iCUE SCORE TIMING: leds=%d xml=%d effect=%s speed=%.3f spatialCycleCandidate=%.6fs serializedDuration=%.6fs model=continuous-spatial-cycle", ledCount, li, l.Effect, speed, period, serialized)
-		logBase("continuous-spatial-cycle", "speed=spatial-motion-candidate; exact-command-cadence-unproven")
-	case "spiralrainbowlighting":
-		speed := number(l.Parameters["speed"], 2)
-		if speed <= 0 {
-			speed = 2
-		}
-		period := capturedPeriod(l, 2.0*math.Pow(2, 2-speed))
-		log.Printf("iCUE SCORE TIMING: leds=%d xml=%d effect=%s speed=%.3f spatialCycleCandidate=%.6fs serializedDuration=%.6fs model=continuous-spatial-cycle", ledCount, li, l.Effect, speed, period, serialized)
-		logBase("continuous-spatial-cycle", "speed=spatial-motion-candidate; exact-command-cadence-unproven")
-	case "watercolorlighting", "watercolorspectrumlighting":
-		speed := discreteSpeed(l)
-		log.Printf("iCUE SCORE TIMING: leds=%d xml=%d effect=%s speed=%.3f serializedDuration=%.6fs model=continuous-pools", ledCount, li, l.Effect, speed, serialized)
-		logBase("continuous-pools", "current-renderer-model-only; timing-semantics-unproven")
+		log.Printf("iCUE TRACK TIMING: leds=%d xml=%d effect=%s velocity=%.3f tail=%.3f phrase=%.6fs serializedDuration=%.6fs model=guide-velocity-tail-wave", ledCount, li, l.Effect, velocity, tail, repeat, serialized)
+		logBase("guide-velocity-tail-wave", "velocity=travel-speed; tail=wave-tail; continuous-wave; serialized-duration-not-motion-reset")
 	default:
-		log.Printf("iCUE SCORE TIMING: leds=%d xml=%d effect=%s serializedDuration=%.6fs model=generic-sampled", ledCount, li, l.Effect, serialized)
-		logBase("generic-sampled", "20ms-is-recorder-grid-only; effect-timing-semantics-unproven")
+		logBase("independent-track", "track-repeats-independently; 20ms=command-recorder-grid-not-master-clock")
 	}
 }
 
 func compileMasterScore(p *Profile, topology LEDTopology, deviceOrdinal, ledCount int) *compiledScore {
-	log.Printf("iCUE SCORE BUILD: v12.4.59 broad-effect-timing audit leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
+	log.Printf("iCUE SCORE BUILD: v12.4.60 independent-orchestra-tracks leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
 	d := p.LinkDevice()
 	if d == nil || len(d.Channels) == 0 {
-		return &compiledScore{duration: 1, unsupported: []string{"LINK device entry missing"}, perLayer: make(map[int]int)}
+		return &compiledScore{unsupported: []string{"LINK device entry missing"}}
 	}
 	layers := p.expandLightingLinks(d.Channels[0].Layers)
-	duration := masterScoreDuration(layers)
 	sourceDeviceCount := sourceQXFanCount(layers, topology)
-	score := &compiledScore{duration: duration, perLayer: make(map[int]int)}
+	score := &compiledScore{}
 	unsupported := map[string]bool{}
 	for li, l := range layers {
 		if !l.Enabled {
 			continue
 		}
-		track, ok := recordLayerTrack(l, li, deviceOrdinal, ledCount, duration, topology, sourceDeviceCount)
+		repeat, oneShot := trackRepeatDuration(l, topology, deviceOrdinal, ledCount)
+		recordDuration := repeat
+		if oneShot {
+			recordDuration = 0
+		}
+		trackNotes, ok := recordLayerTrack(l, li, deviceOrdinal, ledCount, recordDuration, topology, sourceDeviceCount)
 		if !ok {
 			unsupported[l.Effect] = true
 			continue
 		}
-		score.perLayer[li] = len(track)
-		score.notes = append(score.notes, track...)
+		sort.SliceStable(trackNotes, func(i, j int) bool {
+			if math.Abs(trackNotes[i].Time-trackNotes[j].Time) > 0.0000005 {
+				return trackNotes[i].Time < trackNotes[j].Time
+			}
+			if trackNotes[i].LED != trackNotes[j].LED {
+				return trackNotes[i].LED < trackNotes[j].LED
+			}
+			return trackNotes[i].LayerIndex > trackNotes[j].LayerIndex
+		})
+		score.tracks = append(score.tracks, compiledTrack{layerIndex: li, effect: l.Effect, repeat: repeat, oneShot: oneShot, notes: trackNotes})
+		score.totalNotes += len(trackNotes)
+		log.Printf("iCUE TRACK COMPILED: leds=%d xml=%d effect=%s notes=%d repeat=%.6fs oneShot=%t", ledCount, li, l.Effect, len(trackNotes), repeat, oneShot)
+		logScoreTimingCandidate(li, l, topology, deviceOrdinal, ledCount, repeat, oneShot)
 	}
-	// Earlier timestamp first. For a true same-time/same-LED collision, bottom
-	// layers execute first and xml0/topmost executes last.
-	sort.SliceStable(score.notes, func(i, j int) bool {
-		a, b := score.notes[i], score.notes[j]
-		if math.Abs(a.Time-b.Time) > 0.0000005 {
-			return a.Time < b.Time
-		}
-		if a.LED != b.LED {
-			return a.LED < b.LED
-		}
-		return a.LayerIndex > b.LayerIndex
-	})
 	for name := range unsupported {
 		score.unsupported = append(score.unsupported, name)
 	}
 	sort.Strings(score.unsupported)
-	{
-		log.Printf("iCUE SCORE COMPILED: leds=%d rendererOrdinal=%d duration=%.6fs layers=%d notes=%d masterModel=longest-candidate-duration CURRENT-ARCHITECTURE", ledCount, deviceOrdinal, score.duration, len(layers), len(score.notes))
-		for li, l := range layers {
-			if l.Enabled {
-				log.Printf("iCUE SCORE TRACK: leds=%d xml=%d effect=%s notes=%d candidateDuration=%.6fs", ledCount, li, l.Effect, score.perLayer[li], layerScoreDuration(l))
-				logScoreTimingCandidate(li, l, topology, deviceOrdinal, ledCount)
-			}
-		}
-		trueTies := 0
-		for i := 1; i < len(score.notes); i++ {
-			a, b := score.notes[i-1], score.notes[i]
-			if a.LED == b.LED && math.Abs(a.Time-b.Time) <= 0.0000005 {
-				trueTies++
-			}
-		}
-		log.Printf("iCUE SCORE MERGE: leds=%d inputNotes=%d outputNotes=%d trueSameTimeSameLEDTies=%d", ledCount, len(score.notes), len(score.notes), trueTies)
-	}
+	log.Printf("iCUE SCORE COMPILED: leds=%d rendererOrdinal=%d tracks=%d storedNotes=%d masterLoop=NONE sharedClock=absolute", ledCount, deviceOrdinal, len(score.tracks), score.totalNotes)
 	return score
 }
 
-func applyScoreRange(state *scorePlayerState, from, to float64, includeZero bool) (int, int) {
-	consumed := 0
+type absoluteScoreNote struct {
+	at   float64
+	note LEDCommand
+}
+
+func collectTrackRange(track compiledTrack, from, to float64, includeStart bool, dst *[]absoluteScoreNote) int {
+	if to < 0 || to+0.0000005 < from {
+		return 0
+	}
+	count := 0
+	if track.oneShot {
+		if includeStart && from <= 0.0000005 && to >= -0.0000005 {
+			for _, n := range track.notes {
+				*dst = append(*dst, absoluteScoreNote{at: n.Time, note: n})
+				count++
+			}
+		}
+		return count
+	}
+	if track.repeat <= 0 || len(track.notes) == 0 {
+		return 0
+	}
+	firstCycle := int64(math.Floor(from / track.repeat))
+	if firstCycle < 0 {
+		firstCycle = 0
+	}
+	lastCycle := int64(math.Floor(to / track.repeat))
+	for cycle := firstCycle; cycle <= lastCycle; cycle++ {
+		base := float64(cycle) * track.repeat
+		for _, n := range track.notes {
+			at := base + n.Time
+			if at > to+0.0000005 {
+				break
+			}
+			eligible := at > from+0.0000005
+			if includeStart && at >= from-0.0000005 {
+				eligible = true
+			}
+			if !eligible {
+				continue
+			}
+			*dst = append(*dst, absoluteScoreNote{at: at, note: n})
+			count++
+		}
+	}
+	return count
+}
+
+func applyAbsoluteRange(state *scorePlayerState, from, to float64, includeStart bool) (int, int) {
+	events := make([]absoluteScoreNote, 0)
+	for _, track := range state.score.tracks {
+		collectTrackRange(track, from, to, includeStart, &events)
+	}
+	// Chronological latest command wins. Only genuinely identical timestamps on
+	// the same LED use XML/UI priority, with xml0/topmost applied last.
+	sort.SliceStable(events, func(i, j int) bool {
+		a, b := events[i], events[j]
+		if math.Abs(a.at-b.at) > 0.0000005 {
+			return a.at < b.at
+		}
+		if a.note.LED != b.note.LED {
+			return a.note.LED < b.note.LED
+		}
+		return a.note.LayerIndex > b.note.LayerIndex
+	})
 	changed := map[int]struct{}{}
-	for _, note := range state.score.notes {
-		if note.Time > to+0.0000005 {
-			break
-		}
-		eligible := note.Time > from+0.0000005
-		if includeZero && note.Time >= -0.0000005 && note.Time <= to+0.0000005 {
-			eligible = true
-		}
-		if !eligible {
+	consumed := 0
+	for _, ev := range events {
+		n := ev.note
+		if n.LED < 0 || n.LED >= len(state.leds) {
 			continue
 		}
-		if note.LED < 0 || note.LED >= len(state.leds) {
-			continue
-		}
-		state.leds[note.LED] = note.Color
+		state.leds[n.LED] = n.Color
 		consumed++
-		changed[note.LED] = struct{}{}
+		changed[n.LED] = struct{}{}
 	}
 	return consumed, len(changed)
 }
 
-// RenderFan is now only the score player. Effect algorithms run while compiling
-// the score; playback never asks Rain/Wave/ColorWave/Gradient what they look like.
+// RenderFan is only the sequencer/player. Tracks repeat independently on one
+// shared absolute clock; there is deliberately no master score modulo/reset.
 func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, started time.Time, brightness float64) ([]byte, []string) {
 	key := persistentKey(deviceOrdinal, ledCount, started)
 	scorePlayers.Lock()
@@ -1050,74 +1097,29 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 		scorePlayers.byRun[key] = state
 	}
 	elapsed := time.Since(started).Seconds()
-	dur := state.score.duration
-	if dur <= 0 {
-		dur = 1
-	}
-	// Track the absolute score cycle separately from the position inside it.
-	// A renderer can legitimately go more than one score duration between calls
-	// (device startup, scheduling, hotplug, etc.).  Comparing only modulo positions
-	// made that look like a normal wrap and could replay overlapping ranges.
-	cycle := int64(math.Floor(elapsed / dur))
-	pos := elapsed - float64(cycle)*dur
-	if pos < 0 {
-		cycle--
-		pos += dur
-	}
+	from := state.lastElapsed
 	consumed, changed := 0, 0
-	from := state.lastPos
-	cycleDelta := int64(0)
-	wrapped := false
 	if !state.started {
-		from = 0
-		consumed, changed = applyScoreRange(state, -1, pos, true)
+		consumed, changed = applyAbsoluteRange(state, 0, elapsed, true)
 		state.started = true
-	} else {
-		cycleDelta = cycle - state.lastCycle
-		switch {
-		case cycleDelta <= 0:
-			// Normal playback inside one cycle.  If elapsed ever moves backwards,
-			// rebuild deterministically from the beginning rather than inventing a wrap.
-			if cycleDelta < 0 || pos+0.0000005 < state.lastPos {
-				for i := range state.leds {
-					state.leds[i] = RGB{}
-				}
-				consumed, changed = applyScoreRange(state, -1, pos, true)
-				from = 0
-			} else {
-				consumed, changed = applyScoreRange(state, state.lastPos, pos, false)
-			}
-		case cycleDelta == 1:
-			wrapped = true
-			c1, ch1 := applyScoreRange(state, state.lastPos, dur, false)
-			c2, ch2 := applyScoreRange(state, -1, pos, true)
-			consumed, changed = c1+c2, ch1+ch2
-		default:
-			// More than one whole deterministic score cycle was skipped.  Earlier
-			// skipped cycles cannot affect the final physical state: the last complete
-			// cycle supersedes them. Replay exactly one complete cycle, then the
-			// current partial cycle. This also bounds work after a long scheduling gap.
-			wrapped = true
-			c1, ch1 := applyScoreRange(state, -1, dur, true)
-			c2, ch2 := applyScoreRange(state, -1, pos, true)
-			consumed, changed = c1+c2, ch1+ch2
+	} else if elapsed+0.0000005 < state.lastElapsed {
+		for i := range state.leds {
+			state.leds[i] = RGB{}
 		}
+		consumed, changed = applyAbsoluteRange(state, 0, elapsed, true)
+		from = 0
+	} else {
+		consumed, changed = applyAbsoluteRange(state, state.lastElapsed, elapsed, false)
 	}
-	state.lastPos, state.lastElapsed, state.lastCycle = pos, elapsed, cycle
+	state.lastElapsed = elapsed
 	bucket := int64(math.Floor(elapsed))
 	if deviceOrdinal == 0 && bucket != state.logBucket {
-		log.Printf("iCUE SCORE PLAYBACK: device=%d leds=%d cycle=%d cycleDelta=%d elapsed=%.6f from=%.6f to=%.6f/%.6f wrapped=%t notesConsumed=%d ledTouches=%d scoreNotes=%d", deviceOrdinal, ledCount, cycle, cycleDelta, elapsed, from, pos, dur, wrapped, consumed, changed, len(state.score.notes))
-		// Crossing one boundary can legitimately consume a tail plus a head.
-		// More than two score lengths worth of notes is never needed by this player.
-		if consumed > 2*len(state.score.notes) {
-			log.Printf("iCUE SCORE INVARIANT FAILURE: device=%d leds=%d cycleDelta=%d notesConsumed=%d scoreNotes=%d", deviceOrdinal, ledCount, cycleDelta, consumed, len(state.score.notes))
-		}
+		log.Printf("iCUE SCORE PLAYBACK: device=%d leds=%d elapsed=%.6f from=%.6f masterLoop=NONE notesConsumed=%d ledTouches=%d tracks=%d storedNotes=%d", deviceOrdinal, ledCount, elapsed, from, consumed, changed, len(state.score.tracks), state.score.totalNotes)
 		state.logBucket = bucket
 	}
 	leds := append([]RGB(nil), state.leds...)
 	unsupported := append([]string(nil), state.score.unsupported...)
 	scorePlayers.Unlock()
-
 	if brightness <= 0 {
 		brightness = 1
 	}
