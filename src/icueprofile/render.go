@@ -624,7 +624,7 @@ func selectedAt(l Layer, logicalBase, local int) bool {
 	return false
 }
 
-// v12.4.63 full live-performer concert sequencer.
+// v12.4.64 continuous live-performer concert sequencer.
 //
 // The profile is an open-ended performance: selecting a profile starts a new
 // concert at t=0 and changing/stopping the profile ends it. There is no master
@@ -656,6 +656,9 @@ type scorePlayerState struct {
 	lastElapsed       float64
 	started           bool
 	logBucket         int64
+	visualSamples     []RGB
+	visualSampleSet   []bool
+	visualLogAt       []float64
 }
 
 var scorePlayers = struct {
@@ -897,7 +900,7 @@ func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, 
 }
 
 func compileLiveConcert(p *Profile, topology LEDTopology, deviceOrdinal, ledCount int) *compiledScore {
-	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.63a all-live-performers-ripple-probe-compile-fix leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
+	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.64 continuous-performers-persistent-propagation leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
 	d := p.LinkDevice()
 	if d == nil || len(d.Channels) == 0 {
 		return &compiledScore{unsupported: []string{"LINK device entry missing"}}
@@ -938,7 +941,7 @@ func compileLiveConcert(p *Profile, topology LEDTopology, deviceOrdinal, ledCoun
 		score.unsupported = append(score.unsupported, name)
 	}
 	sort.Strings(score.unsupported)
-	log.Printf("iCUE LIVE CONCERT READY: leds=%d rendererOrdinal=%d performers=%d storedDiscreteNotes=%d concertEnd=NEVER sharedClock=absolute allPerformers=LIVE", ledCount, deviceOrdinal, len(score.tracks), score.totalNotes)
+	log.Printf("iCUE LIVE CONCERT READY: leds=%d rendererOrdinal=%d performers=%d storedDiscreteNotes=%d concertEnd=NEVER sharedClock=absolute allPerformers=LIVE propagationClock=ABSOLUTE phraseClock=INDEPENDENT", ledCount, deviceOrdinal, len(score.tracks), score.totalNotes)
 	return score
 }
 
@@ -990,25 +993,31 @@ func collectTrackRange(track compiledTrack, from, to float64, includeStart bool,
 	return count
 }
 
+func visualDistance(a, b RGB) float64 {
+	dr, dg, db := a.R-b.R, a.G-b.G, a.B-b.B
+	return math.Sqrt(dr*dr + dg*dg + db*db)
+}
+
 func applyLiveContinuous(state *scorePlayerState, at float64) int {
 	changed := map[int]struct{}{}
-	// Every active non-static layer is performed live at the current absolute
-	// concert time. Each performer wraps only its own phrase. Apply bottom-to-top
-	// so xml0/topmost wins when performers issue commands at the same instant.
+	// v12.4.64: every performer receives the absolute concert clock. A layer's
+	// authored phrase may repeat its expression/colour programme, but reaching a
+	// phrase boundary must not rewind propagation that is already travelling.
+	// renderLayer owns the effect-specific distinction: Gradient/Breathe/etc.
+	// repeat their expression mathematically, while Wave/ColorWave/Rain/Ripple
+	// keep continuous propagation/event time across those boundaries.
 	for ti := len(state.score.tracks) - 1; ti >= 0; ti-- {
 		track := state.score.tracks[ti]
 		if !track.live || track.repeat <= 0 {
 			continue
 		}
-		local := math.Mod(at, track.repeat)
-		if local < 0 {
-			local += track.repeat
-		}
 		spatial := topologyPositions(state.topology, state.deviceOrdinal, len(state.leds))
-		colors, alpha, ok := renderLayer(track.layer, state.deviceOrdinal, len(state.leds), local, spatial)
+		colors, alpha, ok := renderLayer(track.layer, state.deviceOrdinal, len(state.leds), at, spatial)
 		if !ok {
 			continue
 		}
+		var sum RGB
+		active := 0
 		for led := 0; led < len(state.leds); led++ {
 			if !selectedWithTopology(track.layer, state.topology, state.deviceOrdinal, led, state.sourceDeviceCount) {
 				continue
@@ -1016,8 +1025,35 @@ func applyLiveContinuous(state *scorePlayerState, at float64) int {
 			if led >= len(colors) || led >= len(alpha) || alpha[led] <= 0.000001 {
 				continue // NO COMMAND: retain current physical LED state.
 			}
-			state.leds[led] = concreteCommand(colors[led], alpha[led])
+			cmd := concreteCommand(colors[led], alpha[led])
+			state.leds[led] = cmd
 			changed[led] = struct{}{}
+			sum.R += cmd.R
+			sum.G += cmd.G
+			sum.B += cmd.B
+			active++
+		}
+
+		// Diagnostic visual cue: report only a large representative colour change,
+		// so a real-hardware observer can compare the timestamp with what iCUE/OLH
+		// visibly did. This does not affect rendering and is deliberately limited
+		// to rendererOrdinal 0 to avoid duplicate fan/device spam.
+		if state.deviceOrdinal == 0 && active > 0 && ti < len(state.visualSamples) {
+			rep := RGB{R: sum.R / float64(active), G: sum.G / float64(active), B: sum.B / float64(active)}
+			if state.visualSampleSet[ti] {
+				delta := visualDistance(state.visualSamples[ti], rep)
+				if delta >= 80 && at-state.visualLogAt[ti] >= 0.20 {
+					local := math.Mod(at, track.repeat)
+					if local < 0 {
+						local += track.repeat
+					}
+					prev := state.visualSamples[ti]
+					log.Printf("iCUE VISUAL CUE: t=%.3fs xml=%d effect=%s phraseLocal=%.3fs activeLEDs=%d avgRGB=(%.0f,%.0f,%.0f)->(%.0f,%.0f,%.0f) delta=%.1f EXPECT=noticeable-colour-change", at, track.layerIndex, track.effect, local, active, prev.R, prev.G, prev.B, rep.R, rep.G, rep.B, delta)
+					state.visualLogAt[ti] = at
+				}
+			}
+			state.visualSamples[ti] = rep
+			state.visualSampleSet[ti] = true
 		}
 	}
 	return len(changed)
@@ -1071,7 +1107,7 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 		if d != nil && len(d.Channels) > 0 {
 			sourceCount = sourceQXFanCount(p.expandLightingLinks(d.Channels[0].Layers), topology)
 		}
-		state = &scorePlayerState{score: score, topology: topology, deviceOrdinal: deviceOrdinal, sourceDeviceCount: sourceCount, leds: make([]RGB, ledCount)}
+		state = &scorePlayerState{score: score, topology: topology, deviceOrdinal: deviceOrdinal, sourceDeviceCount: sourceCount, leds: make([]RGB, ledCount), visualSamples: make([]RGB, len(score.tracks)), visualSampleSet: make([]bool, len(score.tracks)), visualLogAt: make([]float64, len(score.tracks))}
 		scorePlayers.byRun[key] = state
 	}
 	elapsed := time.Since(started).Seconds()
