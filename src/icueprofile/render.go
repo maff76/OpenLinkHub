@@ -740,65 +740,13 @@ func trackRepeatDuration(l Layer, topology LEDTopology, fanOrdinal, ledCount int
 		}
 		return d, false
 	case "ripplelighting":
-		// Experimental iCUE Ripple performer. The historical iCUE guide defines
-		// Ripple as an expanding effect with independent Tail and Velocity controls.
-		// For LINK's 1-D topology we start each repeated phrase at route origin and
-		// expand in both directions. Authored transition stops shape the tail.
-		// This is intentionally a probe until a captured Ripple profile establishes
-		// the exact serialized origin/direction semantics.
-		velocity := math.Abs(number(l.Parameters["velocity"], 100))
-		if velocity <= 0.000001 {
-			velocity = 100
-		}
-		tail := number(l.Parameters["tailLength"], 4)
-		if tail <= 0 {
-			tail = 1
-		}
-		stops := transitionStops(l)
-		if len(stops) == 0 {
-			col := layerColor(l, RGB{R: 255, G: 255, B: 255})
-			stops = []transitionStop{{0, col, 0}, {1, col, 1}}
-		}
-		coords := spatial
-		if len(coords) != n {
-			coords = make([]float64, n)
-			for i := range coords {
-				coords[i] = float64(i)
-			}
-		}
-		minC, maxC := coords[0], coords[0]
-		for _, x := range coords[1:] {
-			if x < minC {
-				minC = x
-			}
-			if x > maxC {
-				maxC = x
-			}
-		}
-		span := maxC - minC + 1
-		radius := math.Mod(elapsed*velocity, span+tail)
-		for i, x := range coords {
-			dist := math.Abs(x - minC)
-			d := radius - dist
-			if d < 0 || d > tail {
-				a[i] = 0
-				continue
-			}
-			t := d / tail
-			col, alpha := sampleTransitionStops(stops, t)
-			c[i] = col
-			a[i] *= alpha
-		}
-		applyLayerOpacity(l, a)
-		return c, a, true
-	case "wavelighting":
-		return waveTrackRepeat(l, topology, fanOrdinal, ledCount), false
-	case "ripplelighting":
 		d := layerScoreDuration(l)
 		if d <= 0 {
 			d = waveTrackRepeat(l, topology, fanOrdinal, ledCount)
 		}
 		return d, false
+	case "wavelighting":
+		return waveTrackRepeat(l, topology, fanOrdinal, ledCount), false
 	case "rainlighting":
 		// Rain is an event generator, not a duration sweep. Use a deterministic
 		// event phrase long enough to retain the validated v12.4.38 cadence/fade;
@@ -949,7 +897,7 @@ func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, 
 }
 
 func compileLiveConcert(p *Profile, topology LEDTopology, deviceOrdinal, ledCount int) *compiledScore {
-	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.63 all-live-performers-ripple-probe leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
+	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.63a all-live-performers-ripple-probe-compile-fix leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
 	d := p.LinkDevice()
 	if d == nil || len(d.Channels) == 0 {
 		return &compiledScore{unsupported: []string{"LINK device entry missing"}}
@@ -1457,6 +1405,56 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 				c[i] = c2
 			}
 			a[i] = 1
+		}
+		applyLayerOpacity(l, a)
+		return c, a, true
+	case "ripplelighting":
+		// v12.4.63a experimental live Ripple probe. The historical iCUE guide
+		// separates Ripple Velocity and Tail. Treat this layer's elapsed value as
+		// its independent phrase clock; expand from route origin on the 1-D LINK
+		// topology and use the authored transition curve to shape the tail.
+		velocity := math.Abs(number(l.Parameters["velocity"], 100))
+		if velocity <= 0.000001 {
+			velocity = 100
+		}
+		tail := number(l.Parameters["tailLength"], 4)
+		if tail <= 0 {
+			tail = 1
+		}
+		stops := transitionStops(l)
+		if len(stops) == 0 {
+			col := layerColor(l, RGB{R: 255, G: 255, B: 255})
+			stops = []transitionStop{{0, col, 0}, {1, col, 1}}
+		}
+		coords := spatial
+		if len(coords) != n {
+			coords = make([]float64, n)
+			for i := range coords {
+				coords[i] = float64(i)
+			}
+		}
+		minC, maxC := coords[0], coords[0]
+		for _, x := range coords[1:] {
+			if x < minC {
+				minC = x
+			}
+			if x > maxC {
+				maxC = x
+			}
+		}
+		span := maxC - minC + 1
+		radius := math.Mod(elapsed*velocity, span+tail)
+		for i, x := range coords {
+			dist := math.Abs(x - minC)
+			d := radius - dist
+			if d < 0 || d > tail {
+				a[i] = 0
+				continue
+			}
+			t := d / tail
+			col, alpha := sampleTransitionStops(stops, t)
+			c[i] = col
+			a[i] *= alpha
 		}
 		applyLayerOpacity(l, a)
 		return c, a, true
