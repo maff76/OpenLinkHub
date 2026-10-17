@@ -2324,6 +2324,118 @@ func gradientColors(l Layer) (RGB, RGB) {
 	c := layerColor(l, RGB{R: 0, G: 255, B: 70})
 	return c, RGB{R: 255, G: 180, B: 0}
 }
+
+// EditorColor is the canonical colour representation exposed by the iCUE
+// workspace API. The browser deliberately does not decode Corsair colour
+// serialization itself; these values come from the same decoder used by the
+// renderer.
+type EditorColor struct {
+	Hex string  `json:"hex"`
+	R   float64 `json:"r"`
+	G   float64 `json:"g"`
+	B   float64 `json:"b"`
+}
+
+// EditorLayer is the normalized, read-only view of an authored layer. RawParameters
+// is retained verbatim so reverse-engineering never loses sight of what iCUE
+// actually serialized, while Colors is renderer-decoded data suitable for UI use.
+type EditorLayer struct {
+	Index         int            `json:"index"`
+	Name          string         `json:"name"`
+	Effect        string         `json:"effect"`
+	EffectName    string         `json:"effectName,omitempty"`
+	Enabled       bool           `json:"enabled"`
+	SelectionMode string         `json:"selectionMode,omitempty"`
+	LEDs          []string       `json:"leds,omitempty"`
+	Colors        []EditorColor  `json:"colors"`
+	PrimaryColor  *EditorColor   `json:"primaryColor,omitempty"`
+	RawParameters map[string]any `json:"rawParameters,omitempty"`
+}
+
+func editorColor(c RGB) EditorColor {
+	clamp := func(v float64) int {
+		if v < 0 {
+			return 0
+		}
+		if v > 255 {
+			return 255
+		}
+		return int(math.Round(v))
+	}
+	r, g, b := clamp(c.R), clamp(c.G), clamp(c.B)
+	return EditorColor{Hex: fmt.Sprintf("#%02x%02x%02x", r, g, b), R: c.R, G: c.G, B: c.B}
+}
+
+func decodedLayerColors(l Layer) []EditorColor {
+	var rgb []RGB
+	// Transition curves are the richest source and are already parsed by the
+	// renderer for Static/Gradient-style authored colours.
+	for _, stop := range transitionStops(l) {
+		rgb = append(rgb, stop.C)
+	}
+	// If there is no transition curve, use the same keys and decoder that the
+	// renderer's layerColor/effectColors paths consume.
+	if len(rgb) == 0 {
+		for _, key := range []string{"colors", "color"} {
+			v, ok := l.Parameters[key]
+			if !ok {
+				continue
+			}
+			switch xs := v.(type) {
+			case []string:
+				for _, x := range xs {
+					if c, ok := parseColor(x); ok {
+						rgb = append(rgb, c)
+					}
+				}
+			default:
+				if c, ok := parseColor(v); ok {
+					rgb = append(rgb, c)
+				}
+			}
+		}
+	}
+	if len(rgb) == 0 {
+		// This deliberately uses layerColor with black only as a sentinel. A
+		// genuine authored black remains valid when its source key is present.
+		for _, key := range []string{"transitions", "color", "colors"} {
+			if _, ok := l.Parameters[key]; ok {
+				if c := layerColor(l, RGB{}); true {
+					rgb = append(rgb, c)
+				}
+				break
+			}
+		}
+	}
+	out := make([]EditorColor, 0, len(rgb))
+	seen := map[string]bool{}
+	for _, c := range rgb {
+		e := editorColor(c)
+		if !seen[e.Hex] {
+			seen[e.Hex] = true
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// DecodeEditorLayers exposes renderer-decoded authored values without changing
+// the parsed Layer objects used for playback. This is the canonical API bridge
+// between cueprofile parsing, rendering and the profile editor.
+func DecodeEditorLayers(layers []Layer) []EditorLayer {
+	out := make([]EditorLayer, 0, len(layers))
+	for i, l := range layers {
+		colors := decodedLayerColors(l)
+		e := EditorLayer{Index: i, Name: l.Name, Effect: l.Effect, EffectName: l.EffectName, Enabled: l.Enabled, SelectionMode: l.SelectionMode, LEDs: append([]string(nil), l.LEDs...), Colors: colors, RawParameters: l.Parameters}
+		if len(colors) > 0 {
+			c := colors[0]
+			e.PrimaryColor = &c
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
 func parseColor(v any) (RGB, bool) {
 	s := strings.ToLower(strings.TrimSpace(toString(v)))
 	if s == "" {
