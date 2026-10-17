@@ -37,6 +37,12 @@ import (
 	"github.com/sstallion/go-hid"
 )
 
+// iCUE QX physical-output probe state. v12.4.74d intentionally replaces only
+// imported-iCUE QX output with one moving purple LED so local output 0..33 can
+// be compared across every connected QX fan. TITAN, DRAM and non-iCUE modes
+// are untouched. Remove this diagnostic once the hardware ordering is captured.
+var icueQXTopologyProbeLast sync.Map
+
 type V2DeviceModel struct {
 	Name        string
 	LedChannels uint8
@@ -5000,6 +5006,26 @@ func (d *Device) generateRgbEffect(k int, channels uint8, startTime *time.Time, 
 		}
 		ordinal := d.qxOrdinal(k)
 		topology := icueprofile.TopologyForDevice(d.Devices[k].Name, int(channels))
+
+		// v12.4.74d diagnostic: drive the same renderer-local QX LED on every
+		// QX fan. A fan's mounting orientation is deliberately NOT compensated:
+		// local LED N must remain local LED N on every identical QX device.
+		// The probe advances every 500 ms through local outputs 0..33.
+		if topology != nil && topology.Name() == "QX" && int(channels) == 34 {
+			probeLED := int(time.Since(*startTime)/(500*time.Millisecond)) % int(channels)
+			output := make([]byte, int(channels)*3)
+			base := probeLED * 3
+			output[base], output[base+1], output[base+2] = 160, 0, 255
+
+			probeKey := fmt.Sprintf("%s:%d", d.Serial, k)
+			if previous, loaded := icueQXTopologyProbeLast.LoadOrStore(probeKey, probeLED); !loaded || previous.(int) != probeLED {
+				icueQXTopologyProbeLast.Store(probeKey, probeLED)
+				dev := d.Devices[k]
+				logicalLED, _ := topology.LogicalLED(ordinal, probeLED)
+				log.Printf("iCUE QX PHYSICAL PROBE: v12.4.74d channel=%d qxOrdinal=%d name=%q deviceId=%q portId=%d position=%d label=%q localLED=%d logicalLED=%d", k, ordinal, dev.Name, dev.DeviceId, dev.PortId, dev.Position, dev.Label, probeLED, logicalLED)
+			}
+			return output
+		}
 		brightness := rgb.GetBrightnessValueFloat(*d.DeviceProfile.BrightnessSlider)
 		if d.GlobalBrightness != 0 {
 			brightness = d.GlobalBrightness
