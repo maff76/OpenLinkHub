@@ -731,6 +731,7 @@ type scorePlayerState struct {
 	renderDeltaMin    float64
 	renderDeltaMax    float64
 	renderCadenceAt   float64
+	orangeAuditAt     float64
 	rainBase          [][]RGB
 	rainLast          [][]RGB
 	rainActive        [][]bool
@@ -1038,7 +1039,7 @@ func auditCanvasStaticOpeningFrame(layers []Layer, logicalBase, ledCount, ordina
 }
 
 func compileLiveConcert(p *Profile, topology LEDTopology, deviceOrdinal, ledCount int) *compiledScore {
-	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.74c led-topology-static-frame-audit leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
+	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.74f orange-live-address-audit leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
 	d := p.LinkDevice()
 	if d == nil || len(d.Channels) == 0 {
 		return &compiledScore{unsupported: []string{"LINK device entry missing"}}
@@ -1348,6 +1349,9 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 			state.rainActive[ti] = make([]bool, ledCount)
 		}
 		scorePlayers.byRun[key] = state
+		if topology != nil && strings.EqualFold(topology.Name(), "QX") {
+			log.Printf("iCUE LIVE STATE AUDIT: v12.4.74f topology=%s rendererOrdinal=%d stateDeviceOrdinal=%d leds=%d keyStarted=%d keyDeviceOrdinal=%d keyLedCount=%d state=%p", topology.Name(), deviceOrdinal, state.deviceOrdinal, ledCount, key.started, key.deviceOrdinal, key.ledCount, state)
+		}
 	}
 	elapsed := time.Since(started).Seconds()
 	from := state.lastElapsed
@@ -1394,6 +1398,35 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 		state.renderDeltaMin = 0
 		state.renderDeltaMax = 0
 		state.renderCadenceAt = elapsed
+	}
+	// v12.4.74f diagnostic: follow the ten authored orange QX LEDs (local 24-33)
+	// through live playback. This is observational only. It proves whether the
+	// renderer ordinal/42-ID block survives into the live state and whether Rain
+	// restores each orange LED to the colour it had before the transient.
+	if state.topology != nil && strings.EqualFold(state.topology.Name(), "QX") && ledCount >= 34 && elapsed-state.orangeAuditAt >= 1.0 {
+		entries := make([]string, 0, 10)
+		for led := 24; led <= 33 && led < len(state.leds); led++ {
+			logical := -1
+			if id, ok := state.topology.LogicalLED(state.deviceOrdinal, led); ok {
+				logical = id
+			}
+			rainActive := false
+			rainBase := RGB{}
+			rainLast := RGB{}
+			for ti, track := range state.score.tracks {
+				if !strings.EqualFold(track.effect, "RainLighting") || ti >= len(state.rainActive) || led >= len(state.rainActive[ti]) {
+					continue
+				}
+				if state.rainActive[ti][led] {
+					rainActive = true
+					rainBase = state.rainBase[ti][led]
+					rainLast = state.rainLast[ti][led]
+				}
+			}
+			entries = append(entries, fmt.Sprintf("L%d->ID%d cur=#%02X%02X%02X rain=%t base=#%02X%02X%02X last=#%02X%02X%02X", led, logical, byte(clamp(state.leds[led].R)), byte(clamp(state.leds[led].G)), byte(clamp(state.leds[led].B)), rainActive, byte(clamp(rainBase.R)), byte(clamp(rainBase.G)), byte(clamp(rainBase.B)), byte(clamp(rainLast.R)), byte(clamp(rainLast.G)), byte(clamp(rainLast.B))))
+		}
+		log.Printf("iCUE ORANGE LIVE AUDIT: v12.4.74f rendererOrdinal=%d stateDeviceOrdinal=%d keyDeviceOrdinal=%d leds=%d orange=[%s]", deviceOrdinal, state.deviceOrdinal, key.deviceOrdinal, ledCount, strings.Join(entries, " | "))
+		state.orangeAuditAt = elapsed
 	}
 	state.lastElapsed = elapsed
 	bucket := int64(math.Floor(elapsed))
