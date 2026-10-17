@@ -5022,7 +5022,7 @@ func (d *Device) generateRgbEffect(k int, channels uint8, startTime *time.Time, 
 				icueQXTopologyProbeLast.Store(probeKey, probeLED)
 				dev := d.Devices[k]
 				logicalLED, _ := topology.LogicalLED(ordinal, probeLED)
-				log.Printf("iCUE QX PHYSICAL PROBE: v12.4.74d channel=%d qxOrdinal=%d name=%q deviceId=%q portId=%d position=%d label=%q localLED=%d logicalLED=%d", k, ordinal, dev.Name, dev.DeviceId, dev.PortId, dev.Position, dev.Label, probeLED, logicalLED)
+				logger.Log(logger.Fields{"channel": k, "qxOrdinal": ordinal, "name": dev.Name, "deviceId": dev.DeviceId, "portId": dev.PortId, "position": dev.Position, "label": dev.Label, "localLED": probeLED, "logicalLED": logicalLED}).Info("iCUE QX PHYSICAL PROBE: v12.4.74d")
 			}
 			return output
 		}
