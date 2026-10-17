@@ -908,7 +908,7 @@ func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, 
 }
 
 func compileLiveConcert(p *Profile, topology LEDTopology, deviceOrdinal, ledCount int) *compiledScore {
-	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.71 rain-no-command-transient-restore leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
+	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.72 rain-speed-cycle-transient-audit leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
 	d := p.LinkDevice()
 	if d == nil || len(d.Channels) == 0 {
 		return &compiledScore{unsupported: []string{"LINK device entry missing"}}
@@ -1053,6 +1053,11 @@ func applyLiveContinuous(state *scorePlayerState, at float64) int {
 				if !state.rainActive[ti][led] {
 					state.rainBase[ti][led] = state.leds[led]
 					state.rainActive[ti][led] = true
+				} else if visualDistance(state.leds[led], state.rainLast[ti][led]) >= 0.5 {
+					// Another performer changed the physical LED while this Rain transient
+					// was active. Cancel the stale restore/base and let this Rain command
+					// start from the newly committed physical colour. No layer owns an LED.
+					state.rainBase[ti][led] = state.leds[led]
 				}
 				// Rain intensity is a transient overlay over the colour that existed
 				// before the drop, not a fade toward black.
@@ -1397,8 +1402,12 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		}
 		random := boolParam(l.Parameters["random"], false)
 		direction := int(number(l.Parameters["direction"], 0))
-		stepDuration := 0.115 / speed
-		dropDuration := 0.55 / math.Sqrt(speed)
+		// iCUE Rain speed changes how quickly the same-density rain pattern cycles,
+		// rather than changing how much rain exists at once. Scale both the spawn
+		// cadence and event lifetime by the same factor so their overlap ratio stays
+		// constant at Slow/Normal/Fast. 200 ms is the calibrated Slow cadence.
+		stepDuration := 0.200 / speed
+		dropDuration := (0.55 * (0.200 / 0.115)) / speed
 		currentSlot := int(math.Floor(elapsed / stepDuration))
 		period := float64(maxInt(n, 1))
 		if len(spatial) == n {
@@ -1416,13 +1425,6 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 			for back := 0; back < 6; back++ {
 				slot := currentSlot - back
 				if slot < 0 {
-					continue
-				}
-				// Slow iCUE Rain stays sparse without slowing the event clock into a
-				// visible metronome. Keep the proven 115 ms opportunity clock, but
-				// deterministically admit roughly one third of Slow opportunities.
-				// A rejected opportunity is NO COMMAND, never black.
-				if speed <= 1.000001 && hash(slot, fanOrdinal+73) >= (1.0/3.0) {
 					continue
 				}
 				spawnTime := float64(slot) * stepDuration
