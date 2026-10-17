@@ -853,7 +853,26 @@ func recordLayerTrack(l Layer, li, fanOrdinal, ledCount int, duration float64, t
 
 func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, ledCount int) {
 	effect := strings.ToLower(l.Effect)
+	serialized := layerScoreDuration(l)
+	logBase := func(model, timing string) {
+		log.Printf("iCUE SCORE EFFECT: leds=%d xml=%d effect=%s serializedDuration=%.6fs model=%s timing=%s", ledCount, li, l.Effect, serialized, model, timing)
+	}
 	switch effect {
+	case "staticlighting":
+		logBase("one-shot-command", "profile-start; no-repeat-within-track; holds-until-overwritten")
+	case "gradientlighting":
+		stops := transitionStops(l)
+		log.Printf("iCUE SCORE TIMING: leds=%d xml=%d effect=%s stops=%d phraseDuration=%.6fs interpolation=smooth serializedDuration=%.6fs model=authored-transition", ledCount, li, l.Effect, len(stops), serialized, serialized)
+		logBase("authored-transition", "duration=transition-phrase; smooth-interpolation-required; gaps=no-command")
+	case "rainlighting":
+		speed := number(l.Parameters["speed"], 1)
+		if speed <= 0 {
+			speed = 1
+		}
+		spawn := 0.115 / speed
+		life := 0.55 / math.Sqrt(speed)
+		log.Printf("iCUE SCORE TIMING: leds=%d xml=%d effect=%s speed=%.3f spawnInterval=%.6fs eventLifetime=%.6fs serializedDuration=%.6fs model=event-rain-v12.4.38", ledCount, li, l.Effect, speed, spawn, life, serialized)
+		logBase("event-rain-v12.4.38", "speed=spawn-cadence; drop-lifetime=event-lifetime; serialized-duration-not-spatial-sweep")
 	case "colorwavelighting":
 		speed := number(l.Parameters["speed"], 2)
 		if speed < 1 {
@@ -867,11 +886,12 @@ func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, 
 		if len(topologyPositions(topology, fanOrdinal, ledCount)) == ledCount {
 			period = 17
 		}
-		launchInterval := layerScoreDuration(l)
+		launchInterval := serialized
 		if launchInterval <= 0 {
 			launchInterval = 1
 		}
-		log.Printf("iCUE SCORE TIMING: xml=%d effect=%s speed=%.3f travelStep=%.6fs traversal=%.6fs launchInterval=%.6fs serializedDuration=%.6fs model=propagation-probe", li, l.Effect, speed, travelStep, travelStep*period, launchInterval, layerScoreDuration(l))
+		log.Printf("iCUE SCORE TIMING: leds=%d xml=%d effect=%s speed=%.3f travelStep=%.6fs traversal=%.6fs launchInterval=%.6fs serializedDuration=%.6fs model=propagation-probe", ledCount, li, l.Effect, speed, travelStep, travelStep*period, launchInterval, serialized)
+		logBase("propagation-probe", "speed=propagation-velocity; duration-as-launch-interval=HYPOTHESIS; travelling-front-not-killed-by-duration")
 	case "wavelighting":
 		velocity := number(l.Parameters["velocity"], 100)
 		if velocity == 0 {
@@ -902,16 +922,42 @@ func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, 
 			span = maxC - minC + 1
 		}
 		natural := (span + tail) / math.Abs(velocity)
-		log.Printf("iCUE SCORE TIMING: xml=%d effect=%s velocity=%.3f tail=%.3f naturalRepeat=%.6fs serializedDuration=%.6fs", li, l.Effect, velocity, tail, natural, layerScoreDuration(l))
+		log.Printf("iCUE SCORE TIMING: leds=%d xml=%d effect=%s velocity=%.3f tail=%.3f traversalCandidate=%.6fs serializedDuration=%.6fs model=velocity-wave", ledCount, li, l.Effect, velocity, tail, natural, serialized)
+		logBase("velocity-wave", "velocity=propagation; tail=spatial-tail; serialized-duration-not-motion-reset")
+	case "blinklighting":
+		logBase("whole-selection-cycle", "duration=current-cycle-candidate; on-half/off-half; off-currently-no-command")
+	case "breathelighting":
+		logBase("whole-selection-cycle", "duration=current-breathe-cycle; continuous-alpha-sampled-at-output-grid")
+	case "colorshiftlighting", "colorpulselighting", "rainbowlighting":
+		speed := discreteSpeed(l)
+		period := capturedPeriod(l, 4.0/math.Pow(2, speed-1))
+		log.Printf("iCUE SCORE TIMING: leds=%d xml=%d effect=%s speed=%.3f cycleCandidate=%.6fs serializedDuration=%.6fs model=continuous-cycle", ledCount, li, l.Effect, speed, period, serialized)
+		logBase("continuous-cycle", "speed-derived-cycle=CURRENT-MODEL; exact-authored-command-cadence-unproven")
+	case "rainbowwavelighting", "rainbowchannellighting":
+		speed := discreteSpeed(l)
+		period := capturedPeriod(l, 4.0/math.Pow(2, speed-1))
+		log.Printf("iCUE SCORE TIMING: leds=%d xml=%d effect=%s speed=%.3f spatialCycleCandidate=%.6fs serializedDuration=%.6fs model=continuous-spatial-cycle", ledCount, li, l.Effect, speed, period, serialized)
+		logBase("continuous-spatial-cycle", "speed=spatial-motion-candidate; exact-command-cadence-unproven")
+	case "spiralrainbowlighting":
+		speed := number(l.Parameters["speed"], 2)
+		if speed <= 0 {
+			speed = 2
+		}
+		period := capturedPeriod(l, 2.0*math.Pow(2, 2-speed))
+		log.Printf("iCUE SCORE TIMING: leds=%d xml=%d effect=%s speed=%.3f spatialCycleCandidate=%.6fs serializedDuration=%.6fs model=continuous-spatial-cycle", ledCount, li, l.Effect, speed, period, serialized)
+		logBase("continuous-spatial-cycle", "speed=spatial-motion-candidate; exact-command-cadence-unproven")
+	case "watercolorlighting", "watercolorspectrumlighting":
+		speed := discreteSpeed(l)
+		log.Printf("iCUE SCORE TIMING: leds=%d xml=%d effect=%s speed=%.3f serializedDuration=%.6fs model=continuous-pools", ledCount, li, l.Effect, speed, serialized)
+		logBase("continuous-pools", "current-renderer-model-only; timing-semantics-unproven")
 	default:
-		log.Printf("iCUE SCORE TIMING: xml=%d effect=%s serializedDuration=%.6fs", li, l.Effect, layerScoreDuration(l))
+		log.Printf("iCUE SCORE TIMING: leds=%d xml=%d effect=%s serializedDuration=%.6fs model=generic-sampled", ledCount, li, l.Effect, serialized)
+		logBase("generic-sampled", "20ms-is-recorder-grid-only; effect-timing-semantics-unproven")
 	}
 }
 
 func compileMasterScore(p *Profile, topology LEDTopology, deviceOrdinal, ledCount int) *compiledScore {
-	if deviceOrdinal == 0 {
-		log.Printf("iCUE SCORE BUILD: v12.4.58 colorwave-propagation verified")
-	}
+	log.Printf("iCUE SCORE BUILD: v12.4.59 broad-effect-timing audit leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
 	d := p.LinkDevice()
 	if d == nil || len(d.Channels) == 0 {
 		return &compiledScore{duration: 1, unsupported: []string{"LINK device entry missing"}, perLayer: make(map[int]int)}
@@ -949,11 +995,11 @@ func compileMasterScore(p *Profile, topology LEDTopology, deviceOrdinal, ledCoun
 		score.unsupported = append(score.unsupported, name)
 	}
 	sort.Strings(score.unsupported)
-	if deviceOrdinal == 0 {
-		log.Printf("iCUE SCORE COMPILED: duration=%.6fs layers=%d notes=%d", score.duration, len(layers), len(score.notes))
+	{
+		log.Printf("iCUE SCORE COMPILED: leds=%d rendererOrdinal=%d duration=%.6fs layers=%d notes=%d masterModel=longest-candidate-duration CURRENT-ARCHITECTURE", ledCount, deviceOrdinal, score.duration, len(layers), len(score.notes))
 		for li, l := range layers {
 			if l.Enabled {
-				log.Printf("iCUE SCORE TRACK: xml=%d effect=%s notes=%d candidateDuration=%.6fs", li, l.Effect, score.perLayer[li], layerScoreDuration(l))
+				log.Printf("iCUE SCORE TRACK: leds=%d xml=%d effect=%s notes=%d candidateDuration=%.6fs", ledCount, li, l.Effect, score.perLayer[li], layerScoreDuration(l))
 				logScoreTimingCandidate(li, l, topology, deviceOrdinal, ledCount)
 			}
 		}
@@ -964,7 +1010,7 @@ func compileMasterScore(p *Profile, topology LEDTopology, deviceOrdinal, ledCoun
 				trueTies++
 			}
 		}
-		log.Printf("iCUE SCORE MERGE: inputNotes=%d outputNotes=%d trueSameTimeSameLEDTies=%d", len(score.notes), len(score.notes), trueTies)
+		log.Printf("iCUE SCORE MERGE: leds=%d inputNotes=%d outputNotes=%d trueSameTimeSameLEDTies=%d", ledCount, len(score.notes), len(score.notes), trueTies)
 	}
 	return score
 }
