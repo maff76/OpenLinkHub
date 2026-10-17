@@ -664,6 +664,9 @@ type scorePlayerState struct {
 	renderDeltaMin    float64
 	renderDeltaMax    float64
 	renderCadenceAt   float64
+	rainBase          [][]RGB
+	rainLast          [][]RGB
+	rainActive        [][]bool
 }
 
 var scorePlayers = struct {
@@ -855,12 +858,8 @@ func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, 
 		if speed <= 0 {
 			speed = 1
 		}
-		hitChance := 1.0
-		if speed <= 1.0 {
-			hitChance = 1.0 / 3.0
-		}
-		log.Printf("iCUE TRACK TIMING: leds=%d xml=%d effect=%s speed=%.3f opportunityInterval=%.6fs hitChance=%.3f eventLifetime=%.6fs phrase=%.6fs model=event-rain-v12.4.70-sparse", ledCount, li, l.Effect, speed, 0.115/speed, hitChance, 0.55/math.Sqrt(speed), repeat)
-		logBase("event-rain-v12.4.70-sparse", "speed=opportunity-cadence; slow=sparse-deterministic-hit-selection; drop-lifetime=event-lifetime; serialized-duration-not-repeat")
+		log.Printf("iCUE TRACK TIMING: leds=%d xml=%d effect=%s speed=%.3f spawnInterval=%.6fs eventLifetime=%.6fs phrase=%.6fs model=event-rain-v12.4.38", ledCount, li, l.Effect, speed, 0.115/speed, 0.55/math.Sqrt(speed), repeat)
+		logBase("event-rain-v12.4.38", "speed=spawn-cadence; drop-lifetime=event-lifetime; serialized-duration-not-repeat")
 	case "colorwavelighting":
 		speed := number(l.Parameters["speed"], 2)
 		if speed < 1 {
@@ -909,7 +908,7 @@ func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, 
 }
 
 func compileLiveConcert(p *Profile, topology LEDTopology, deviceOrdinal, ledCount int) *compiledScore {
-	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.70 rain-sparse-event-selection leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
+	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.71 rain-no-command-transient-restore leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
 	d := p.LinkDevice()
 	if d == nil || len(d.Channels) == 0 {
 		return &compiledScore{unsupported: []string{"LINK device entry missing"}}
@@ -1033,9 +1032,40 @@ func applyLiveContinuous(state *scorePlayerState, at float64) int {
 				continue
 			}
 			if led >= len(colors) || led >= len(alpha) || alpha[led] <= 0.000001 {
+				// Rain is a transient command source. When its event ends, restore the
+				// colour that was physically present when the drop began, but only if
+				// nobody else has changed the LED since Rain's last command. This is
+				// NO COMMAND semantics with an interruptible transient restore, not
+				// layer ownership.
+				if strings.EqualFold(track.effect, "RainLighting") && ti < len(state.rainActive) && state.rainActive[ti][led] {
+					last := state.rainLast[ti][led]
+					cur := state.leds[led]
+					if visualDistance(cur, last) < 0.5 {
+						state.leds[led] = state.rainBase[ti][led]
+						changed[led] = struct{}{}
+					}
+					state.rainActive[ti][led] = false
+				}
 				continue // NO COMMAND: retain current physical LED state.
 			}
-			cmd := concreteCommand(colors[led], alpha[led])
+			var cmd RGB
+			if strings.EqualFold(track.effect, "RainLighting") && ti < len(state.rainActive) {
+				if !state.rainActive[ti][led] {
+					state.rainBase[ti][led] = state.leds[led]
+					state.rainActive[ti][led] = true
+				}
+				// Rain intensity is a transient overlay over the colour that existed
+				// before the drop, not a fade toward black.
+				base := state.rainBase[ti][led]
+				strength := alpha[led]
+				if strength > 1 {
+					strength = 1
+				}
+				cmd = mixRGB(base, colors[led], strength)
+				state.rainLast[ti][led] = cmd
+			} else {
+				cmd = concreteCommand(colors[led], alpha[led])
+			}
 			if firstActive < 0 {
 				firstActive = led
 			}
@@ -1130,7 +1160,12 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 		if d != nil && len(d.Channels) > 0 {
 			sourceCount = sourceQXFanCount(p.expandLightingLinks(d.Channels[0].Layers), topology)
 		}
-		state = &scorePlayerState{score: score, topology: topology, deviceOrdinal: deviceOrdinal, sourceDeviceCount: sourceCount, leds: make([]RGB, ledCount), visualSamples: make([]RGB, len(score.tracks)), visualSampleSet: make([]bool, len(score.tracks)), visualLogAt: make([]float64, len(score.tracks))}
+		state = &scorePlayerState{score: score, topology: topology, deviceOrdinal: deviceOrdinal, sourceDeviceCount: sourceCount, leds: make([]RGB, ledCount), visualSamples: make([]RGB, len(score.tracks)), visualSampleSet: make([]bool, len(score.tracks)), visualLogAt: make([]float64, len(score.tracks)), rainBase: make([][]RGB, len(score.tracks)), rainLast: make([][]RGB, len(score.tracks)), rainActive: make([][]bool, len(score.tracks))}
+		for ti := range score.tracks {
+			state.rainBase[ti] = make([]RGB, ledCount)
+			state.rainLast[ti] = make([]RGB, ledCount)
+			state.rainActive[ti] = make([]bool, ledCount)
+		}
 		scorePlayers.byRun[key] = state
 	}
 	elapsed := time.Since(started).Seconds()
@@ -1362,17 +1397,8 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		}
 		random := boolParam(l.Parameters["random"], false)
 		direction := int(number(l.Parameters["direction"], 0))
-		// v12.4.70: keep Rain's proven frequent opportunity clock, but make the
-		// Slow setting sparse by deterministically rejecting roughly two thirds
-		// of opportunities. Stretching the clock itself made Slow Rain visibly
-		// pulse like a metronome; sparse selection preserves irregular event
-		// timing while reducing average density to about one hit per 345 ms.
 		stepDuration := 0.115 / speed
 		dropDuration := 0.55 / math.Sqrt(speed)
-		hitChance := 1.0
-		if speed <= 1.0 {
-			hitChance = 1.0 / 3.0
-		}
 		currentSlot := int(math.Floor(elapsed / stepDuration))
 		period := float64(maxInt(n, 1))
 		if len(spatial) == n {
@@ -1392,9 +1418,11 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 				if slot < 0 {
 					continue
 				}
-				// The decision is stable for a given layer/fan/slot, so playback is
-				// deterministic without exposing a regular Slow-Rain beat.
-				if hash(slot, fanOrdinal+7919) >= hitChance {
+				// Slow iCUE Rain stays sparse without slowing the event clock into a
+				// visible metronome. Keep the proven 115 ms opportunity clock, but
+				// deterministically admit roughly one third of Slow opportunities.
+				// A rejected opportunity is NO COMMAND, never black.
+				if speed <= 1.000001 && hash(slot, fanOrdinal+73) >= (1.0/3.0) {
 					continue
 				}
 				spawnTime := float64(slot) * stepDuration
