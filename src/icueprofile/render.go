@@ -752,8 +752,12 @@ func recordLayerTrack(l Layer, li, fanOrdinal, ledCount int, duration float64, t
 		return notes, true
 	}
 
-	// ColorWave records the exact instant each travelling front reaches each LED.
-	// The effect is evaluated just after that instant to obtain the front colour.
+	// v12.4.55 ColorWave timing probe: test the hypothesis that iCUE's
+	// Slow/Medium/Fast value primarily controls how soon the NEXT colour front
+	// launches, rather than making one front traverse the route 1x/2x/3x faster.
+	// The serialized duration is therefore treated as the speed=1 launch interval.
+	// Front travel is held at the old reference/normal cadence (200 ms per route
+	// position) so the three Profile 15 layers differ only in launch spacing.
 	if effect == "colorwavelighting" {
 		speed := number(l.Parameters["speed"], 2)
 		if speed < 1 {
@@ -762,39 +766,52 @@ func recordLayerTrack(l Layer, li, fanOrdinal, ledCount int, duration float64, t
 		if speed > 3 {
 			speed = 3
 		}
-		step := 0.4 / speed
-		if step < 0.02 {
-			step = 0.02
+		travelStep := 0.200
+		launchBase := layerScoreDuration(l)
+		if launchBase <= 0 {
+			launchBase = 1
 		}
+		launchInterval := launchBase / speed
 		period := float64(maxInt(ledCount, 1))
 		if len(spatial) == ledCount {
 			period = 17
 		}
-		phase := stringPhase(l.ID) * period
 		direction := int(number(l.Parameters["direction"], 2))
-		for led := 0; led < ledCount; led++ {
-			if !selectedWithTopology(l, topology, fanOrdinal, led, sourceDeviceCount) {
-				continue
+		c1, c2 := effectColors(l, RGB{R: 255}, RGB{B: 255})
+		random := boolParam(l.Parameters["random"], false)
+
+		// Record every front that can arrive inside one master-score cycle. Fronts
+		// launched before t=0 are included when their travel reaches an LED after 0;
+		// this makes the repeating score seamless instead of truncating travelling
+		// fronts at the loop boundary.
+		maxTravel := period * travelStep
+		firstFront := int(math.Floor(-maxTravel/launchInterval)) - 1
+		lastFront := int(math.Ceil(duration/launchInterval)) + 1
+		for frontIndex := firstFront; frontIndex <= lastFront; frontIndex++ {
+			launchAt := float64(frontIndex) * launchInterval
+			col := c1
+			if random {
+				col = hsv(hash(frontIndex, fanOrdinal*131+17), 1, 1)
+			} else if frontIndex&1 != 0 {
+				col = c2
 			}
-			coord := float64(led)
-			if len(spatial) == ledCount {
-				coord = spatial[led]
-			}
-			route := coord
-			if direction == 2 {
-				route = math.Mod(period-coord, period)
-			}
-			k0 := int(math.Floor((phase-route)/period)) - 1
-			k1 := int(math.Ceil((duration/step+phase-route)/period)) + 1
-			for k := k0; k <= k1; k++ {
-				at := (route + float64(k)*period - phase) * step
+			for led := 0; led < ledCount; led++ {
+				if !selectedWithTopology(l, topology, fanOrdinal, led, sourceDeviceCount) {
+					continue
+				}
+				coord := float64(led)
+				if len(spatial) == ledCount {
+					coord = spatial[led]
+				}
+				route := coord
+				if direction == 2 {
+					route = math.Mod(period-coord, period)
+				}
+				at := launchAt + route*travelStep
 				if at < -0.0000005 || at >= duration-0.0000005 {
 					continue
 				}
-				colors, alpha, ok := renderLayer(l, fanOrdinal, ledCount, math.Max(0, at+0.000001), spatial)
-				if ok && led < len(colors) && led < len(alpha) && alpha[led] > 0.000001 {
-					appendScoreNote(&notes, l, li, led, math.Max(0, at), colors[led], alpha[led])
-				}
+				appendScoreNote(&notes, l, li, led, math.Max(0, at), col, 1)
 			}
 		}
 		return notes, true
@@ -839,12 +856,17 @@ func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, 
 		if speed > 3 {
 			speed = 3
 		}
-		step := 0.4 / speed
+		travelStep := 0.200
 		period := float64(maxInt(ledCount, 1))
 		if len(topologyPositions(topology, fanOrdinal, ledCount)) == ledCount {
 			period = 17
 		}
-		log.Printf("iCUE SCORE TIMING: xml=%d effect=%s speed=%.3f ledStep=%.6fs routePeriod=%.3f frontRepeat=%.6fs serializedDuration=%.6fs", li, l.Effect, speed, step, period, step*period, layerScoreDuration(l))
+		launchBase := layerScoreDuration(l)
+		if launchBase <= 0 {
+			launchBase = 1
+		}
+		launchInterval := launchBase / speed
+		log.Printf("iCUE SCORE TIMING: xml=%d effect=%s speed=%.3f travelStep=%.6fs traversal=%.6fs launchInterval=%.6fs serializedDuration=%.6fs model=launch-rate-probe", li, l.Effect, speed, travelStep, travelStep*period, launchInterval, layerScoreDuration(l))
 	case "wavelighting":
 		velocity := number(l.Parameters["velocity"], 100)
 		if velocity == 0 {
