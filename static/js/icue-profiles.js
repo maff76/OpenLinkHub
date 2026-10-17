@@ -58,12 +58,34 @@ $(function () {
             $('#icueMetaChannels').text((p.summary || {}).channels ?? '—');
             $('#icueMetaLayers').text((p.summary || {}).layers ?? '—');
             const layers = flattenLayers(data), list = $('#icueLayerList').empty();
+            const groups = [];
             layers.forEach(function (x, i) {
-                const row = $('<div class="settings-row icue-layer-row"></div>').attr('data-i', i);
-                row.append($('<span class="settings-label text-ellipsis"></span>').text(layerLabel(x.layer, i)));
-                row.append($('<small></small>').text(x.layer.effect || 'unknown'));
-                row.on('click', function () { selectLayer(x, i); });
-                list.append(row);
+                const name = layerLabel(x.layer, i), effect = x.layer.effect || 'unknown';
+                const key = name.trim().toLowerCase() + '\u0000' + String(effect).trim().toLowerCase();
+                let g = groups.find(v => v.key === key);
+                if (!g) { g={key:key,name:name,effect:effect,items:[]}; groups.push(g); }
+                g.items.push({target:x,index:i});
+            });
+            groups.forEach(function (g) {
+                const wrap=$('<div class="icue-layer-group"></div>');
+                const head=$('<div class="settings-row icue-layer-group-head"></div>');
+                head.append($('<span class="settings-label text-ellipsis"></span>').text(g.name));
+                const meta=$('<span class="icue-layer-group-meta"></span>');
+                meta.append($('<small></small>').text(g.effect));
+                if(g.items.length>1) meta.append($('<span class="icue-layer-count"></span>').text('× '+g.items.length));
+                head.append(meta); wrap.append(head);
+                const children=$('<div class="icue-layer-group-items"></div>').toggle(g.items.length===1);
+                g.items.forEach(function (item, j) {
+                    const row=$('<div class="settings-row icue-layer-row icue-layer-child"></div>').attr('data-i',item.index);
+                    row.append($('<span class="settings-label text-ellipsis"></span>').text(g.items.length>1 ? ('Instance '+(j+1)+' · '+item.target.group) : item.target.group));
+                    row.append($('<small></small>').text(g.items.length>1 ? ('Layer '+(item.target.layerIndex+1)) : g.effect));
+                    row.on('click',function(e){e.stopPropagation();selectLayer(item.target,item.index);});
+                    children.append(row);
+                });
+                wrap.append(children);
+                if(g.items.length>1) head.addClass('expandable').attr('title','Click to show/hide '+g.items.length+' individual layers').on('click',function(){children.slideToggle(120);head.toggleClass('open');});
+                else head.on('click',function(){selectLayer(g.items[0].target,g.items[0].index);});
+                list.append(wrap);
             });
             if (layers.length) selectLayer(layers[0], 0);
         }).fail(function (xhr) { toast.warning(xhr.responseText || 'Unable to load iCUE profile'); });
