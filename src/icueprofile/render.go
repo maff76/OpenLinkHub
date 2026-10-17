@@ -1039,7 +1039,7 @@ func auditCanvasStaticOpeningFrame(layers []Layer, logicalBase, ledCount, ordina
 }
 
 func compileLiveConcert(p *Profile, topology LEDTopology, deviceOrdinal, ledCount int) *compiledScore {
-	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.74f orange-live-address-audit leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
+	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.74g cyclic-spatial-distance-fix leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
 	d := p.LinkDevice()
 	if d == nil || len(d.Channels) == 0 {
 		return &compiledScore{unsupported: []string{"LINK device entry missing"}}
@@ -1653,8 +1653,17 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 				if direction == 1 || direction == 3 {
 					target = math.Mod(period-target, period)
 				}
-				d := math.Abs(coord - target)
-				d = math.Min(d, period-d)
+				// coord may be a global topology coordinate spanning multiple physical
+				// devices (QX Position deliberately adds the device pitch), while target
+				// lives inside this effect's compact repeating period. Wrap the delta
+				// before measuring circular distance. The previous min(d, period-d)
+				// becomes negative once d > period, which made every Rain LED on QX1+
+				// look active at once.
+				delta := math.Mod(coord-target, period)
+				if delta < 0 {
+					delta += period
+				}
+				d := math.Min(delta, period-delta)
 				if d > 0.55 {
 					continue
 				}
