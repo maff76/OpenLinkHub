@@ -855,8 +855,12 @@ func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, 
 		if speed <= 0 {
 			speed = 1
 		}
-		log.Printf("iCUE TRACK TIMING: leds=%d xml=%d effect=%s speed=%.3f spawnInterval=%.6fs eventLifetime=%.6fs phrase=%.6fs model=event-rain-v12.4.38", ledCount, li, l.Effect, speed, 0.115/speed, 0.55/math.Sqrt(speed), repeat)
-		logBase("event-rain-v12.4.38", "speed=spawn-cadence; drop-lifetime=event-lifetime; serialized-duration-not-repeat")
+		hitChance := 1.0
+		if speed <= 1.0 {
+			hitChance = 1.0 / 3.0
+		}
+		log.Printf("iCUE TRACK TIMING: leds=%d xml=%d effect=%s speed=%.3f opportunityInterval=%.6fs hitChance=%.3f eventLifetime=%.6fs phrase=%.6fs model=event-rain-v12.4.70-sparse", ledCount, li, l.Effect, speed, 0.115/speed, hitChance, 0.55/math.Sqrt(speed), repeat)
+		logBase("event-rain-v12.4.70-sparse", "speed=opportunity-cadence; slow=sparse-deterministic-hit-selection; drop-lifetime=event-lifetime; serialized-duration-not-repeat")
 	case "colorwavelighting":
 		speed := number(l.Parameters["speed"], 2)
 		if speed < 1 {
@@ -905,7 +909,7 @@ func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, 
 }
 
 func compileLiveConcert(p *Profile, topology LEDTopology, deviceOrdinal, ledCount int) *compiledScore {
-	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.69 rain-slow-density-calibration leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
+	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.70 rain-sparse-event-selection leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
 	d := p.LinkDevice()
 	if d == nil || len(d.Channels) == 0 {
 		return &compiledScore{unsupported: []string{"LINK device entry missing"}}
@@ -1358,8 +1362,17 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		}
 		random := boolParam(l.Parameters["random"], false)
 		direction := int(number(l.Parameters["direction"], 0))
-		stepDuration := 0.350 / speed
+		// v12.4.70: keep Rain's proven frequent opportunity clock, but make the
+		// Slow setting sparse by deterministically rejecting roughly two thirds
+		// of opportunities. Stretching the clock itself made Slow Rain visibly
+		// pulse like a metronome; sparse selection preserves irregular event
+		// timing while reducing average density to about one hit per 345 ms.
+		stepDuration := 0.115 / speed
 		dropDuration := 0.55 / math.Sqrt(speed)
+		hitChance := 1.0
+		if speed <= 1.0 {
+			hitChance = 1.0 / 3.0
+		}
 		currentSlot := int(math.Floor(elapsed / stepDuration))
 		period := float64(maxInt(n, 1))
 		if len(spatial) == n {
@@ -1377,6 +1390,11 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 			for back := 0; back < 6; back++ {
 				slot := currentSlot - back
 				if slot < 0 {
+					continue
+				}
+				// The decision is stable for a given layer/fan/slot, so playback is
+				// deterministic without exposing a regular Slow-Rain beat.
+				if hash(slot, fanOrdinal+7919) >= hitChance {
 					continue
 				}
 				spawnTime := float64(slot) * stepDuration
