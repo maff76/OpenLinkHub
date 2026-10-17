@@ -909,6 +909,9 @@ func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, 
 }
 
 func compileMasterScore(p *Profile, topology LEDTopology, deviceOrdinal, ledCount int) *compiledScore {
+	if deviceOrdinal == 0 {
+		log.Printf("iCUE SCORE BUILD: v12.4.58 colorwave-propagation verified")
+	}
 	d := p.LinkDevice()
 	if d == nil || len(d.Channels) == 0 {
 		return &compiledScore{duration: 1, unsupported: []string{"LINK device entry missing"}, perLayer: make(map[int]int)}
