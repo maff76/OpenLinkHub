@@ -659,6 +659,11 @@ type scorePlayerState struct {
 	visualSamples     []RGB
 	visualSampleSet   []bool
 	visualLogAt       []float64
+	renderCalls       int
+	renderDeltaSum    float64
+	renderDeltaMin    float64
+	renderDeltaMax    float64
+	renderCadenceAt   float64
 }
 
 var scorePlayers = struct {
@@ -900,7 +905,7 @@ func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, 
 }
 
 func compileLiveConcert(p *Profile, topology LEDTopology, deviceOrdinal, ledCount int) *compiledScore {
-	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.64 continuous-performers-persistent-propagation leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
+	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.65 cadence-measurement-visual-regions leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
 	d := p.LinkDevice()
 	if d == nil || len(d.Channels) == 0 {
 		return &compiledScore{unsupported: []string{"LINK device entry missing"}}
@@ -1018,6 +1023,7 @@ func applyLiveContinuous(state *scorePlayerState, at float64) int {
 		}
 		var sum RGB
 		active := 0
+		firstActive, lastActive := -1, -1
 		for led := 0; led < len(state.leds); led++ {
 			if !selectedWithTopology(track.layer, state.topology, state.deviceOrdinal, led, state.sourceDeviceCount) {
 				continue
@@ -1026,6 +1032,10 @@ func applyLiveContinuous(state *scorePlayerState, at float64) int {
 				continue // NO COMMAND: retain current physical LED state.
 			}
 			cmd := concreteCommand(colors[led], alpha[led])
+			if firstActive < 0 {
+				firstActive = led
+			}
+			lastActive = led
 			state.leds[led] = cmd
 			changed[led] = struct{}{}
 			sum.R += cmd.R
@@ -1048,7 +1058,16 @@ func applyLiveContinuous(state *scorePlayerState, at float64) int {
 						local += track.repeat
 					}
 					prev := state.visualSamples[ti]
-					log.Printf("iCUE VISUAL CUE: t=%.3fs xml=%d effect=%s phraseLocal=%.3fs activeLEDs=%d avgRGB=(%.0f,%.0f,%.0f)->(%.0f,%.0f,%.0f) delta=%.1f EXPECT=noticeable-colour-change", at, track.layerIndex, track.effect, local, active, prev.R, prev.G, prev.B, rep.R, rep.G, rep.B, delta)
+					expect := "noticeable-colour-change"
+					switch strings.ToLower(track.effect) {
+					case "wavelighting", "colorwavelighting":
+						expect = "travelling-blended-colour-change"
+					case "gradientlighting", "breathelighting", "colorshiftlighting", "colorpulselighting", "watercolorlighting":
+						expect = "gradual-expression-change"
+					case "rainlighting", "ripplelighting":
+						expect = "event-hit-or-propagation-change"
+					}
+					log.Printf("iCUE VISUAL CUE: t=%.3fs xml=%d effect=%s phraseLocal=%.3fs activeLEDs=%d region=LED%d-LED%d avgRGB=(%.0f,%.0f,%.0f)->(%.0f,%.0f,%.0f) delta=%.1f EXPECT=%s", at, track.layerIndex, track.effect, local, active, firstActive+1, lastActive+1, prev.R, prev.G, prev.B, rep.R, rep.G, rep.B, delta, expect)
 					state.visualLogAt[ti] = at
 				}
 			}
@@ -1124,6 +1143,37 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 		from = 0
 	} else {
 		consumed, changed = applyAbsoluteRange(state, state.lastElapsed, elapsed, false)
+	}
+	// Measure the actual RenderFan invocation cadence independently of the
+	// once-per-second playback diagnostic. This tells us whether the renderer is
+	// really being called near the hardware output cadence or whether upstream
+	// scheduling is starving it.
+	if state.started && from > 0 && elapsed >= from {
+		delta := elapsed - from
+		if delta > 0 {
+			state.renderCalls++
+			state.renderDeltaSum += delta
+			if state.renderDeltaMin == 0 || delta < state.renderDeltaMin {
+				state.renderDeltaMin = delta
+			}
+			if delta > state.renderDeltaMax {
+				state.renderDeltaMax = delta
+			}
+		}
+	}
+	if deviceOrdinal == 0 && elapsed-state.renderCadenceAt >= 1.0 && state.renderCalls > 0 {
+		window := elapsed - state.renderCadenceAt
+		avg := state.renderDeltaSum / float64(state.renderCalls)
+		fps := 0.0
+		if window > 0 {
+			fps = float64(state.renderCalls) / window
+		}
+		log.Printf("iCUE RENDER CADENCE: device=%d leds=%d window=%.3fs calls=%d callsPerSecond=%.1f deltaAvg=%.3fms deltaMin=%.3fms deltaMax=%.3fms", deviceOrdinal, ledCount, window, state.renderCalls, fps, avg*1000, state.renderDeltaMin*1000, state.renderDeltaMax*1000)
+		state.renderCalls = 0
+		state.renderDeltaSum = 0
+		state.renderDeltaMin = 0
+		state.renderDeltaMax = 0
+		state.renderCadenceAt = elapsed
 	}
 	state.lastElapsed = elapsed
 	bucket := int64(math.Floor(elapsed))
