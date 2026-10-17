@@ -234,6 +234,8 @@ type commandClashStats struct {
 	maxCommandsPerLED int
 	perLEDCommands    []int64
 	perLEDClashes     []int64
+	effectCommands    map[string]int64
+	effectLEDSlots    map[string]int64
 }
 
 var commandClashAudit = map[int]*commandClashStats{}
@@ -244,8 +246,14 @@ func clashStatsFor(deviceOrdinal, ledCount int) *commandClashStats {
 	defer commandClashAuditMu.Unlock()
 	s := commandClashAudit[deviceOrdinal]
 	if s == nil {
-		s = &commandClashStats{}
+		s = &commandClashStats{effectCommands: make(map[string]int64), effectLEDSlots: make(map[string]int64)}
 		commandClashAudit[deviceOrdinal] = s
+	}
+	if s.effectCommands == nil {
+		s.effectCommands = make(map[string]int64)
+	}
+	if s.effectLEDSlots == nil {
+		s.effectLEDSlots = make(map[string]int64)
 	}
 	if len(s.perLEDCommands) != ledCount {
 		s.perLEDCommands = make([]int64, ledCount)
@@ -603,6 +611,12 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 	frameCommandCount := make([]int, ledCount)
 	frameFirstColor := make([]RGB, ledCount)
 	frameConflict := make([]bool, ledCount)
+	// Renderer-wide command-emission audit. These counters are fed only by
+	// explicit LEDPatch.Active events after Static/Gradient/edge-trigger handling;
+	// merely being selected or having a currently-active rendered value does not
+	// count as a command.
+	frameEffectCommands := make(map[string]int64)
+	frameEffectLEDSlots := make(map[string]map[int]struct{})
 	// v12.4.40 global compositor A/B: use the same authored-alpha source-over
 	// rule for every lighting layer. The previous screen blend for later AllLeds
 	// effects could manufacture bright/cyan colours that are not present in any
@@ -677,6 +691,12 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 			}
 			contribution.mapped++
 			if patches[i].Active {
+				effectKey := strings.ToLower(l.Effect)
+				frameEffectCommands[effectKey]++
+				if frameEffectLEDSlots[effectKey] == nil {
+					frameEffectLEDSlots[effectKey] = make(map[int]struct{})
+				}
+				frameEffectLEDSlots[effectKey][i] = struct{}{}
 				if frameCommandCount[i] == 0 {
 					frameFirstColor[i] = patches[i].Color
 				} else if !rgbCommandNear(frameFirstColor[i], patches[i].Color, 0.5) {
@@ -757,6 +777,9 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 				conflictPct = 100 * float64(stats.conflictingLEDs) / float64(stats.ledsWithCommand)
 			}
 			log.Printf("iCUE command clash audit: frames=%d commands=%d commandedLEDSlots=%d clashLEDSlots=%d (%.2f%%) conflictingLEDSlots=%d (%.2f%%) maxCommandsPerLED=%d", stats.frames, stats.commands, stats.ledsWithCommand, stats.clashLEDs, clashPct, stats.conflictingLEDs, conflictPct, stats.maxCommandsPerLED)
+			for effect, commands := range stats.effectCommands {
+				log.Printf("iCUE command source audit: effect=%s commands=%d commandedLEDSlots=%d", effect, commands, stats.effectLEDSlots[effect])
+			}
 			for i := range stats.perLEDCommands {
 				if stats.perLEDCommands[i] > 0 {
 					log.Printf("iCUE command clash LED: led=%d commands=%d clashFrames=%d", i, stats.perLEDCommands[i], stats.perLEDClashes[i])
@@ -768,6 +791,12 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 			stats.clashLEDs = 0
 			stats.conflictingLEDs = 0
 			stats.maxCommandsPerLED = 0
+			for k := range stats.effectCommands {
+				delete(stats.effectCommands, k)
+			}
+			for k := range stats.effectLEDSlots {
+				delete(stats.effectLEDSlots, k)
+			}
 			for i := range stats.perLEDCommands {
 				stats.perLEDCommands[i] = 0
 				stats.perLEDClashes[i] = 0
@@ -775,6 +804,10 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 			stats.bucket = b
 		}
 		stats.frames++
+		for effect, commands := range frameEffectCommands {
+			stats.effectCommands[effect] += commands
+			stats.effectLEDSlots[effect] += int64(len(frameEffectLEDSlots[effect]))
+		}
 		for i, ncmd := range frameCommandCount {
 			if ncmd == 0 {
 				continue
@@ -1145,7 +1178,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 			lastPass := routeCoord + cyclesBehind*period
 			age := (front - lastPass) * stepSeconds
 			if age < 0 || age >= lifetime {
-				a[i] = 0 // NO COMMAND: reveal lower layer/base.
+				a[i] = 0 // NO COMMAND: retain the physical LED state unchanged.
 				continue
 			}
 
