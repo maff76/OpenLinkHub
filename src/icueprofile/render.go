@@ -1,6 +1,7 @@
 package icueprofile
 
 import (
+	"fmt"
 	"log"
 	"math"
 	"regexp"
@@ -584,7 +585,16 @@ func (p *Profile) RenderDRAM(moduleOrdinal, ledCount int, started time.Time, bri
 	if d == nil || len(d.Channels) == 0 {
 		return make([]byte, ledCount*3), []string{"DRAM device entry missing"}
 	}
-	return renderCanvas(p.expandLightingLinks(d.Channels[0].Layers), moduleOrdinal*ledCount, ledCount, moduleOrdinal, started, brightness)
+	layers := p.expandLightingLinks(d.Channels[0].Layers)
+	logicalBase := moduleOrdinal * ledCount
+	logical := make([]int, ledCount)
+	for local := 0; local < ledCount; local++ {
+		logical[local] = logicalBase + local
+	}
+	log.Printf("iCUE LED TOPOLOGY AUDIT: topology=DRAM rendererOrdinal=%d leds=%d localToLogical=%v", moduleOrdinal, ledCount, logical)
+	staticFrame := auditCanvasStaticOpeningFrame(layers, logicalBase, ledCount, moduleOrdinal)
+	log.Printf("iCUE STATIC FRAME AUDIT: topology=DRAM rendererOrdinal=%d leds=%d preLiveRGB=%v", moduleOrdinal, ledCount, auditRGBHex(staticFrame))
+	return renderCanvas(layers, logicalBase, ledCount, moduleOrdinal, started, brightness)
 }
 
 // RenderLINKDevice renders a non-QX LINK device. AllLeds layers are exact and
@@ -973,14 +983,81 @@ func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, 
 	}
 }
 
+func auditRGBHex(leds []RGB) []string {
+	out := make([]string, len(leds))
+	for i, c := range leds {
+		out[i] = fmt.Sprintf("%d=#%02X%02X%02X", i, int(clamp(c.R)), int(clamp(c.G)), int(clamp(c.B)))
+	}
+	return out
+}
+
+// auditStaticOpeningFrame reconstructs only the authored StaticLighting opening
+// state. It deliberately excludes Rain and every other live performer so the
+// diagnostic proves what colour each physical LED should hold before live
+// effects begin touching it.
+func auditStaticOpeningFrame(layers []Layer, topology LEDTopology, deviceOrdinal, ledCount, sourceDeviceCount int) []RGB {
+	out := make([]RGB, ledCount)
+	for li := len(layers) - 1; li >= 0; li-- {
+		l := layers[li]
+		if !l.Enabled || !strings.EqualFold(l.Effect, "StaticLighting") {
+			continue
+		}
+		colors, alpha, ok := renderLayer(l, deviceOrdinal, ledCount, 0, topologyPositions(topology, deviceOrdinal, ledCount))
+		if !ok {
+			continue
+		}
+		for local := 0; local < ledCount; local++ {
+			if !selectedWithTopology(l, topology, deviceOrdinal, local, sourceDeviceCount) || local >= len(colors) || local >= len(alpha) {
+				continue
+			}
+			out[local] = mixRGB(out[local], colors[local], alpha[local])
+		}
+	}
+	return out
+}
+
+func auditCanvasStaticOpeningFrame(layers []Layer, logicalBase, ledCount, ordinal int) []RGB {
+	out := make([]RGB, ledCount)
+	for li := len(layers) - 1; li >= 0; li-- {
+		l := layers[li]
+		if !l.Enabled || !strings.EqualFold(l.Effect, "StaticLighting") {
+			continue
+		}
+		patches, ok := renderLayerPatches(l, ordinal, ledCount, 0, nil)
+		if !ok {
+			continue
+		}
+		for local := 0; local < ledCount; local++ {
+			if !selectedAt(l, logicalBase, local) {
+				continue
+			}
+			out[local] = applyPatch(out[local], patches[local])
+		}
+	}
+	return out
+}
+
 func compileLiveConcert(p *Profile, topology LEDTopology, deviceOrdinal, ledCount int) *compiledScore {
-	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.74b concrete-led-map-audit leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
+	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.74c led-topology-static-frame-audit leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
 	d := p.LinkDevice()
 	if d == nil || len(d.Channels) == 0 {
 		return &compiledScore{unsupported: []string{"LINK device entry missing"}}
 	}
 	layers := p.expandLightingLinks(d.Channels[0].Layers)
 	sourceDeviceCount := sourceQXFanCount(layers, topology)
+	if topology != nil {
+		logical := make([]int, 0, ledCount)
+		for local := 0; local < ledCount; local++ {
+			if id, ok := topology.LogicalLED(deviceOrdinal, local); ok {
+				logical = append(logical, id)
+			} else {
+				logical = append(logical, -1)
+			}
+		}
+		log.Printf("iCUE LED TOPOLOGY AUDIT: topology=%s rendererOrdinal=%d leds=%d localToLogical=%v", topology.Name(), deviceOrdinal, ledCount, logical)
+		staticFrame := auditStaticOpeningFrame(layers, topology, deviceOrdinal, ledCount, sourceDeviceCount)
+		log.Printf("iCUE STATIC FRAME AUDIT: topology=%s rendererOrdinal=%d leds=%d preLiveRGB=%v", topology.Name(), deviceOrdinal, ledCount, auditRGBHex(staticFrame))
+	}
 	// v12.4.74b diagnostic: prove whether a ConcreteLeds Static mask is
 	// actually identical across QX ordinals before changing any mapping.
 	// This is intentionally observational only: it does not alter selection.
