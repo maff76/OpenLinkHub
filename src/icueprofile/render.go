@@ -144,7 +144,7 @@ func colorWaveCommandTime(l Layer, led, n int, elapsed float64, spatial []float6
 	if speed > 3 {
 		speed = 3
 	}
-	stepSeconds := 0.4 / speed
+	stepSeconds := 0.2 / speed
 	if stepSeconds < 0.02 {
 		stepSeconds = 0.02
 	}
@@ -865,7 +865,7 @@ func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, 
 		if speed > 3 {
 			speed = 3
 		}
-		step := 0.400 / speed
+		step := 0.200 / speed
 		period := float64(maxInt(ledCount, 1))
 		if len(topologyPositions(topology, fanOrdinal, ledCount)) == ledCount {
 			period = 17
@@ -905,7 +905,7 @@ func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, 
 }
 
 func compileLiveConcert(p *Profile, topology LEDTopology, deviceOrdinal, ledCount int) *compiledScore {
-	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.66 cached-profile-frame-cadence leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
+	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.67 colorwave-calibrated-propagation leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
 	d := p.LinkDevice()
 	if d == nil || len(d.Channels) == 0 {
 		return &compiledScore{unsupported: []string{"LINK device entry missing"}}
@@ -1440,13 +1440,15 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		// The discrete iCUE speed level changes progression through the LED route,
 		// not output FPS. Use the serialized duration as the command lifetime when
 		// present (the controlled RX test stores 1000 ms), while progression is a
-		// continuous route clock. The reference speed=2 advances one LED about
-		// every 200 ms; slow/fast scale progression, not frame cadence.
+		// continuous route clock. RX/iCUE timing calibration puts the reference speed=2 at about
+		// 100 ms per route position (roughly 1.7 s across the 17-position LINK
+		// route). Slow/Normal/Fast retain the authored 1/2/3 relationship; only
+		// the ColorWave base propagation rate is calibrated here.
 		lifetime := number(l.Parameters["duration"], 1000) / 1000
 		if lifetime <= 0 {
 			lifetime = 1
 		}
-		stepSeconds := 0.4 / speed
+		stepSeconds := 0.2 / speed
 		if stepSeconds < 0.02 {
 			stepSeconds = 0.02
 		}
