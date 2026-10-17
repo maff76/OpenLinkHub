@@ -2854,8 +2854,22 @@ func icueProfileWorkspace(w http.ResponseWriter, r *http.Request) {
 			}).Info("iCUE editor API layer")
 		}
 		w.Header().Set("Content-Type", "application/json")
+		const editorBackendVersion = "v12.4.74t"
+		// Keep the legacy top-level fields for compatibility, but also expose one
+		// explicit editor envelope. The workspace consumes this envelope first so
+		// authored layers and their canonical decoded counterparts cannot silently
+		// drift onto different response paths.
+		editorModel := map[string]interface{}{
+			"version": editorBackendVersion,
+			"layers":  decodedLayers,
+			"trace":   editorTrace,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-OpenLinkHub-ICUE-Editor", editorBackendVersion)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"key": key, "fileName": filepath.Base(path), "profile": profile,
+			"editorBackendVersion":      editorBackendVersion,
+			"editor":                    editorModel,
 			"lightingLinkLayers":        profile.LightingLinkLayers,
 			"decodedLightingLinkLayers": decodedLayers,
 			"editorTrace":               editorTrace,
