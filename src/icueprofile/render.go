@@ -4,6 +4,7 @@ import (
 	"log"
 	"math"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +21,16 @@ type LEDPatch struct {
 	Active   bool
 	Color    RGB
 	Strength float64
+	Time     float64 // effect timeline timestamp; <0 means current renderer time
+}
+
+type LEDCommand struct {
+	Time       float64
+	LED        int
+	Color      RGB
+	Strength   float64
+	LayerIndex int
+	Effect     string
 }
 
 // persistentLEDState is the experimental v12.4.47 physical-LED state model.
@@ -109,7 +120,7 @@ func edgeTriggeredPatches(deviceOrdinal, ledCount int, started time.Time, layerI
 			// continuous fades alive while suppressing repeated identical commands.
 			cmd := applyPatch(RGB{}, cur)
 			if !prev.active[i] || !rgbCommandNear(prev.color[i], cmd, 0.5) {
-				out[i] = LEDPatch{Active: true, Color: cmd, Strength: 1}
+				out[i] = LEDPatch{Active: true, Color: cmd, Strength: 1, Time: -1}
 			}
 			prev.active[i] = true
 			prev.color[i] = cmd
@@ -134,7 +145,7 @@ func renderLayerPatches(l Layer, fanOrdinal, n int, elapsed float64, spatial []f
 		if strength > 1 {
 			strength = 1
 		}
-		patches[i] = LEDPatch{Active: true, Color: colors[i], Strength: strength}
+		patches[i] = LEDPatch{Active: true, Color: colors[i], Strength: strength, Time: -1}
 	}
 	return patches, true
 }
@@ -159,6 +170,7 @@ func gradientStateChangePatches(l Layer, n int, elapsed float64) ([]LEDPatch, bo
 		prevTime = 0
 	}
 	var event *transitionStop
+	eventAt := -1.0
 	startCycle := int(math.Floor(prevTime / dur))
 	endCycle := int(math.Floor(elapsed / dur))
 	for cycle := startCycle; cycle <= endCycle; cycle++ {
@@ -171,6 +183,7 @@ func gradientStateChangePatches(l Layer, n int, elapsed float64) ([]LEDPatch, bo
 			eventTime := base + st.T*dur
 			if eventTime > prevTime && eventTime <= elapsed {
 				event = st
+				eventAt = eventTime
 			}
 		}
 	}
@@ -200,7 +213,7 @@ func gradientStateChangePatches(l Layer, n int, elapsed float64) ([]LEDPatch, bo
 		return patches, true
 	}
 	for i := range patches {
-		patches[i] = LEDPatch{Active: true, Color: event.C, Strength: strength}
+		patches[i] = LEDPatch{Active: true, Color: event.C, Strength: strength, Time: eventAt}
 	}
 	return patches, true
 }
@@ -560,7 +573,7 @@ func selectedAt(l Layer, logicalBase, local int) bool {
 }
 
 // RenderFan renders a fan using a device-specific topology supplied by the LINK layer.
-// Layers are composited bottom-to-top (reverse XML order), matching iCUE's layer stack semantics.
+// Layers emit commands onto a shared timeline; XML order only breaks exact-time ties.
 func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, started time.Time, brightness float64) ([]byte, []string) {
 	// Start from the physical LED state committed by the previous renderer tick.
 	// NO COMMAND therefore means KEEP CURRENT STATE, not reveal/rebuild Static.
@@ -617,6 +630,7 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 	// count as a command.
 	frameEffectCommands := make(map[string]int64)
 	frameEffectLEDSlots := make(map[string]map[int]struct{})
+	commandQueue := make([]LEDCommand, 0, ledCount*2)
 	// v12.4.40 global compositor A/B: use the same authored-alpha source-over
 	// rule for every lighting layer. The previous screen blend for later AllLeds
 	// effects could manufacture bright/cyan colours that are not present in any
@@ -733,17 +747,13 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 			if a > 0.000001 && (math.Abs(colors[i].R) > 0.5 || math.Abs(colors[i].G) > 0.5 || math.Abs(colors[i].B) > 0.5) {
 				contribution.nonBlackOutput++
 			}
-			before := out[i]
-			// Command resolver. Alpha zero is NO COMMAND, so the lower/base state
-			// remains untouched. Any active command wins this LED at this stack
-			// level. Partial alpha is retained for effects whose command itself
-			// fades (Rain/Breathe); authored opaque black remains an explicit OFF.
 			if patches[i].Active {
-				out[i] = applyPatch(out[i], patches[i])
-			}
-			if math.Abs(out[i].R-before.R) > 0.5 || math.Abs(out[i].G-before.G) > 0.5 || math.Abs(out[i].B-before.B) > 0.5 {
+				at := patches[i].Time
+				if at < 0 {
+					at = elapsed
+				}
+				commandQueue = append(commandQueue, LEDCommand{Time: at, LED: i, Color: patches[i].Color, Strength: patches[i].Strength, LayerIndex: li, Effect: l.Effect})
 				contribution.changed++
-				contribution.post[i] = out[i]
 				if gradientCrossed > 0 {
 					changedThisLayer++
 				}
@@ -758,6 +768,31 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 			outputDiag.Unlock()
 		}
 	}
+	// v12.4.51 shared timeline: execute every emitted command chronologically.
+	// For exact-time ties, XML index 0 (topmost iCUE layer) wins by executing last.
+	sort.SliceStable(commandQueue, func(i, j int) bool {
+		if math.Abs(commandQueue[i].Time-commandQueue[j].Time) > 0.0000005 {
+			return commandQueue[i].Time < commandQueue[j].Time
+		}
+		return commandQueue[i].LayerIndex > commandQueue[j].LayerIndex
+	})
+	exactTies := 0
+	for qi, cmd := range commandQueue {
+		if cmd.LED < 0 || cmd.LED >= len(out) {
+			continue
+		}
+		if qi > 0 {
+			prev := commandQueue[qi-1]
+			if prev.LED == cmd.LED && math.Abs(prev.Time-cmd.Time) <= 0.0000005 {
+				exactTies++
+			}
+		}
+		out[cmd.LED] = applyPatch(out[cmd.LED], LEDPatch{Active: true, Color: cmd.Color, Strength: cmd.Strength})
+	}
+	if deviceOrdinal == 0 && len(commandQueue) > 0 {
+		log.Printf("iCUE timeline queue audit: elapsed=%.6f queuedCommands=%d exactTimestampSameLEDTies=%d", elapsed, len(commandQueue), exactTies)
+	}
+
 	// Aggregate command clashes once per rendered frame and report once per
 	// second. This tests the state-machine hypothesis directly: sparse clash
 	// rates support independent timed LED commands; heavy clashes argue against
