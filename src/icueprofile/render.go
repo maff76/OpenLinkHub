@@ -87,6 +87,66 @@ func renderLayerPatches(l Layer, fanOrdinal, n int, elapsed float64, spatial []f
 	return patches, true
 }
 
+// gradientStateChangePatches converts an authored GradientLighting transition
+// into explicit LED state-change commands. Between authored stop crossings the
+// gradient issues NO COMMAND, so the physical LED retains whatever state was
+// last committed by any layer. This deliberately does not change the authored
+// duration, stop positions, colours, or profile clock.
+func gradientStateChangePatches(l Layer, n int, elapsed float64) ([]LEDPatch, bool) {
+	stops := transitionStops(l)
+	if len(stops) < 2 {
+		return nil, false
+	}
+	dur := number(l.Parameters["duration"], 1000) / 1000
+	if dur <= 0 {
+		dur = 1
+	}
+	const frameWindow = 0.025
+	prev := elapsed - frameWindow
+	if prev < 0 {
+		prev = 0
+	}
+	var event *transitionStop
+	startCycle := int(math.Floor(prev / dur))
+	endCycle := int(math.Floor(elapsed / dur))
+	for cycle := startCycle; cycle <= endCycle; cycle++ {
+		base := float64(cycle) * dur
+		for si := range stops {
+			st := &stops[si]
+			// A terminal 1.0 stop is the next cycle's 0.0 boundary.
+			if si == len(stops)-1 && st.T >= 0.999999 {
+				continue
+			}
+			eventTime := base + st.T*dur
+			if eventTime > prev && eventTime <= elapsed {
+				event = st // if several cross in one frame, commit the latest authored state
+			}
+		}
+	}
+	patches := make([]LEDPatch, n)
+	if event == nil {
+		return patches, true
+	}
+	strength := event.A
+	if strength <= 0.000001 {
+		// Authored alpha zero is no visible command, not an instruction to reveal
+		// or rebuild a lower layer.
+		return patches, true
+	}
+	if strength > 1 {
+		strength = 1
+	}
+	layerOpacity := clamp01(number(l.Parameters["opacity"], 1))
+	strength *= layerOpacity
+	if strength <= 0.000001 {
+		return patches, true
+	}
+	for i := range patches {
+		patches[i] = LEDPatch{Active: true, Color: event.C, Strength: strength}
+	}
+	return patches, true
+}
+
 func applyPatch(dst RGB, patch LEDPatch) RGB {
 	if !patch.Active {
 		return dst
@@ -502,6 +562,16 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 			continue
 		}
 		patches, ok := renderLayerPatches(l, deviceOrdinal, ledCount, elapsed, topologyPositions(topology, deviceOrdinal, ledCount))
+		// v12.4.48 state-command A/B: Gradient selection is only the set of LEDs
+		// the effect may command. It does not repaint those LEDs continuously.
+		// Only an authored transition-stop crossing creates a new command; all
+		// intervening frames retain the LED's previously committed physical state.
+		if strings.EqualFold(l.Effect, "GradientLighting") {
+			if eventPatches, eventOK := gradientStateChangePatches(l, ledCount, elapsed); eventOK {
+				patches = eventPatches
+				ok = true
+			}
+		}
 
 		if !ok {
 			unsupported[l.Effect] = true
