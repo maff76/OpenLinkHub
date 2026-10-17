@@ -974,13 +974,39 @@ func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, 
 }
 
 func compileLiveConcert(p *Profile, topology LEDTopology, deviceOrdinal, ledCount int) *compiledScore {
-	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.74 rain-live-calibration-sliders leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
+	log.Printf("iCUE LIVE CONCERT BUILD: v12.4.74b concrete-led-map-audit leds=%d rendererOrdinal=%d", ledCount, deviceOrdinal)
 	d := p.LinkDevice()
 	if d == nil || len(d.Channels) == 0 {
 		return &compiledScore{unsupported: []string{"LINK device entry missing"}}
 	}
 	layers := p.expandLightingLinks(d.Channels[0].Layers)
 	sourceDeviceCount := sourceQXFanCount(layers, topology)
+	// v12.4.74b diagnostic: prove whether a ConcreteLeds Static mask is
+	// actually identical across QX ordinals before changing any mapping.
+	// This is intentionally observational only: it does not alter selection.
+	if topology != nil && strings.EqualFold(topology.Name(), "QX") {
+		for li, l := range layers {
+			if !l.Enabled || !strings.EqualFold(l.Effect, "StaticLighting") || !strings.EqualFold(l.SelectionMode, "ConcreteLeds") {
+				continue
+			}
+			selected := make([]int, 0, ledCount)
+			logicalIDs := make([]int, 0, ledCount)
+			for local := 0; local < ledCount; local++ {
+				if !selectedWithTopology(l, topology, deviceOrdinal, local, sourceDeviceCount) {
+					continue
+				}
+				selected = append(selected, local)
+				mappedOrdinal := deviceOrdinal
+				if sourceDeviceCount > 0 && deviceOrdinal >= sourceDeviceCount {
+					mappedOrdinal = deviceOrdinal % sourceDeviceCount
+				}
+				if logical, ok := topology.LogicalLED(mappedOrdinal, local); ok {
+					logicalIDs = append(logicalIDs, logical)
+				}
+			}
+			log.Printf("iCUE CONCRETE MAP AUDIT: device=%d xml=%d effect=%s sourceQXFans=%d authoredRefs=%d selectedCount=%d localLEDs=%v logicalLEDs=%v", deviceOrdinal, li, l.Effect, sourceDeviceCount, len(l.LEDs), len(selected), selected, logicalIDs)
+		}
+	}
 	score := &compiledScore{}
 	unsupported := map[string]bool{}
 	for li, l := range layers {
