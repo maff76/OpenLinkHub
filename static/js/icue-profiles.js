@@ -58,6 +58,13 @@ $(function () {
     function hexToRGB(h){return 'rgb('+[1,3,5].map(i=>(parseInt(h.slice(i,i+2),16)/255).toFixed(6).replace(/0+$/,'').replace(/\.$/,'')).join(' ')+')';}
     function authoredParameters(){return (currentLayer&&currentLayer.authoredParameters)||{};} function authoredValue(key){const a=authoredParameters()[key];return a&&a.value!==undefined?a.value:((currentLayer&&currentLayer.parameters)||{})[key];} function profileColor(){return authoredColors()[0]||'#2563eb';}
     let timingCalibration={slow:1.5,fast:0.5},timingApplyTimer=null;
+    let rainMethod='normalized';
+    function syncRainMethodUI(){
+        $('.icue-rain-method').each(function(){const on=$(this).data('method')===rainMethod;$(this).toggleClass('active',on).toggleClass('secondary',!on);});
+        $('#icueRainMethodStatus').text((rainMethod==='native'?'Native Rain':'Normalized Rain')+' · runtime only.');
+    }
+    function loadRainMethod(){return $.getJSON('/api/icue/rain-method').then(r=>{if(r&&r.rain&&r.rain.method)rainMethod=r.rain.method;syncRainMethodUI();});}
+    function applyRainMethod(method){if(method!=='normalized'&&method!=='native')return;$('#icueRainMethodStatus').text('Switching Rain implementation…');$.ajax({url:'/api/icue/rain-method',type:'POST',contentType:'application/json',data:JSON.stringify({method}),success:r=>{rainMethod=(r&&r.rain&&r.rain.method)||method;syncRainMethodUI();},error:x=>{$('#icueRainMethodStatus').text('Rain switch failed.');toast.warning(x.responseText||'Unable to switch Rain implementation');}});}
     function timingScaleFor(speed){return speed===1?timingCalibration.slow:(speed===3?timingCalibration.fast:1.0);}
     function syncTimingCalibrationUI(){const slow=Number(timingCalibration.slow),fast=Number(timingCalibration.fast);$('#icueSlowScale,#icueSlowScaleRange').val(slow);$('#icueFastScale,#icueFastScaleRange').val(fast);updateEffectClock();}
     function loadTimingCalibration(){return $.getJSON('/api/icue/timing-calibration').then(r=>{if(r&&r.timing)timingCalibration={slow:Number(r.timing.slow)||1.5,fast:Number(r.timing.fast)||0.5};syncTimingCalibrationUI();});}
@@ -131,5 +138,6 @@ $(function () {
     $('#icueSlowScaleRange,#icueSlowScale').on('input change',function(){const v=Number(this.value);if(Number.isFinite(v))applyTimingCalibration(v,timingCalibration.fast);});
     $('#icueFastScaleRange,#icueFastScale').on('input change',function(){const v=Number(this.value);if(Number.isFinite(v))applyTimingCalibration(timingCalibration.slow,v);});
     $('#icueTimingReset').on('click',()=>applyTimingCalibration(1.5,0.5));
-    $.when(refreshDevices(),loadTimingCalibration()).always(()=>{refreshProfiles();});
+    $('.icue-rain-method').on('click',function(){applyRainMethod($(this).data('method'));});
+    $.when(refreshDevices(),loadTimingCalibration(),loadRainMethod()).always(()=>{refreshProfiles();});
 });

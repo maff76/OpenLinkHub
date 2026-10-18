@@ -592,6 +592,40 @@ func GetTimingCalibration() TimingCalibration {
 	return TimingCalibration{Slow: timingCalibration.Slow, Fast: timingCalibration.Fast}
 }
 
+// RainMethod selects only the Rain renderer used by imported iCUE profiles.
+// It is runtime-only so A/B testing never mutates the source .cueprofile.
+type RainMethod struct {
+	Method string `json:"method"`
+}
+
+var rainMethod = struct {
+	sync.RWMutex
+	Method string
+}{Method: "normalized"}
+
+func GetRainMethod() RainMethod {
+	rainMethod.RLock()
+	defer rainMethod.RUnlock()
+	return RainMethod{Method: rainMethod.Method}
+}
+
+func SetRainMethod(method string) (RainMethod, error) {
+	method = strings.ToLower(strings.TrimSpace(method))
+	if method != "normalized" && method != "native" {
+		return GetRainMethod(), fmt.Errorf("rain method must be normalized or native")
+	}
+	rainMethod.Lock()
+	rainMethod.Method = method
+	rainMethod.Unlock()
+
+	// Rain keeps transient restore state. Reset the live players when switching so
+	// the two implementations are always compared from a clean state.
+	scorePlayers.Lock()
+	scorePlayers.byRun = make(map[persistentStateKey]*scorePlayerState)
+	scorePlayers.Unlock()
+	return GetRainMethod(), nil
+}
+
 // SetTimingCalibration changes only the runtime experiment. Clearing compiled
 // player state makes the new factors take effect coherently on the next frame.
 func SetTimingCalibration(slow, fast float64) (TimingCalibration, error) {
@@ -752,6 +786,70 @@ func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, 
 
 	switch effect {
 	case "rainlighting":
+		if GetRainMethod().Method == "native" {
+			// Native OpenLinkHub Rain A/B path. This mirrors src/rgb/rain.go's
+			// independent per-channel spawn/lifetime model and discrete speed factors.
+			c1, c2 := effectColors(l, RGB{R: 25, G: 47, B: 9}, RGB{R: 100, G: 169, B: 45})
+			random := boolParam(l.Parameters["random"], false)
+			speedFactor := 1.0
+			switch discreteSpeed(l) {
+			case 1:
+				speedFactor = 0.5
+			case 2:
+				speedFactor = 0.3
+			case 3:
+				speedFactor = 0.1
+			}
+			stepDuration := 0.115 / speedFactor
+			dropDuration := 0.55 / math.Sqrt(speedFactor)
+			spawnChance := 0.18 + (speedFactor-1.0)*0.035
+			if spawnChance < 0 {
+				spawnChance = 0
+			}
+			if spawnChance > 1 {
+				spawnChance = 1
+			}
+			currentSlot := int(math.Floor(elapsed / stepDuration))
+			for i := 0; i < n; i++ {
+				bestIntensity := 0.0
+				bestNorm := 0.0
+				bestSlot := 0
+				for back := 0; back < 6; back++ {
+					slot := currentSlot - back
+					if slot < 0 || hash(slot, (i+1)*10) > spawnChance {
+						continue
+					}
+					jitter := hash(slot, (i+1)*20) * stepDuration
+					age := elapsed - (float64(slot)*stepDuration + jitter)
+					if age < 0 || age > dropDuration {
+						continue
+					}
+					norm := age / dropDuration
+					intensity := math.Pow(1.0-norm, 1.9)
+					intensity *= 0.78 + 0.22*hash(slot, (i+1)*30)
+					if intensity > bestIntensity {
+						bestIntensity, bestNorm, bestSlot = intensity, norm, slot
+					}
+				}
+				if bestIntensity <= 0 {
+					a[i] = 0
+					continue
+				}
+				if random {
+					h := hash(bestSlot, (i+1)*41)
+					sat := 0.85 + 0.15*hash(bestSlot, (i+1)*42)
+					val := 0.90 + 0.10*hash(bestSlot, (i+1)*43)
+					c[i] = hsv(h, sat, val)
+				} else if bestNorm < 0.5 {
+					c[i] = c1
+				} else {
+					c[i] = c2
+				}
+				a[i] *= bestIntensity
+			}
+			applyLayerOpacity(l, a)
+			return c, a, true
+		}
 		logBase("normalized-rain-events", "shared-clock; 0.100 effect-clock event step; periodic spatial wrap; transient restore")
 	case "colorwavelighting":
 		logBase("normalized-color-wave", "shared-clock; continuous pass counter; direction/spatial route remain effect-local")

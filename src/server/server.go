@@ -2781,6 +2781,33 @@ func uploadICUEProfile(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// icueRainMethod exposes only the runtime Rain A/B selector. It is deliberately
+// independent of timing calibration and never modifies imported profiles.
+func icueRainMethod(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	switch r.Method {
+	case http.MethodGet:
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": 1, "rain": icueprofile.GetRainMethod(), "persistent": false})
+	case http.MethodPost:
+		var req struct {
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
+			http.Error(w, "Unable to read Rain method: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		method, err := icueprofile.SetRainMethod(req.Method)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": 1, "rain": method, "persistent": false})
+	default:
+		w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 // icueTimingCalibration exposes the runtime-only Slow/Fast duration factors.
 // It is intentionally non-persistent: restart restores the experimental
 // 1.5 / 1.0 / 0.5 baseline and imported profiles are never modified.
@@ -2831,7 +2858,7 @@ func icueProfileWorkspace(w http.ResponseWriter, r *http.Request) {
 		// canonical mirror of the same layers.
 		authoredLayers := icueprofile.EnrichAuthoredSourceColors(profile.LightingLinkLayers)
 
-		const editorBackendVersion = "v12.4.74z6"
+		const editorBackendVersion = "v12.4.74z7"
 		editorModel := map[string]interface{}{
 			"version": editorBackendVersion,
 			"source":  "authored-cueprofile",
@@ -3095,6 +3122,7 @@ func setRoutes() http.Handler {
 	handleFunc(r, "/api/icue/devices", http.MethodGet, getICUEEditorDevices)
 	r.HandleFunc("/api/icue/profile", icueProfileWorkspace)
 	r.HandleFunc("/api/icue/timing-calibration", icueTimingCalibration)
+	r.HandleFunc("/api/icue/rain-method", icueRainMethod)
 	handleFunc(r, "/api/backup", http.MethodGet, backup.PerformBackup)
 	handleFunc(r, "/api/position/", http.MethodGet, getPositionData)
 	handleFunc(r, "/api/headset/getEqualizers/", http.MethodGet, getEqualizers)

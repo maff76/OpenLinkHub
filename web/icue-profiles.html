@@ -132,6 +132,15 @@
                                 </div>
                                 <div class="d-flex justify-content-between gap-2 flex-wrap align-items-center mt-3"><span id="icueTimingCalibrationStatus" class="sentence-text">Runtime calibration only · Normal stays fixed at 1.0×.</span><button type="button" class="system-button secondary" id="icueTimingReset">Reset 1.5 / 1.0 / 0.5</button></div>
                                 <div class="sentence-text mt-2"><small>Move Slow or Fast while comparing the same effect in iCUE. Changes apply globally to every animated effect immediately and are discarded on restart.</small></div>
+                                <hr class="my-3">
+                                <div class="d-flex justify-content-between gap-3 flex-wrap align-items-center">
+                                    <div><strong>Rain implementation</strong><div class="sentence-text"><small>A/B test only · changes Rain and resets Rain transient state.</small></div></div>
+                                    <div class="btn-group" role="group" aria-label="Rain implementation">
+                                        <button type="button" class="system-button icue-rain-method active" data-method="normalized">Normalized Rain</button>
+                                        <button type="button" class="system-button secondary icue-rain-method" data-method="native">Native Rain</button>
+                                    </div>
+                                </div>
+                                <div id="icueRainMethodStatus" class="sentence-text mt-2">Normalized Rain · runtime only.</div>
                             </div>
                         </div>
                     </div>
