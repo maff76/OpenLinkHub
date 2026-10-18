@@ -2832,34 +2832,24 @@ func icueProfileWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
+		// The workspace is an authored-profile editor. Build its canonical model
+		// directly from the enriched source layers rather than round-tripping
+		// through compiled playback. Playback keeps its independent compile path.
 		authoredLayers := icueprofile.EnrichAuthoredSourceColors(profile.LightingLinkLayers)
-		decodedLayers := icueprofile.DecodeEditorProfileLayers(profile)
+		decodedLayers := icueprofile.DecodeEditorLayers(authoredLayers)
 		editorTrace := make([]map[string]interface{}, 0, len(decodedLayers))
 		for i, layer := range decodedLayers {
-			colors := make([]string, 0, len(layer.Colors))
-			for _, color := range layer.Colors {
-				colors = append(colors, color.Hex)
+			sourceColors := []string(nil)
+			if i < len(authoredLayers) {
+				sourceColors = append(sourceColors, authoredLayers[i].SourceColors...)
 			}
-			primary := ""
-			if layer.PrimaryColor != nil {
-				primary = layer.PrimaryColor.Hex
-			}
-			trace := map[string]interface{}{
+			editorTrace = append(editorTrace, map[string]interface{}{
 				"index": i, "name": layer.Name, "effect": layer.Effect,
-				"colors": colors, "primaryColor": primary, "source": "compiled-authored-layer",
-			}
-			editorTrace = append(editorTrace, trace)
-			logger.Log(logger.Fields{
-				"profile": profile.Name, "layer": i, "name": layer.Name, "effect": layer.Effect,
-				"colors": colors, "primaryColor": primary, "source": "compiled-authored-layer",
-			}).Info("iCUE editor API layer")
+				"sourceColors": sourceColors, "source": "authored-cueprofile",
+			})
 		}
-		w.Header().Set("Content-Type", "application/json")
-		const editorBackendVersion = "v12.4.74v"
-		// Keep the legacy top-level fields for compatibility, but also expose one
-		// explicit editor envelope. The workspace consumes this envelope first so
-		// authored layers and their canonical decoded counterparts cannot silently
-		// drift onto different response paths.
+
+		const editorBackendVersion = "v12.4.74w"
 		editorModel := map[string]interface{}{
 			"version": editorBackendVersion,
 			"layers":  decodedLayers,
@@ -2875,6 +2865,7 @@ func icueProfileWorkspace(w http.ResponseWriter, r *http.Request) {
 			"decodedLightingLinkLayers": decodedLayers,
 			"editorTrace":               editorTrace,
 		})
+
 	case http.MethodPost:
 		var edit icueprofile.RuntimeLayerEdit
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&edit); err != nil {

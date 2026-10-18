@@ -2214,20 +2214,44 @@ func EnrichAuthoredSourceColors(layers []Layer) []Layer {
 	out := make([]Layer, len(layers))
 	copy(out, layers)
 	for i := range out {
+		// Always rebuild the derived list from the preserved source leaves. This
+		// keeps reloads/idempotent enrichment from accumulating stale colours.
+		out[i].SourceColors = nil
 		seen := make(map[string]bool)
 		for _, raw := range out[i].RawColorValues {
-			c, ok := parseColor(raw)
+			c, ok := parseAuthoredColorLeaf(raw)
 			if !ok {
 				continue
 			}
 			hex := editorColor(c).Hex
-			if !seen[hex] {
-				seen[hex] = true
+			key := strings.ToLower(hex)
+			if !seen[key] {
+				seen[key] = true
 				out[i].SourceColors = append(out[i].SourceColors, hex)
 			}
 		}
 	}
 	return out
+}
+
+// parseAuthoredColorLeaf decodes one exact leaf captured from the authored
+// .cueprofile. iCUE commonly stores these as "color=#AARRGGBB" alongside
+// non-colour leaves such as "time=0". Keep this deliberately narrow: only a
+// colour-labelled leaf or a bare colour value is accepted, so timing/numeric
+// metadata can never be mistaken for a colour.
+func parseAuthoredColorLeaf(raw string) (RGB, bool) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return RGB{}, false
+	}
+	if eq := strings.Index(s, "="); eq >= 0 {
+		key := strings.ToLower(strings.TrimSpace(s[:eq]))
+		if key != "color" && key != "colour" && key != "first" && key != "second" && key != "value" {
+			return RGB{}, false
+		}
+		s = strings.TrimSpace(s[eq+1:])
+	}
+	return parseColor(s)
 }
 
 // EditorColor is the canonical colour representation exposed by the iCUE
