@@ -109,15 +109,21 @@
                         </div>
 
                         <div class="card system-card mt-4"><div class="card-header text-center">Profile Output</div><div class="card-body"><div class="d-flex gap-2 flex-wrap align-items-end"><div class="flex-grow-1"><label class="sentence-text" for="icueSaveName">New profile name</label><input id="icueSaveName" class="form-control system-input" type="text" placeholder="Profile-EDIT-001"></div><button type="button" class="system-button" id="icueSaveAs" disabled title="Writer validation pending">Save As New</button><button type="button" class="system-button secondary" id="icueExport" disabled title="Writer validation pending">Export</button><button type="button" class="system-button secondary" id="icueCreateNew" disabled title="Writer validation pending">Create New</button></div><div class="sentence-text mt-2"><small>The source profile is immutable. Save/Create are intentionally locked until the cueprofile writer can preserve unknown Corsair XML without loss; live editing and hardware/effect calibration are active now.</small></div></div></div>
-
                         <div class="card system-card mt-4">
-                            <div class="card-header text-center">Rain Timing Calibration</div>
-                            <div class="card-body"><div class="settings-list">
-                                <div class="settings-row"><span class="settings-label">Slow <strong id="icueRainSlowValue">200 ms</strong></span><input type="range" id="icueRainSlow" min="20" max="1000" step="5" value="200" style="width:55%"></div>
-                                <div class="settings-row"><span class="settings-label">Normal <strong id="icueRainNormalValue">100 ms</strong></span><input type="range" id="icueRainNormal" min="20" max="1000" step="5" value="100" style="width:55%"></div>
-                                <div class="settings-row"><span class="settings-label">Fast <strong id="icueRainFastValue">67 ms</strong></span><input type="range" id="icueRainFast" min="20" max="1000" step="5" value="67" style="width:55%"></div>
-                                <div id="icueRainCalibrationStatus" class="sentence-text">Temporary renderer calibration; no profile reload required.</div>
-                            </div></div>
+                            <div class="card-header text-center">Effect Clock</div>
+                            <div class="card-body">
+                                <div class="sentence-text mb-2">All animated effects use the same normalized 0→1 phase. Authored duration is scaled by the discrete Slow / Normal / Fast preset; effect-specific values then shape spatial travel, tail, width, direction and colour.</div>
+                                <div class="settings-list">
+                                    <div class="settings-row"><span class="settings-label">Layer</span><strong id="icueClockLayer">—</strong></div>
+                                    <div class="settings-row"><span class="settings-label">Authored duration</span><strong id="icueClockDuration">1000 ms</strong></div>
+                                    <div class="settings-row"><span class="settings-label">Speed preset</span><strong id="icueClockSpeed">Normal (2)</strong></div>
+                                    <div class="settings-row"><span class="settings-label">Duration scale</span><strong id="icueClockScale">1.0×</strong></div>
+                                    <div class="settings-row"><span class="settings-label">Effective window</span><strong id="icueClockWindow">1000 ms</strong></div>
+                                </div>
+                                <div class="sentence-text mt-2"><small>Slow = 1.5× duration · Normal = 1.0× · Fast = 0.5×. Renderer cadence is independent of this clock.</small></div>
+                            </div>
+                        </div>
+                    </div>
                         </div>
                     </div>
                 </div>

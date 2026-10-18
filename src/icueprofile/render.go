@@ -62,63 +62,6 @@ var persistentLEDStates = struct {
 	byRun map[persistentStateKey]*persistentLEDState
 }{byRun: make(map[persistentStateKey]*persistentLEDState)}
 
-// RainCalibration exposes temporary, in-memory timing controls used to match
-// iCUE's Slow/Normal/Fast Rain presets on real hardware. Values are spawn
-// intervals in milliseconds. Event lifetime scales with the selected interval
-// so changing timing does not also change Rain density/overlap.
-type RainCalibration struct {
-	SlowMS   float64 `json:"slowMs"`
-	NormalMS float64 `json:"normalMs"`
-	FastMS   float64 `json:"fastMs"`
-}
-
-var rainCalibration = struct {
-	sync.RWMutex
-	values RainCalibration
-}{values: RainCalibration{SlowMS: 200, NormalMS: 100, FastMS: 200.0 / 3.0}}
-
-func GetRainCalibration() RainCalibration {
-	rainCalibration.RLock()
-	defer rainCalibration.RUnlock()
-	return rainCalibration.values
-}
-
-func SetRainCalibration(v RainCalibration) RainCalibration {
-	// Keep the diagnostic control inside a useful/safe calibration range.
-	clamp := func(x, fallback float64) float64 {
-		if x <= 0 {
-			return fallback
-		}
-		if x < 20 {
-			return 20
-		}
-		if x > 1000 {
-			return 1000
-		}
-		return x
-	}
-	current := GetRainCalibration()
-	v.SlowMS = clamp(v.SlowMS, current.SlowMS)
-	v.NormalMS = clamp(v.NormalMS, current.NormalMS)
-	v.FastMS = clamp(v.FastMS, current.FastMS)
-	rainCalibration.Lock()
-	rainCalibration.values = v
-	rainCalibration.Unlock()
-	return v
-}
-
-func rainStepDuration(speed float64) float64 {
-	v := GetRainCalibration()
-	switch {
-	case speed < 1.5:
-		return v.SlowMS / 1000.0
-	case speed < 2.5:
-		return v.NormalMS / 1000.0
-	default:
-		return v.FastMS / 1000.0
-	}
-}
-
 func persistentKey(deviceOrdinal, ledCount int, started time.Time) persistentStateKey {
 	return persistentStateKey{started: started.UnixNano(), deviceOrdinal: deviceOrdinal, ledCount: ledCount}
 }
@@ -189,45 +132,6 @@ func edgeTriggeredPatches(deviceOrdinal, ledCount int, started time.Time, layerI
 	return out
 }
 
-// colorWaveCommandTime returns the exact profile-timeline time at which the
-// travelling ColorWave front most recently reached this LED.  v12.4.52 uses
-// this instead of stamping the command with the renderer frame time, so a
-// ColorWave note can correctly interrupt Rain/Wave/Gradient notes inside the
-// same hardware-output interval.
-func colorWaveCommandTime(l Layer, led, n int, elapsed float64, spatial []float64) (float64, bool) {
-	speed := number(l.Parameters["speed"], 2)
-	if speed < 1 {
-		speed = 1
-	}
-	if speed > 3 {
-		speed = 3
-	}
-	stepSeconds := 0.2 / speed
-	if stepSeconds < 0.02 {
-		stepSeconds = 0.02
-	}
-	direction := int(number(l.Parameters["direction"], 2))
-	coord := float64(led)
-	period := float64(maxInt(n, 1))
-	if len(spatial) == n {
-		coord = spatial[led]
-		period = 17.0
-	}
-	routeCoord := coord
-	if direction == 2 {
-		routeCoord = wrapPeriodic(period-coord, period)
-	}
-	phase := stringPhase(l.ID) * period
-	front := elapsed/stepSeconds + phase
-	cycle := math.Floor((front - routeCoord) / period)
-	frontPos := routeCoord + cycle*period
-	eventTime := (frontPos - phase) * stepSeconds
-	if eventTime < -0.000001 || eventTime > elapsed+0.000001 {
-		return 0, false
-	}
-	return eventTime, true
-}
-
 // rainCommandTime maps Rain's continuously fading drop state onto a canonical
 // effect timeline rather than the wall-clock instant RenderFan happened to run.
 // The 20 ms quantum is only a timestamp grid for the already-validated v12.4.38
@@ -256,74 +160,6 @@ func renderLayerPatches(l Layer, fanOrdinal, n int, elapsed float64, spatial []f
 			strength = 1
 		}
 		patches[i] = LEDPatch{Active: true, Color: colors[i], Strength: strength, Time: -1}
-	}
-	return patches, true
-}
-
-// gradientStateChangePatches converts an authored GradientLighting transition
-// into explicit LED state-change commands. Between authored stop crossings the
-// gradient issues NO COMMAND, so the physical LED retains whatever state was
-// last committed by any layer. This deliberately does not change the authored
-// duration, stop positions, colours, or profile clock.
-func gradientStateChangePatches(l Layer, n int, elapsed float64) ([]LEDPatch, bool) {
-	stops := transitionStops(l)
-	if len(stops) < 2 {
-		return nil, false
-	}
-	dur := number(l.Parameters["duration"], 1000) / 1000
-	if dur <= 0 {
-		dur = 1
-	}
-	const frameWindow = 0.025
-	prevTime := elapsed - frameWindow
-	if prevTime < 0 {
-		prevTime = 0
-	}
-	var event *transitionStop
-	eventAt := -1.0
-	startCycle := int(math.Floor(prevTime / dur))
-	endCycle := int(math.Floor(elapsed / dur))
-	for cycle := startCycle; cycle <= endCycle; cycle++ {
-		base := float64(cycle) * dur
-		for si := range stops {
-			st := &stops[si]
-			if si == len(stops)-1 && st.T >= 0.999999 {
-				continue
-			}
-			eventTime := base + st.T*dur
-			if eventTime > prevTime && eventTime <= elapsed {
-				event = st
-				eventAt = eventTime
-			}
-		}
-	}
-	patches := make([]LEDPatch, n)
-	if event == nil {
-		return patches, true
-	}
-	strength := event.A
-	if strength <= 0.000001 {
-		return patches, true
-	}
-	if strength > 1 {
-		strength = 1
-	}
-	layerOpacity := number(l.Parameters["opacity"], 1)
-	if layerOpacity > 1 {
-		layerOpacity /= 255
-	}
-	if layerOpacity < 0 {
-		layerOpacity = 0
-	}
-	if layerOpacity > 1 {
-		layerOpacity = 1
-	}
-	strength *= layerOpacity
-	if strength <= 0.000001 {
-		return patches, true
-	}
-	for i := range patches {
-		patches[i] = LEDPatch{Active: true, Color: event.C, Strength: strength, Time: eventAt}
 	}
 	return patches, true
 }
@@ -790,7 +626,7 @@ func waveTrackRepeat(l Layer, topology LEDTopology, fanOrdinal, ledCount int) fl
 	return r
 }
 
-// trackRepeatDuration uses the v12.4.74z1 common timing experiment for every
+// trackRepeatDuration uses the common normalized timing experiment for every
 // animated effect: authored duration defines the base window and the discrete
 // speed preset applies a symmetric duration scale around Normal.
 func trackRepeatDuration(l Layer, topology LEDTopology, fanOrdinal, ledCount int) (float64, bool) {
@@ -798,7 +634,7 @@ func trackRepeatDuration(l Layer, topology LEDTopology, fanOrdinal, ledCount int
 		return 0, true
 	}
 
-	// v12.4.74z1 timing experiment: every animated performer shares the same
+	// Every animated performer shares the same
 	// authored duration + discrete duration scale. The renderer still owns each
 	// effect's spatial/shape semantics; this value only says how long one authored
 	// effect-second takes in wall time.
@@ -857,67 +693,39 @@ func recordLayerTrack(l Layer, li, fanOrdinal, ledCount int, duration float64, t
 func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, ledCount int, repeat float64, oneShot bool) {
 	effect := strings.ToLower(l.Effect)
 	serialized := layerScoreDuration(l)
+	window := effectWindowSeconds(l)
+	speedPreset := discreteSpeed(l)
 	logBase := func(model, timing string) {
-		log.Printf("iCUE TRACK EFFECT: leds=%d xml=%d effect=%s repeat=%.6fs oneShot=%t serializedDuration=%.6fs model=%s timing=%s", ledCount, li, l.Effect, repeat, oneShot, serialized, model, timing)
+		log.Printf("iCUE TRACK EFFECT: leds=%d xml=%d effect=%s repeat=%.6fs oneShot=%t serializedDuration=%.6fs effectiveWindow=%.6fs speedPreset=%.0f model=%s timing=%s", ledCount, li, l.Effect, repeat, oneShot, serialized, window, speedPreset, model, timing)
 	}
+	if effect == "staticlighting" {
+		logBase("static-opening-state", "profile-start-only; holds-until-overwritten")
+		return
+	}
+
+	// All animated effects now share one normalized timebase:
+	// authored duration -> Slow/Normal/Fast duration scale -> effective window
+	// -> normalized phase. Effect-specific parameters only shape spatial travel,
+	// colour, width, tail and direction; they do not create another wall clock.
+	log.Printf("iCUE EFFECT CLOCK: leds=%d xml=%d effect=%s authoredDuration=%.6fs speedPreset=%.0f durationScale=%.3f effectiveWindow=%.6fs phaseModel=normalized-0..1", ledCount, li, l.Effect, serialized, speedPreset, effectDurationScale(l), window)
+
 	switch effect {
-	case "staticlighting":
-		logBase("conductor-opening-state", "profile-start-only; never-repeats-with-other-tracks; holds-until-overwritten")
-	case "gradientlighting":
-		stops := transitionStops(l)
-		log.Printf("iCUE TRACK TIMING: leds=%d xml=%d effect=%s stops=%d phrase=%.6fs interpolation=smooth evaluation=LIVE model=guide-gradient", ledCount, li, l.Effect, len(stops), repeat)
-		logBase("guide-gradient", "lighting-time=phrase-axis; nodes=control-points; smooth-live-interpolation; no-pre-recorded-grid")
 	case "rainlighting":
-		speed := number(l.Parameters["speed"], 1)
-		if speed <= 0 {
-			speed = 1
-		}
-		log.Printf("iCUE TRACK TIMING: leds=%d xml=%d effect=%s speed=%.3f spawnInterval=%.6fs eventLifetime=%.6fs phrase=%.6fs model=rain-impact-dispersal-v12.4.73", ledCount, li, l.Effect, speed, 0.200/speed, (0.55*(0.200/0.115))/speed, repeat)
-		logBase("rain-impact-dispersal-v12.4.73", "same-density-speed-cycle; colour1=impact; colour2=dispersal; transient-restore; serialized-duration-not-repeat")
+		logBase("normalized-rain-events", "shared-clock; 0.100 effect-clock event step; periodic spatial wrap; transient restore")
 	case "colorwavelighting":
-		speed := number(l.Parameters["speed"], 2)
-		if speed < 1 {
-			speed = 1
-		}
-		if speed > 3 {
-			speed = 3
-		}
-		step := 0.200 / speed
-		period := float64(maxInt(ledCount, 1))
-		if len(topologyPositions(topology, fanOrdinal, ledCount)) == ledCount {
-			period = 17
-		}
-		launch := serialized
-		if launch <= 0 {
-			launch = 1
-		}
-		log.Printf("iCUE LIVE PHRASE: leds=%d xml=%d effect=%s speed=%.3f travelStep=%.6fs traversal=%.6fs phrase=%.6fs model=guide-speed-live-phrase", ledCount, li, l.Effect, speed, step, step*period, repeat)
-		_ = launch
-		logBase("guide-speed-live-phrase", "lighting-time=independent-repeat-period; speed=propagation; no-master-loop")
+		logBase("normalized-color-wave", "shared-clock; continuous pass counter; direction/spatial route remain effect-local")
 	case "wavelighting":
 		velocity := number(l.Parameters["velocity"], 100)
-		if velocity == 0 {
-			velocity = 100
-		}
 		tail := number(l.Parameters["tailLength"], 4)
-		if tail <= 0 {
-			tail = 1
-		}
-		log.Printf("iCUE LIVE PHRASE: leds=%d xml=%d effect=%s velocity=%.3f tail=%.3f phrase=%.6fs serializedDuration=%.6fs model=guide-velocity-tail-wave", ledCount, li, l.Effect, velocity, tail, repeat, serialized)
-		logBase("guide-velocity-tail-wave", "lighting-time=independent-repeat-period; velocity=travel-speed; tail=wave-tail; no-master-loop")
+		log.Printf("iCUE EFFECT GEOMETRY: leds=%d xml=%d effect=%s velocity=%.3f velocityScale=%.3f tail=%.3f", ledCount, li, l.Effect, velocity, math.Abs(velocity)/100.0, tail)
+		logBase("normalized-wave", "shared-phase; velocity scales spatial travel; tail shapes falloff")
 	case "ripplelighting":
 		velocity := number(l.Parameters["velocity"], 100)
-		if velocity == 0 {
-			velocity = 100
-		}
 		tail := number(l.Parameters["tailLength"], 4)
-		if tail <= 0 {
-			tail = 1
-		}
-		log.Printf("iCUE LIVE PHRASE: leds=%d xml=%d effect=%s velocity=%.3f tail=%.3f phrase=%.6fs model=guide-ripple-probe", ledCount, li, l.Effect, velocity, tail, repeat)
-		logBase("guide-ripple-probe", "lighting-time=independent-repeat-period; velocity=ripple-travel; tail=ripple-tail; EXPERIMENTAL")
+		log.Printf("iCUE EFFECT GEOMETRY: leds=%d xml=%d effect=%s velocity=%.3f velocityScale=%.3f tail=%.3f", ledCount, li, l.Effect, velocity, math.Abs(velocity)/100.0, tail)
+		logBase("normalized-ripple", "shared-phase; velocity scales radius; tail shapes falloff")
 	default:
-		logBase("independent-track", "live-performer; phrase-repeats-independently; no-pre-recorded-grid; no-master-clock")
+		logBase("normalized-effect-phase", "shared-phase; effect-local geometry/colour only")
 	}
 }
 
@@ -1494,9 +1302,9 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		// rather than changing how much rain exists at once. Scale both the spawn
 		// cadence and event lifetime by the same factor so their overlap ratio stays
 		// constant at Slow/Normal/Fast. The temporary calibration controls supply the cadence for each preset.
-		// 100 ms is the Normal cadence on the common effect clock. The global
-		// Slow/Normal/Fast multiplier turns this into 200/100/66.7 ms wall time,
-		// exactly matching the established Rain calibration defaults.
+		// 100 ms is the event cadence measured in normalized effect-clock time.
+		// With the v12.4.74z duration scale that becomes 150/100/50 ms wall time
+		// at Slow/Normal/Fast for an authored 1000 ms duration.
 		stepDuration := 0.100
 		// Preserve the calibrated overlap/density ratio while speed changes.
 		dropDuration := stepDuration * (0.55 / 0.115)
@@ -1651,10 +1459,8 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		applyLayerOpacity(l, a)
 		return c, a, true
 	case "ripplelighting":
-		// v12.4.63a experimental live Ripple probe. The historical iCUE guide
-		// separates Ripple Velocity and Tail. Treat this layer's elapsed value as
-		// its independent phrase clock; expand from route origin on the 1-D LINK
-		// topology and use the authored transition curve to shape the tail.
+		// Ripple uses the shared normalized phase. Velocity scales spatial travel
+		// while tailLength shapes the falloff; neither creates a second clock.
 		velocity := math.Abs(number(l.Parameters["velocity"], 100))
 		if velocity <= 0.000001 {
 			velocity = 100
@@ -1767,6 +1573,116 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 			col, alpha := sampleTransitionStops(stops, t)
 			c[i] = col
 			a[i] *= alpha
+		}
+		applyLayerOpacity(l, a)
+		return c, a, true
+	case "marqueelighting":
+		// Marquee is a discrete travelling ON/OFF mask. One shared effect window
+		// advances the pattern by one complete route; width controls the number of
+		// neighbouring LEDs that are ON, without creating another timebase.
+		col := layerColor(l, RGB{R: 255, G: 255, B: 255})
+		width := int(math.Round(number(l.Parameters["width"], number(l.Parameters["waveSpread"], 3))))
+		if width < 1 {
+			width = 1
+		}
+		period := float64(maxInt(n, 1))
+		for i := 0; i < n; i++ {
+			coord := float64(i)
+			if len(spatial) == n {
+				coord = spatial[i]
+				period = 17.0
+			}
+			head := phase * period
+			d := wrapPeriodic(head-coord, period)
+			if d >= float64(width) {
+				a[i] = 0
+				continue
+			}
+			c[i] = col
+		}
+		applyLayerOpacity(l, a)
+		return c, a, true
+	case "sequentiallighting":
+		// Sequential is the simplest normalized spatial performer: the shared
+		// phase selects the current route position. Spread/width can extend the ON
+		// window to adjacent LEDs, while direction only reverses route progression.
+		c1, c2 := effectColors(l, layerColor(l, RGB{R: 255, G: 255, B: 255}), RGB{})
+		width := int(math.Round(number(l.Parameters["width"], number(l.Parameters["waveSpread"], 1))))
+		if width < 1 {
+			width = 1
+		}
+		direction := int(number(l.Parameters["direction"], 0))
+		period := float64(maxInt(n, 1))
+		headPhase := phase
+		if direction == 1 || direction == 3 {
+			headPhase = 1 - phase
+		}
+		for i := 0; i < n; i++ {
+			coord := float64(i)
+			if len(spatial) == n {
+				coord = spatial[i]
+				period = 17.0
+			}
+			head := headPhase * period
+			d := wrapPeriodic(head-coord, period)
+			if d >= float64(width) {
+				a[i] = 0
+				continue
+			}
+			if c2 != (RGB{}) && width > 1 {
+				c[i] = mixRGB(c1, c2, d/float64(width))
+			} else {
+				c[i] = c1
+			}
+		}
+		applyLayerOpacity(l, a)
+		return c, a, true
+	case "visorlighting":
+		// Visor sweeps a lit block out and back. Fold the common 0..1 phase into
+		// a 0..1..0 triangle so there is still only one timing calculation.
+		col := layerColor(l, RGB{R: 255, G: 255, B: 255})
+		width := int(math.Round(number(l.Parameters["width"], number(l.Parameters["waveSpread"], 3))))
+		if width < 1 {
+			width = 1
+		}
+		travel := phase * 2
+		if travel > 1 {
+			travel = 2 - travel
+		}
+		period := float64(maxInt(n, 1))
+		for i := 0; i < n; i++ {
+			coord := float64(i)
+			if len(spatial) == n {
+				coord = spatial[i]
+				period = 17.0
+			}
+			head := travel * math.Max(period-1, 1)
+			if math.Abs(coord-head) > float64(width-1)/2.0 {
+				a[i] = 0
+				continue
+			}
+			c[i] = col
+		}
+		applyLayerOpacity(l, a)
+		return c, a, true
+	case "spirallighting":
+		// Spiral uses the same normalized travelling phase as the rainbow spiral,
+		// but interpolates the authored colours across the route instead of hue.
+		c1, c2 := effectColors(l, RGB{R: 255}, RGB{B: 255})
+		clockwise := boolParam(l.Parameters["clockwise"], true)
+		effectPhase := phase
+		if !clockwise {
+			effectPhase = -effectPhase
+		}
+		for i := 0; i < n; i++ {
+			coord := float64(i)
+			span := float64(maxInt(n, 1))
+			if len(spatial) == n {
+				coord = spatial[i]
+				span = 17.0
+			}
+			t := wrapPeriodic(coord/span+effectPhase, 1)
+			c[i] = mixRGB(c1, c2, 0.5-0.5*math.Cos(t*2*math.Pi))
 		}
 		applyLayerOpacity(l, a)
 		return c, a, true

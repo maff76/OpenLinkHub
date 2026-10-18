@@ -2738,41 +2738,6 @@ func getICUEProfiles(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-// icueRainCalibration serves both GET and POST on one route. OpenLinkHub's
-// handleFunc helper registers one ServeMux pattern per call, so registering the
-// same path separately for GET and POST causes net/http to panic at startup.
-func icueRainCalibration(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		getICUERainCalibration(w, r)
-	case http.MethodPost:
-		setICUERainCalibration(w, r)
-	default:
-		w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-	}
-}
-
-// getICUERainCalibration returns the temporary in-memory Rain timing controls.
-func getICUERainCalibration(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(icueprofile.GetRainCalibration())
-}
-
-// setICUERainCalibration updates the temporary Rain timing controls. These are
-// intentionally not persisted: they are diagnostic values used to establish
-// the correct iCUE Slow/Normal/Fast mapping before it is baked into the renderer.
-func setICUERainCalibration(w http.ResponseWriter, r *http.Request) {
-	var values icueprofile.RainCalibration
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&values); err != nil {
-		http.Error(w, "Unable to read Rain calibration values: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	values = icueprofile.SetRainCalibration(values)
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(values)
-}
-
 // uploadICUEProfile validates and stores one Corsair .cueprofile. This stage is
 // parser-only: importing a profile never changes the currently active RGB.
 func uploadICUEProfile(w http.ResponseWriter, r *http.Request) {
@@ -2832,38 +2797,23 @@ func icueProfileWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		// The workspace is an authored-profile editor. Build its canonical model
-		// directly from the enriched source layers rather than round-tripping
-		// through compiled playback. Playback keeps its independent compile path.
+		// The workspace edits the authored profile model directly. Playback keeps
+		// its independent renderer path; the browser no longer needs a decoded/
+		// canonical mirror of the same layers.
 		authoredLayers := icueprofile.EnrichAuthoredSourceColors(profile.LightingLinkLayers)
-		decodedLayers := icueprofile.DecodeEditorLayers(authoredLayers)
-		editorTrace := make([]map[string]interface{}, 0, len(decodedLayers))
-		for i, layer := range decodedLayers {
-			sourceColors := []string(nil)
-			if i < len(authoredLayers) {
-				sourceColors = append(sourceColors, authoredLayers[i].SourceColors...)
-			}
-			editorTrace = append(editorTrace, map[string]interface{}{
-				"index": i, "name": layer.Name, "effect": layer.Effect,
-				"sourceColors": sourceColors, "source": "authored-cueprofile",
-			})
-		}
 
-		const editorBackendVersion = "v12.4.74z2a"
+		const editorBackendVersion = "v12.4.74z4"
 		editorModel := map[string]interface{}{
 			"version": editorBackendVersion,
-			"layers":  decodedLayers,
-			"trace":   editorTrace,
+			"source":  "authored-cueprofile",
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-OpenLinkHub-ICUE-Editor", editorBackendVersion)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"key": key, "fileName": filepath.Base(path), "profile": profile,
-			"editorBackendVersion":      editorBackendVersion,
-			"editor":                    editorModel,
-			"lightingLinkLayers":        authoredLayers,
-			"decodedLightingLinkLayers": decodedLayers,
-			"editorTrace":               editorTrace,
+			"editorBackendVersion": editorBackendVersion,
+			"editor":               editorModel,
+			"lightingLinkLayers":   authoredLayers,
 		})
 
 	case http.MethodPost:
@@ -3115,7 +3065,6 @@ func setRoutes() http.Handler {
 	handleFunc(r, "/api/icue/profiles", http.MethodGet, getICUEProfiles)
 	handleFunc(r, "/api/icue/devices", http.MethodGet, getICUEEditorDevices)
 	r.HandleFunc("/api/icue/profile", icueProfileWorkspace)
-	r.HandleFunc("/api/icue/rain-calibration", icueRainCalibration)
 	handleFunc(r, "/api/backup", http.MethodGet, backup.PerformBackup)
 	handleFunc(r, "/api/position/", http.MethodGet, getPositionData)
 	handleFunc(r, "/api/headset/getEqualizers/", http.MethodGet, getEqualizers)
