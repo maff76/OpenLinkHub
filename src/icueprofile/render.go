@@ -790,88 +790,19 @@ func waveTrackRepeat(l Layer, topology LEDTopology, fanOrdinal, ledCount int) fl
 	return r
 }
 
-// trackRepeatDuration deliberately keeps each effect's phrase clock separate.
-// Serialized duration is used only where the guide/profile semantics support it.
+// trackRepeatDuration uses the v12.4.74z1 common timing experiment for every
+// animated effect: authored duration defines the base window and the discrete
+// speed preset applies a symmetric duration scale around Normal.
 func trackRepeatDuration(l Layer, topology LEDTopology, fanOrdinal, ledCount int) (float64, bool) {
-	effect := strings.ToLower(l.Effect)
-	switch effect {
-	case "staticlighting":
+	if strings.EqualFold(l.Effect, "StaticLighting") {
 		return 0, true
-	case "gradientlighting":
-		d := layerScoreDuration(l)
-		if d <= 0 {
-			d = 1
-		}
-		return d, false
-	case "colorwavelighting":
-		// The captured lighting time is this ColorWave performer's phrase period.
-		// Speed remains the propagation control inside the phrase.
-		d := layerScoreDuration(l)
-		if d <= 0 {
-			d = 1
-		}
-		return d, false
-	case "ripplelighting":
-		d := layerScoreDuration(l)
-		if d <= 0 {
-			d = waveTrackRepeat(l, topology, fanOrdinal, ledCount)
-		}
-		return d, false
-	case "wavelighting":
-		return waveTrackRepeat(l, topology, fanOrdinal, ledCount), false
-	case "rainlighting":
-		// Rain is an event generator, not a duration sweep. Use a deterministic
-		// event phrase long enough to retain the validated v12.4.38 cadence/fade;
-		// serialized duration does not control this repeat.
-		speed := number(l.Parameters["speed"], 1)
-		if speed <= 0 {
-			speed = 1
-		}
-		return 16 * (0.115 / speed), false
-	case "blinklighting", "breathelighting":
-		d := layerScoreDuration(l)
-		if d <= 0 {
-			d = 1
-		}
-		return d, false
-	case "colorshiftlighting", "colorpulselighting", "rainbowlighting", "rainbowwavelighting", "rainbowchannellighting":
-		speed := discreteSpeed(l)
-		return capturedPeriod(l, 4.0/math.Pow(2, speed-1)), false
-	case "spiralrainbowlighting":
-		speed := number(l.Parameters["speed"], 2)
-		if speed <= 0 {
-			speed = 2
-		}
-		return capturedPeriod(l, 2.0*math.Pow(2, 2-speed)), false
-	case "watercolorlighting", "watercolorspectrumlighting":
-		d := layerScoreDuration(l)
-		if d <= 0 {
-			d = 2
-		}
-		return d, false
-	default:
-		d := layerScoreDuration(l)
-		if d <= 0 {
-			d = 1
-		}
-		return d, false
 	}
-}
 
-func appendScoreNote(dst *[]LEDCommand, l Layer, li, led int, at float64, col RGB, strength float64) {
-	if at < -0.0000005 {
-		return
-	}
-	if strength < 0 {
-		strength = 0
-	}
-	if strength > 1 {
-		strength = 1
-	}
-	// One-shot Static notes retain their authored opacity. The opening score is
-	// applied bottom->top at t=0, so opacity reveals the already-established
-	// lower opening state instead of pre-multiplying the colour against black.
-	*dst = append(*dst, LEDCommand{Time: at, LED: led, Color: col, Strength: strength, LayerIndex: li, Effect: l.Effect})
+	// v12.4.74z1 timing experiment: every animated performer shares the same
+	// authored duration + discrete duration scale. The renderer still owns each
+	// effect's spatial/shape semantics; this value only says how long one authored
+	// effect-second takes in wall time.
+	return effectWindowSeconds(l), false
 }
 
 func recordLayerTrack(l Layer, li, fanOrdinal, ledCount int, duration float64, topology LEDTopology, sourceDeviceCount int) ([]LEDCommand, bool) {
@@ -1409,6 +1340,53 @@ func stringPhase(s string) float64 {
 	return float64(h%10000) / 10000.0
 }
 
+// effectDurationScale is the experimental common iCUE timing scale used by
+// v12.4.74z1. The three discrete speed presets are treated as symmetric duration
+// offsets around Normal:
+//
+//	Slow   = 1.5x duration
+//	Normal = 1.0x duration
+//	Fast   = 0.5x duration
+//
+// With an authored duration of 1000 ms this produces 1500 / 1000 / 500 ms.
+// Output cadence remains independent; this only changes progression through the
+// shared effect timebase.
+func effectDurationScale(l Layer) float64 {
+	switch discreteSpeed(l) {
+	case 1:
+		return 1.5
+	case 3:
+		return 0.5
+	default:
+		return 1.0
+	}
+}
+
+func effectWindowSeconds(l Layer) float64 {
+	durationMS := number(l.Parameters["duration"], 1000)
+	if durationMS <= 0 {
+		durationMS = 1000
+	}
+	return (durationMS / 1000.0) * effectDurationScale(l)
+}
+
+// effectClock converts wall-clock seconds into the experimental common iCUE
+// effect clock. One effective window is one effect-second. For duration=1000:
+//
+//	Slow   -> 1.500 s wall time per effect second
+//	Normal -> 1.000 s wall time per effect second
+//	Fast   -> 0.500 s wall time per effect second
+//
+// Effects with no captured duration fall back to 1000 ms. Effect-specific
+// geometry (tail, spread, velocity, direction, etc.) remains independent.
+func effectClock(l Layer, elapsed float64) float64 {
+	window := effectWindowSeconds(l)
+	if window <= 0 {
+		window = 1
+	}
+	return elapsed / window
+}
+
 func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64) ([]RGB, []float64, bool) {
 	if n <= 0 {
 		return []RGB{}, []float64{}, true
@@ -1419,6 +1397,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		a[i] = 1
 	}
 	effect := strings.ToLower(l.Effect)
+	clockElapsed := effectClock(l, elapsed)
 
 	// iCUE serializes execution separately from effect parameters. A layer that
 	// only starts from a key event must not be rendered as a continuously running
@@ -1447,11 +1426,8 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		return c, a, true
 	case "blinklighting":
 		col := layerColor(l, RGB{R: 255, G: 255, B: 255})
-		dur := number(l.Parameters["duration"], 1000) / 1000
-		if dur <= 0 {
-			dur = 1
-		}
-		on := math.Mod(elapsed, dur) < dur/2
+		// Common effect clock: one authored duration is one full blink cycle.
+		on := math.Mod(clockElapsed, 1) < 0.5
 		if on {
 			for i := range c {
 				c[i] = col
@@ -1466,11 +1442,8 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		// iCUE Breathe stores a single authored colour and an exact cycle duration.
 		// Fade the layer alpha 0->1->0 while preserving the authored colour.
 		col := layerColor(l, RGB{R: 255, G: 255, B: 255})
-		dur := number(l.Parameters["duration"], 2000) / 1000
-		if dur <= 0 {
-			dur = 2
-		}
-		pulse := 0.5 - 0.5*math.Cos(elapsed/dur*2*math.Pi)
+		// Common effect clock: authored duration defines the full breathe cycle.
+		pulse := 0.5 - 0.5*math.Cos(clockElapsed*2*math.Pi)
 		for i := range c {
 			c[i] = col
 			a[i] *= pulse
@@ -1485,20 +1458,19 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		// force.  Authored duration is deliberately not used as a spatial sweep
 		// period in this A/B.
 		c1, c2 := effectColors(l, RGB{R: 25, G: 47, B: 9}, RGB{R: 100, G: 169, B: 45})
-		speed := number(l.Parameters["speed"], 1)
-		if speed <= 0 {
-			speed = 1
-		}
 		random := boolParam(l.Parameters["random"], false)
 		direction := int(number(l.Parameters["direction"], 0))
 		// iCUE Rain speed changes how quickly the same-density rain pattern cycles,
 		// rather than changing how much rain exists at once. Scale both the spawn
 		// cadence and event lifetime by the same factor so their overlap ratio stays
 		// constant at Slow/Normal/Fast. The temporary calibration controls supply the cadence for each preset.
-		stepDuration := rainStepDuration(speed)
-		// Preserve the calibrated overlap/density ratio while the timing slider moves.
+		// 100 ms is the Normal cadence on the common effect clock. The global
+		// Slow/Normal/Fast multiplier turns this into 200/100/66.7 ms wall time,
+		// exactly matching the established Rain calibration defaults.
+		stepDuration := 0.100
+		// Preserve the calibrated overlap/density ratio while speed changes.
 		dropDuration := stepDuration * (0.55 / 0.115)
-		currentSlot := int(math.Floor(elapsed / stepDuration))
+		currentSlot := int(math.Floor(clockElapsed / stepDuration))
 		period := float64(maxInt(n, 1))
 		if len(spatial) == n {
 			period = 17.0
@@ -1518,7 +1490,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 					continue
 				}
 				spawnTime := float64(slot) * stepDuration
-				age := elapsed - spawnTime
+				age := clockElapsed - spawnTime
 				if age < 0 || age >= dropDuration {
 					continue
 				}
@@ -1582,13 +1554,6 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		// train return alpha zero (NO COMMAND), allowing lower layers/base to show.
 		// This is deliberately the same architectural lesson that fixed Rain.
 		c1, c2 := effectColors(l, RGB{R: 255}, RGB{B: 255})
-		speed := number(l.Parameters["speed"], 2)
-		if speed < 1 {
-			speed = 1
-		}
-		if speed > 3 {
-			speed = 3
-		}
 		direction := int(number(l.Parameters["direction"], 2))
 		sign := 1.0
 		if direction == 2 {
@@ -1603,11 +1568,11 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		// 100 ms per route position (roughly 1.7 s across the 17-position LINK
 		// route). Slow/Normal/Fast retain the authored 1/2/3 relationship; only
 		// the ColorWave base propagation rate is calibrated here.
-		lifetime := number(l.Parameters["duration"], 1000) / 1000
-		if lifetime <= 0 {
-			lifetime = 1
-		}
-		stepSeconds := 0.2 / speed
+		// The common clock has already applied authored duration and speed. Keep
+		// the proven Normal propagation at 100 ms per route position and a one-
+		// effect-second command lifetime.
+		lifetime := 1.0
+		stepSeconds := 0.100
 		if stepSeconds < 0.02 {
 			stepSeconds = 0.02
 		}
@@ -1631,7 +1596,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 			// the same LEDs and lets the base dominate the rest of the fan. Give each
 			// authored layer a stable route phase while preserving its own clock,
 			// speed and direction.
-			front := elapsed/stepSeconds + stringPhase(l.ID)*period
+			front := clockElapsed/stepSeconds + stringPhase(l.ID)*period
 			cyclesBehind := math.Floor((front - routeCoord) / period)
 			lastPass := routeCoord + cyclesBehind*period
 			age := (front - lastPass) * stepSeconds
@@ -1690,7 +1655,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 			}
 		}
 		span := maxC - minC + 1
-		radius := math.Mod(elapsed*velocity, span+tail)
+		radius := math.Mod(clockElapsed*velocity, span+tail)
 		for i, x := range coords {
 			dist := math.Abs(x - minC)
 			d := radius - dist
@@ -1719,7 +1684,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		// elapsed time at the serialized layer duration: the moving head already
 		// wraps naturally at span+tail below. This A/B deliberately treats
 		// duration as layer metadata rather than a second motion/repeat clock.
-		waveElapsed := elapsed
+		waveElapsed := clockElapsed
 		tail := number(l.Parameters["tailLength"], 4)
 		if tail <= 0 {
 			tail = 1
@@ -1778,9 +1743,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		// optional random flag. Color Shift is a whole-selection transition, not a
 		// spatial wave, so every selected LED receives the same interpolated colour.
 		c1, c2 := effectColors(l, RGB{R: 255}, RGB{B: 255})
-		speed := discreteSpeed(l)
-		period := capturedPeriod(l, 4.0/math.Pow(2, speed-1))
-		t := (math.Sin(elapsed/period*2*math.Pi-math.Pi/2) + 1) / 2
+		t := (math.Sin(clockElapsed*2*math.Pi-math.Pi/2) + 1) / 2
 		col := mixRGB(c1, c2, t)
 		for i := range c {
 			c[i] = col
@@ -1792,9 +1755,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		// Render a smooth A->B->A pulse; unlike Color Shift the midpoint dwells at
 		// peak colour through a cosine intensity curve rather than moving spatially.
 		c1, c2 := effectColors(l, RGB{R: 255}, RGB{B: 255})
-		speed := discreteSpeed(l)
-		period := capturedPeriod(l, 4.0/math.Pow(2, speed-1))
-		pulse := 0.5 - 0.5*math.Cos(elapsed/period*2*math.Pi)
+		pulse := 0.5 - 0.5*math.Cos(clockElapsed*2*math.Pi)
 		col := mixRGB(c1, c2, pulse)
 		for i := range c {
 			c[i] = col
@@ -1804,14 +1765,12 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 	case "rainbowwavelighting":
 		// Captures expose speed and direction only. Use the known topology
 		// coordinate where available and retain a sequential fallback elsewhere.
-		speed := discreteSpeed(l)
-		period := capturedPeriod(l, 4.0/math.Pow(2, speed-1))
 		direction := int(number(l.Parameters["direction"], 0))
 		sign := 1.0
 		if direction == 1 || direction == 3 {
 			sign = -1
 		}
-		phase := sign * elapsed / period
+		phase := sign * clockElapsed
 		for i := 0; i < n; i++ {
 			coord := float64(i)
 			span := float64(maxInt(n, 1))
@@ -1829,8 +1788,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		// inventing discrete flashes; deterministic hashing keeps playback stable.
 		c1, c2 := effectColors(l, RGB{R: 255}, RGB{B: 255})
 		bg := layerParameterColor(l, "background", RGB{R: 255, G: 255, B: 255})
-		speed := discreteSpeed(l)
-		phase := elapsed * (0.20 * speed)
+		phase := clockElapsed * 0.40
 		random := boolParam(l.Parameters["isRandom"], false)
 		for i := 0; i < n; i++ {
 			coord := float64(i) / float64(maxInt(n, 1))
@@ -1849,9 +1807,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		return c, a, true
 	case "rainbowlighting":
 		// Rainbow is a whole-selection hue cycle (no direction field in captures).
-		speed := discreteSpeed(l)
-		period := capturedPeriod(l, 4.0/math.Pow(2, speed-1))
-		col := hsv(elapsed/period, 1, 1)
+		col := hsv(clockElapsed, 1, 1)
 		for i := range c {
 			c[i] = col
 		}
@@ -1860,14 +1816,12 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 	case "rainbowchannellighting":
 		// Rainbow Channel carries speed+direction and distributes the spectrum
 		// across the channel, so it shares Rainbow Wave's spatial basis.
-		speed := discreteSpeed(l)
-		period := capturedPeriod(l, 4.0/math.Pow(2, speed-1))
 		direction := int(number(l.Parameters["direction"], 0))
 		sign := 1.0
 		if direction == 1 || direction == 3 {
 			sign = -1
 		}
-		phase := sign * elapsed / period
+		phase := sign * clockElapsed
 		for i := 0; i < n; i++ {
 			coord := float64(i)
 			span := float64(maxInt(n, 1))
@@ -1882,13 +1836,12 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 	case "watercolorspectrumlighting":
 		// Spectrum variant has no authored endpoint colours. Build overlapping
 		// low-saturation spectrum pools from the captured speed/direction tuple.
-		speed := discreteSpeed(l)
 		direction := int(number(l.Parameters["direction"], 0))
 		sign := 1.0
 		if direction == 1 || direction == 3 {
 			sign = -1
 		}
-		phase := sign * elapsed * (0.12 * speed)
+		phase := sign * clockElapsed * 0.24
 		for i := 0; i < n; i++ {
 			coord := float64(i) / float64(maxInt(n, 1))
 			if len(spatial) == n {
@@ -1900,12 +1853,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		applyLayerOpacity(l, a)
 		return c, a, true
 	case "spiralrainbowlighting":
-		speed := number(l.Parameters["speed"], 2)
-		if speed <= 0 {
-			speed = 2
-		}
-		period := capturedPeriod(l, 2.0*math.Pow(2, 2-speed))
-		phase := elapsed / period
+		phase := clockElapsed
 		clockwise := boolParam(l.Parameters["clockwise"], true)
 		if !clockwise {
 			phase = -phase
@@ -1937,7 +1885,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		}
 		if stops := transitionStops(l); len(stops) >= 2 {
 			diagnoseGradientEvents(l, elapsed, dur, stops)
-			t := math.Mod(elapsed/dur, 1)
+			t := math.Mod(clockElapsed, 1)
 			if t < 0 {
 				t += 1
 			}
@@ -1953,7 +1901,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		// Retain the legacy two-colour fallback for older profiles that do not
 		// serialize a transition curve.
 		c1, c2 := gradientColors(l)
-		t := (math.Sin(elapsed/dur*2*math.Pi) + 1) / 2
+		t := (math.Sin(clockElapsed*2*math.Pi) + 1) / 2
 		col := mixRGB(c1, c2, t)
 		for i := range c {
 			c[i] = col

@@ -2849,7 +2849,7 @@ func icueProfileWorkspace(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 
-		const editorBackendVersion = "v12.4.74y"
+		const editorBackendVersion = "v12.4.74z1"
 		editorModel := map[string]interface{}{
 			"version": editorBackendVersion,
 			"layers":  decodedLayers,
