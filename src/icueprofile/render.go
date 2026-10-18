@@ -805,6 +805,19 @@ func trackRepeatDuration(l Layer, topology LEDTopology, fanOrdinal, ledCount int
 	return effectWindowSeconds(l), false
 }
 
+// appendScoreNote records a compiled LED command for the static opening state.
+// Live effects are evaluated directly and therefore do not use this helper.
+func appendScoreNote(notes *[]LEDCommand, l Layer, layerIndex, led int, at float64, color RGB, strength float64) {
+	*notes = append(*notes, LEDCommand{
+		Time:       at,
+		LED:        led,
+		Color:      color,
+		Strength:   strength,
+		LayerIndex: layerIndex,
+		Effect:     l.Effect,
+	})
+}
+
 func recordLayerTrack(l Layer, li, fanOrdinal, ledCount int, duration float64, topology LEDTopology, sourceDeviceCount int) ([]LEDCommand, bool) {
 	spatial := topologyPositions(topology, fanOrdinal, ledCount)
 	notes := make([]LEDCommand, 0)
