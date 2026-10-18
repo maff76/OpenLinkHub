@@ -2832,6 +2832,7 @@ func icueProfileWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
+		authoredLayers := icueprofile.EnrichAuthoredSourceColors(profile.LightingLinkLayers)
 		decodedLayers := icueprofile.DecodeEditorProfileLayers(profile)
 		editorTrace := make([]map[string]interface{}, 0, len(decodedLayers))
 		for i, layer := range decodedLayers {
@@ -2854,7 +2855,7 @@ func icueProfileWorkspace(w http.ResponseWriter, r *http.Request) {
 			}).Info("iCUE editor API layer")
 		}
 		w.Header().Set("Content-Type", "application/json")
-		const editorBackendVersion = "v12.4.74t"
+		const editorBackendVersion = "v12.4.74v"
 		// Keep the legacy top-level fields for compatibility, but also expose one
 		// explicit editor envelope. The workspace consumes this envelope first so
 		// authored layers and their canonical decoded counterparts cannot silently
@@ -2870,7 +2871,7 @@ func icueProfileWorkspace(w http.ResponseWriter, r *http.Request) {
 			"key": key, "fileName": filepath.Base(path), "profile": profile,
 			"editorBackendVersion":      editorBackendVersion,
 			"editor":                    editorModel,
-			"lightingLinkLayers":        profile.LightingLinkLayers,
+			"lightingLinkLayers":        authoredLayers,
 			"decodedLightingLinkLayers": decodedLayers,
 			"editorTrace":               editorTrace,
 		})

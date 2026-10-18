@@ -67,22 +67,33 @@ type Channel struct {
 	Layers []Layer `json:"layers"`
 }
 
+type AuthoredParameter struct {
+	RawValues []string `json:"rawValues,omitempty"`
+	Value     any      `json:"value,omitempty"`
+}
+
 type Layer struct {
-	Name             string         `json:"name"`
-	ID               string         `json:"id,omitempty"`
-	Enabled          bool           `json:"enabled"`
-	SelectionMode    string         `json:"selectionMode,omitempty"`
-	LEDs             []string       `json:"leds,omitempty"`
-	Effect           string         `json:"effect"`
-	EffectName       string         `json:"effectName,omitempty"`
-	Parameters       map[string]any `json:"parameters,omitempty"`
-	ParserTrace      map[string]any `json:"-"`
-	StartOnKeyPress  bool           `json:"startOnKeyPress,omitempty"`
-	StartWithProfile bool           `json:"startWithProfile,omitempty"`
-	StopOnKeyPress   bool           `json:"stopOnKeyPress,omitempty"`
-	StopOnKeyRelease bool           `json:"stopOnKeyRelease,omitempty"`
-	StopAfterTimes   int            `json:"stopAfterTimes,omitempty"`
-	PlayOption       string         `json:"playOption,omitempty"`
+	Name          string         `json:"name"`
+	ID            string         `json:"id,omitempty"`
+	Enabled       bool           `json:"enabled"`
+	SelectionMode string         `json:"selectionMode,omitempty"`
+	LEDs          []string       `json:"leds,omitempty"`
+	Effect        string         `json:"effect"`
+	EffectName    string         `json:"effectName,omitempty"`
+	Parameters    map[string]any `json:"parameters,omitempty"`
+	ParserTrace   map[string]any `json:"-"`
+	// RawColorValues preserves colour-bearing leaf values exactly as authored in
+	// the .cueprofile. SourceColors is populated later by the Go colour decoder
+	// and exposed directly on the authored layer for the profile editor.
+	RawColorValues     []string                     `json:"rawColorValues,omitempty"`
+	SourceColors       []string                     `json:"sourceColors,omitempty"`
+	AuthoredParameters map[string]AuthoredParameter `json:"authoredParameters,omitempty"`
+	StartOnKeyPress    bool                         `json:"startOnKeyPress,omitempty"`
+	StartWithProfile   bool                         `json:"startWithProfile,omitempty"`
+	StopOnKeyPress     bool                         `json:"stopOnKeyPress,omitempty"`
+	StopOnKeyRelease   bool                         `json:"stopOnKeyRelease,omitempty"`
+	StopAfterTimes     int                          `json:"stopAfterTimes,omitempty"`
+	PlayOption         string                       `json:"playOption,omitempty"`
 }
 
 type Summary struct {
@@ -256,6 +267,8 @@ func parseLayer(entry *Node, typeNames map[int]string) *Layer {
 		}
 		l.EffectName = findFirstField(effectData, "name")
 		l.Parameters = extractParameters(effectData)
+		l.RawColorValues = authoredColorLeafValues(effectData)
+		l.AuthoredParameters = authoredParameters(effectData, l.Parameters)
 	}
 	if l.Effect == "" {
 		l.Effect = "UnknownLighting"
@@ -286,6 +299,8 @@ func parseLightingLinkPropertyLayer(entry *Node, typeNames map[int]string) *Laye
 	}
 	l.EffectName = findFirstField(effectData, "name")
 	l.Parameters = extractParameters(effectData)
+	l.RawColorValues = authoredColorLeafValues(effectData)
+	l.AuthoredParameters = authoredParameters(effectData, l.Parameters)
 	l.ParserTrace = buildLayerParserTrace(effectData, l.Parameters)
 	if l.Effect == "" {
 		l.Effect = "UnknownLighting"
@@ -313,6 +328,69 @@ func parseExecutionHints(base *Node, l *Layer) {
 		}
 	}
 	l.PlayOption = strings.TrimSpace(childText(hints, "playOption"))
+}
+
+// authoredColorLeafValues walks every colour-bearing field on the authored
+// effect node. Unlike extractParameters it does not choose only the first
+// matching node: the editor needs the exact source leaves before any renderer
+// compilation or layer composition occurs.
+func authoredColorLeafValues(effect *Node) []string {
+	if effect == nil {
+		return nil
+	}
+	out := make([]string, 0)
+	seen := make(map[string]bool)
+	for _, key := range []string{"transitions", "colors", "color"} {
+		for _, n := range descendants(effect, key) {
+			for _, v := range collectLeafValues(n) {
+				v = strings.TrimSpace(v)
+				if v != "" && !seen[v] {
+					seen[v] = true
+					out = append(out, v)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// authoredParameters keeps both the exact leaf values serialized by iCUE and
+// the parser's interpreted value. The editor can therefore present friendly
+// controls without losing the source representation needed for a lossless
+// writer or effect calibration.
+func authoredParameters(effect *Node, interpreted map[string]any) map[string]AuthoredParameter {
+	if effect == nil {
+		return nil
+	}
+	keys := []string{
+		"duration", "brightness", "opacity", "speed", "direction", "clockwise",
+		"random", "isRandom", "color", "colors", "transitions", "background",
+		"autoDuration", "waveSpread", "velocity", "tailLength", "isDoublesided", "angle",
+	}
+	out := make(map[string]AuthoredParameter)
+	for _, key := range keys {
+		var raw []string
+		for _, n := range descendants(effect, key) {
+			vals := collectLeafValues(n)
+			if len(vals) == 0 {
+				if text := strings.TrimSpace(n.Text); text != "" {
+					vals = []string{text}
+				}
+			}
+			for _, v := range vals {
+				v = strings.TrimSpace(v)
+				if v != "" {
+					raw = append(raw, v)
+				}
+			}
+		}
+		value, hasValue := interpreted[key]
+		if len(raw) == 0 && !hasValue {
+			continue
+		}
+		out[key] = AuthoredParameter{RawValues: raw, Value: value}
+	}
+	return out
 }
 
 func extractParameters(effect *Node) map[string]any {

@@ -2205,6 +2205,31 @@ func gradientColors(l Layer) (RGB, RGB) {
 	return c, RGB{R: 255, G: 180, B: 0}
 }
 
+// EnrichAuthoredSourceColors decodes colours captured directly from each
+// authored .cueprofile layer. This deliberately bypasses compiled playback and
+// composition: the editor should display/edit the value stored on the layer in
+// the source profile itself. RawColorValues remains untouched for lossless
+// writer/reverse-engineering work.
+func EnrichAuthoredSourceColors(layers []Layer) []Layer {
+	out := make([]Layer, len(layers))
+	copy(out, layers)
+	for i := range out {
+		seen := make(map[string]bool)
+		for _, raw := range out[i].RawColorValues {
+			c, ok := parseColor(raw)
+			if !ok {
+				continue
+			}
+			hex := editorColor(c).Hex
+			if !seen[hex] {
+				seen[hex] = true
+				out[i].SourceColors = append(out[i].SourceColors, hex)
+			}
+		}
+	}
+	return out
+}
+
 // EditorColor is the canonical colour representation exposed by the iCUE
 // workspace API. The browser deliberately does not decode Corsair colour
 // serialization itself; these values come from the same decoder used by the
@@ -2220,16 +2245,17 @@ type EditorColor struct {
 // is retained verbatim so reverse-engineering never loses sight of what iCUE
 // actually serialized, while Colors is renderer-decoded data suitable for UI use.
 type EditorLayer struct {
-	Index         int            `json:"index"`
-	Name          string         `json:"name"`
-	Effect        string         `json:"effect"`
-	EffectName    string         `json:"effectName,omitempty"`
-	Enabled       bool           `json:"enabled"`
-	SelectionMode string         `json:"selectionMode,omitempty"`
-	LEDs          []string       `json:"leds,omitempty"`
-	Colors        []EditorColor  `json:"colors"`
-	PrimaryColor  *EditorColor   `json:"primaryColor,omitempty"`
-	RawParameters map[string]any `json:"rawParameters,omitempty"`
+	Index              int                          `json:"index"`
+	Name               string                       `json:"name"`
+	Effect             string                       `json:"effect"`
+	EffectName         string                       `json:"effectName,omitempty"`
+	Enabled            bool                         `json:"enabled"`
+	SelectionMode      string                       `json:"selectionMode,omitempty"`
+	LEDs               []string                     `json:"leds,omitempty"`
+	Colors             []EditorColor                `json:"colors"`
+	PrimaryColor       *EditorColor                 `json:"primaryColor,omitempty"`
+	RawParameters      map[string]any               `json:"rawParameters,omitempty"`
+	AuthoredParameters map[string]AuthoredParameter `json:"authoredParameters,omitempty"`
 }
 
 func editorColor(c RGB) EditorColor {
@@ -2292,7 +2318,7 @@ func DecodeEditorLayers(layers []Layer) []EditorLayer {
 	out := make([]EditorLayer, 0, len(layers))
 	for i, l := range layers {
 		colors := rendererDecodedLayerColors(l)
-		e := EditorLayer{Index: i, Name: l.Name, Effect: l.Effect, EffectName: l.EffectName, Enabled: l.Enabled, SelectionMode: l.SelectionMode, LEDs: append([]string(nil), l.LEDs...), Colors: colors, RawParameters: l.Parameters}
+		e := EditorLayer{Index: i, Name: l.Name, Effect: l.Effect, EffectName: l.EffectName, Enabled: l.Enabled, SelectionMode: l.SelectionMode, LEDs: append([]string(nil), l.LEDs...), Colors: colors, RawParameters: l.Parameters, AuthoredParameters: l.AuthoredParameters}
 		if len(colors) > 0 {
 			c := colors[0]
 			e.PrimaryColor = &c
@@ -2355,7 +2381,7 @@ func DecodeEditorProfileLayers(p *Profile) []EditorLayer {
 			}
 		}
 
-		e := EditorLayer{Index: i, Name: source.Name, Effect: source.Effect, EffectName: source.EffectName, Enabled: source.Enabled, SelectionMode: source.SelectionMode, LEDs: append([]string(nil), source.LEDs...), Colors: colors, RawParameters: source.Parameters}
+		e := EditorLayer{Index: i, Name: source.Name, Effect: source.Effect, EffectName: source.EffectName, Enabled: source.Enabled, SelectionMode: source.SelectionMode, LEDs: append([]string(nil), source.LEDs...), Colors: colors, RawParameters: source.Parameters, AuthoredParameters: source.AuthoredParameters}
 		if len(colors) > 0 {
 			c := colors[0]
 			e.PrimaryColor = &c
