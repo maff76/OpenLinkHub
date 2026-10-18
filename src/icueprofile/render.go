@@ -1606,24 +1606,28 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		applyLayerOpacity(l, a)
 		return c, a, true
 	case "marqueelighting":
-		// Marquee is a discrete travelling ON/OFF mask. One shared effect window
-		// advances the pattern by one complete route; width controls the number of
-		// neighbouring LEDs that are ON, without creating another timebase.
+		// Marquee keeps the shared normalized clock, but treats geometry as a
+		// repeating block/gap pattern. This mirrors OpenLinkHub's cleaner native
+		// separation: time advances an offset; block width is purely spatial.
 		col := layerColor(l, RGB{R: 255, G: 255, B: 255})
-		width := int(math.Round(number(l.Parameters["width"], number(l.Parameters["waveSpread"], 3))))
-		if width < 1 {
-			width = 1
+		blockSize := int(math.Round(number(l.Parameters["width"], number(l.Parameters["waveSpread"], 2))))
+		if blockSize < 1 {
+			blockSize = 1
 		}
-		period := float64(maxInt(n, 1))
+		gapSize := blockSize
+		patternSize := blockSize + gapSize
+		direction := int(number(l.Parameters["direction"], 0))
+		offset := int(math.Floor(phase * float64(patternSize)))
+		if direction == 1 || direction == 3 {
+			offset = -offset
+		}
 		for i := 0; i < n; i++ {
-			coord := float64(i)
-			if len(spatial) == n {
-				coord = spatial[i]
-				period = 17.0
+			pos := i + offset
+			pos %= patternSize
+			if pos < 0 {
+				pos += patternSize
 			}
-			head := phase * period
-			d := wrapPeriodic(head-coord, period)
-			if d >= float64(width) {
+			if pos >= blockSize {
 				a[i] = 0
 				continue
 			}
@@ -1632,65 +1636,62 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		applyLayerOpacity(l, a)
 		return c, a, true
 	case "sequentiallighting":
-		// Sequential is the simplest normalized spatial performer: the shared
-		// phase selects the current route position. Spread/width can extend the ON
-		// window to adjacent LEDs, while direction only reverses route progression.
+		// Sequential uses one normalized cycle to progressively hand the route
+		// from the previous colour to the current colour. The clock decides WHEN;
+		// LED order decides WHERE. Keeping the cycle count lets two authored
+		// colours alternate cleanly without introducing a second timebase.
 		c1, c2 := effectColors(l, layerColor(l, RGB{R: 255, G: 255, B: 255}), RGB{})
-		width := int(math.Round(number(l.Parameters["width"], number(l.Parameters["waveSpread"], 1))))
-		if width < 1 {
-			width = 1
+		clock := effectClock(l, elapsed)
+		cycle := int(math.Floor(clock))
+		current, previous := c1, RGB{}
+		if c2 != (RGB{}) {
+			if cycle%2 == 0 {
+				current, previous = c1, c2
+			} else {
+				current, previous = c2, c1
+			}
+		}
+		step := int(math.Floor(phase * float64(n)))
+		if step >= n {
+			step = n - 1
 		}
 		direction := int(number(l.Parameters["direction"], 0))
-		period := float64(maxInt(n, 1))
-		headPhase := phase
-		if direction == 1 || direction == 3 {
-			headPhase = 1 - phase
-		}
 		for i := 0; i < n; i++ {
-			coord := float64(i)
-			if len(spatial) == n {
-				coord = spatial[i]
-				period = 17.0
+			route := i
+			if direction == 1 || direction == 3 {
+				route = n - 1 - i
 			}
-			head := headPhase * period
-			d := wrapPeriodic(head-coord, period)
-			if d >= float64(width) {
-				a[i] = 0
-				continue
-			}
-			if c2 != (RGB{}) && width > 1 {
-				c[i] = mixRGB(c1, c2, d/float64(width))
+			if route <= step {
+				c[i] = current
+			} else if previous != (RGB{}) {
+				c[i] = previous
 			} else {
-				c[i] = c1
+				a[i] = 0
 			}
 		}
 		applyLayerOpacity(l, a)
 		return c, a, true
 	case "visorlighting":
-		// Visor sweeps a lit block out and back. Fold the common 0..1 phase into
-		// a 0..1..0 triangle so there is still only one timing calculation.
+		// Visor is an out-and-back beam. Fold the common phase into a triangle
+		// wave for beam position, then apply a smooth Gaussian falloff in LED
+		// space. Speed remains exclusively in the shared clock.
 		col := layerColor(l, RGB{R: 255, G: 255, B: 255})
-		width := int(math.Round(number(l.Parameters["width"], number(l.Parameters["waveSpread"], 3))))
-		if width < 1 {
-			width = 1
+		width := number(l.Parameters["width"], number(l.Parameters["waveSpread"], 3))
+		if width < 0.5 {
+			width = 0.5
 		}
 		travel := phase * 2
 		if travel > 1 {
 			travel = 2 - travel
 		}
-		period := float64(maxInt(n, 1))
+		span := math.Max(float64(n-1), 1)
+		head := travel * span
+		sigma := math.Max(width, 0.5)
 		for i := 0; i < n; i++ {
-			coord := float64(i)
-			if len(spatial) == n {
-				coord = spatial[i]
-				period = 17.0
-			}
-			head := travel * math.Max(period-1, 1)
-			if math.Abs(coord-head) > float64(width-1)/2.0 {
-				a[i] = 0
-				continue
-			}
+			dist := math.Abs(float64(i) - head)
+			intensity := math.Exp(-0.5 * math.Pow(dist/sigma, 2))
 			c[i] = col
+			a[i] *= intensity
 		}
 		applyLayerOpacity(l, a)
 		return c, a, true
