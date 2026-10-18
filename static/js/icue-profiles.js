@@ -8,23 +8,32 @@ $(function () {
         {key:'back-inner',label:'Back Inner Ring',face:'rear',region:'inner',start:30,count:4}
     ];
     const commonEffects=['StaticLighting','RainLighting','WaveLighting','ColorWaveLighting','RippleLighting','SpiralLighting','SpiralRainbowLighting','RainbowWaveLighting','WatercolorLighting','VisorLighting','MarqueeLighting','SequentialLighting','ColorShiftLighting','ColorPulseLighting','GradientLighting'];
+    const field=(keys,label,type='number')=>({keys:Array.isArray(keys)?keys:[keys],label,type});
+    const colours=field(['transitions','colors','color'],'Colours','colors');
+    const speed=field(['speed','velocity'],'Speed / velocity');
+    const direction=field(['direction','angle'],'Direction / angle');
+    const duration=field(['duration','autoDuration'],'Duration');
+    const width=field(['width','waveSpread','spread','size'],'Width / spread');
+    const tail=field(['tailLength','tail','falloff'],'Tail / falloff');
+    const phase=field(['phase','offset'],'Phase / offset');
     const schemas={
-        staticlighting:[['colors','Colours','colors']],
-        rainlighting:[['colors','Colours','colors'],['speed','Speed','number'],['direction','Direction','number'],['duration','Duration','number'],['tail','Tail / falloff','number']],
-        wavelighting:[['colors','Colours','colors'],['speed','Speed','number'],['direction','Direction','number'],['width','Width','number'],['wavelength','Wavelength / period','number'],['tail','Tail / falloff','number'],['phase','Phase / offset','number']],
-        colorwavelighting:[['colors','Colours','colors'],['speed','Speed','number'],['direction','Direction','number'],['width','Width','number'],['phase','Phase / offset','number']],
-        ripplelighting:[['colors','Colours','colors'],['speed','Speed','number'],['duration','Duration','number'],['width','Width','number'],['tail','Tail / falloff','number'],['direction','Direction','number']],
-        spirallighting:[['colors','Colours','colors'],['speed','Speed','number'],['direction','Direction','number'],['width','Width','number'],['tail','Tail / falloff','number']],
-        spiralrainbowlighting:[['speed','Speed','number'],['direction','Direction','number'],['width','Width','number']],
-        rainbowwavelighting:[['speed','Speed','number'],['direction','Direction','number'],['width','Width','number']],
-        watercolorlighting:[['colors','Colours','colors'],['speed','Speed','number'],['duration','Duration','number']],
-        visorlighting:[['colors','Colours','colors'],['speed','Speed','number'],['direction','Direction','number'],['width','Width','number'],['tail','Tail / falloff','number']],
-        marqueelighting:[['colors','Colours','colors'],['speed','Speed','number'],['direction','Direction','number'],['width','Width','number']],
-        sequentiallighting:[['colors','Colours','colors'],['speed','Speed','number'],['direction','Direction','number'],['duration','Duration','number']],
-        colorshiftlighting:[['colors','Colours','colors'],['speed','Speed','number'],['duration','Duration','number']],
-        colorpulselighting:[['colors','Colours','colors'],['speed','Speed','number'],['duration','Duration','number']],
-        gradientlighting:[['colors','Colours','colors'],['direction','Direction','number']]
+        staticlighting:[colours,field('brightness','Brightness'),field('opacity','Opacity')],
+        rainlighting:[colours,speed,direction,duration,tail,field('brightness','Brightness'),field('opacity','Opacity')],
+        wavelighting:[colours,speed,direction,width,field(['wavelength','period','frequency'],'Wavelength / period'),tail,phase,field('isDoublesided','Double-sided','bool')],
+        colorwavelighting:[colours,speed,direction,width,field(['wavelength','period','frequency'],'Wavelength / period'),tail,phase,field('isDoublesided','Double-sided','bool')],
+        ripplelighting:[colours,speed,duration,width,tail,direction,field('autoDuration','Auto duration','bool')],
+        spirallighting:[colours,speed,direction,width,tail,phase,field('clockwise','Clockwise','bool')],
+        spiralrainbowlighting:[speed,direction,width,phase,field('clockwise','Clockwise','bool')],
+        rainbowwavelighting:[speed,direction,width,phase],
+        watercolorlighting:[colours,speed,duration,width,field('brightness','Brightness'),field('opacity','Opacity')],
+        visorlighting:[colours,speed,direction,width,tail,duration],
+        marqueelighting:[colours,speed,direction,width,field(['spacing','period'],'Spacing / period')],
+        sequentiallighting:[colours,speed,direction,duration,field(['step','steps'],'Step / steps')],
+        colorshiftlighting:[colours,speed,duration,phase],
+        colorpulselighting:[colours,speed,duration,phase],
+        gradientlighting:[colours,direction,field('brightness','Brightness'),field('opacity','Opacity')]
     };
+    const boolKeys=new Set(['clockwise','random','isRandom','isDoublesided','reverse','autoDuration']);
     function status(t){$('#icueLiveStatus').text(t);} function layerLabel(l,i){return (l.name&&l.name.trim())||l.effectName||l.effect||('Layer '+(i+1));}
     // The Go parser has already extracted the authored colour leaves from the
     // .cueprofile.  For display, consume those leaves directly instead of
@@ -55,8 +64,29 @@ $(function () {
     function loadProfile(key){currentKey=key;$.getJSON('/api/icue/profile?key='+encodeURIComponent(key),data=>{currentData=data;const backend=((data.editor||{}).version||data.editorBackendVersion||'UNKNOWN');console.info('[ICUE-EDITOR-BACKEND]',backend,'canonicalLayers=',canonicalLayers().length);$('.icue-profile-row').removeClass('active').filter('[data-key="'+CSS.escape(key)+'"]').addClass('active');$('#icueEmpty').hide();$('#icueWorkspace').show();const p=data.profile||{};$('#icueProfileTitle').text(p.name||data.fileName||key);$('#icueMetaFile').text(data.fileName||'—');$('#icueMetaDevices').text((p.summary||{}).deviceEntries??(p.devices||[]).length);$('#icueMetaChannels').text((p.summary||{}).channels??'—');const layers=workspaceLayers(data);$('#icueMetaLayers').text(layers.length);const list=$('#icueLayerList').empty();layers.forEach((x,i)=>{const row=$('<div class="settings-row icue-layer-row"></div>').attr('data-i',i);row.append($('<span class="settings-label text-ellipsis"></span>').text((i+1)+' · '+layerLabel(x.layer,i)),$('<span class="icue-layer-effect"></span>').text(x.layer.effect||'unknown')).on('click',()=>selectLayer(x,i));list.append(row);});if(!layers.length)list.append('<div class="settings-row"><span class="settings-label">No iCUE LINK lighting layers found</span></div>');$('#icueSaveName').val((p.name||'Profile')+'-EDIT-001');if(layers.length)selectLayer(layers[0],0);});}
     function selectLayer(target,index){currentTarget=target;currentLayer=target.layer;const canonical=canonicalLayers();currentDecoded=target.lightingLink?(canonical[target.layerIndex]||null):null;$('.icue-layer-row').removeClass('active').filter('[data-i="'+index+'"]').addClass('active');$('#icueLayerTitle').text(layerLabel(currentLayer,index)+' · '+(currentLayer.effect||'unknown'));$('#icueLayerEnabled').prop('checked',!!currentLayer.enabled);$('#icueLayerName').val(layerLabel(currentLayer,index));populateEffects();$('#icueSelectionMode').val((currentLayer.selectionMode||'').toLowerCase()==='allleds'?'AllLeds':'ConcreteLeds');$('#icueParameters').val(JSON.stringify((currentDecoded&&currentDecoded.rawParameters)||currentLayer.parameters||{},null,2));renderEffectControls();renderLEDs();editorBoundaryTrace();status('Live editor ready · imported source remains unchanged.');}
     function populateEffects(){const found=new Set(commonEffects);workspaceLayers(currentData||{}).forEach(x=>found.add(x.layer.effect));const s=$('#icueEffectType').empty();[...found].filter(Boolean).sort().forEach(x=>s.append($('<option>').val(x).text(x)));s.val(currentLayer.effect);}
-    function renderEffectControls(){const box=$('#icueEffectControls').empty(),p=Object.assign({},currentLayer.parameters||{});Object.keys(authoredParameters()).forEach(k=>{const v=authoredValue(k);if(v!==undefined)p[k]=v;});const schema=schemas[String(currentLayer.effect||'').toLowerCase()]||[['colors','Colours','colors'],['speed','Speed','number'],['duration','Duration','number'],['direction','Direction','number']];schema.forEach(([key,label,type])=>{if(type==='colors'){const dc=sourceColors(),cs=[dc[0]||'#000000',dc[1]||dc[0]||'#000000'];[0,1].forEach(n=>{const col=$('<div class="col-md-6"></div>');col.append($('<label class="sentence-text"></label>').text(label+' '+(n+1)));const inp=$('<input type="color" class="form-control form-control-color icue-param-color">').attr('data-key',key).attr('data-n',n).val(cs[n]);col.append(inp);box.append(col);});}else{const col=$('<div class="col-md-4"></div>');col.append($('<label class="sentence-text"></label>').text(label));const inp=$('<input type="number" step="0.05" class="form-control system-input icue-param-number">').attr('data-key',key);if(p[key]!==undefined)inp.val(p[key]);col.append(inp);box.append(col);}});box.append($('<div class="col-12"><label class="system-toggle compact"><input type="checkbox" id="icueRandomTest"><span class="toggle-track"></span><span class="ms-2">Random</span></label></div>'));$('#icueRandomTest').prop('checked',!!(p.random||p.isRandom));}
-
+    function firstPresentKey(keys,p){for(const k of keys){if(Object.prototype.hasOwnProperty.call(authoredParameters(),k)||Object.prototype.hasOwnProperty.call(p,k))return k;}return keys[0];}
+    function renderEffectControls(){
+        const box=$('#icueEffectControls').empty(),p=Object.assign({},currentLayer.parameters||{}),auth=authoredParameters(),used=new Set();
+        Object.keys(auth).forEach(k=>{const v=authoredValue(k);if(v!==undefined)p[k]=v;});
+        const schema=(schemas[String(currentLayer.effect||'').toLowerCase()]||[colours,speed,direction,duration]).slice();
+        // Anything iCUE authored but the effect registry does not yet understand is
+        // still surfaced. This is the calibration bench for the per-effect pass.
+        Object.keys(auth).forEach(k=>{if(['color','colors','transitions','background'].includes(k))return;if(schema.some(f=>f.keys.includes(k)))return;schema.push(field(k,'Authored · '+k,boolKeys.has(k)?'bool':'number'));});
+        schema.forEach(f=>{
+            const key=firstPresentKey(f.keys,p);used.add(key);
+            if(f.type==='colors'){
+                const dc=sourceColors(),count=Math.max(String(currentLayer.effect||'').toLowerCase()==='staticlighting'?1:2,dc.length),cs=Array.from({length:count},(_,n)=>dc[n]||dc[0]||'#000000');
+                cs.forEach((c,n)=>{const col=$('<div class="col-md-6"></div>');col.append($('<label class="sentence-text"></label>').text(f.label+(count>1?' '+(n+1):'')));const inp=$('<input type="color" class="form-control form-control-color icue-param-color">').attr('data-key',key).attr('data-n',n).val(c);col.append(inp);box.append(col);});
+                return;
+            }
+            if(f.type==='bool'){
+                const col=$('<div class="col-md-4"></div>'),wrap=$('<label class="system-toggle compact"></label>'),inp=$('<input type="checkbox" class="icue-param-bool">').attr('data-key',key).prop('checked',!!p[key]);wrap.append(inp,$('<span class="toggle-track"></span>'),$('<span class="ms-2"></span>').text(f.label));col.append(wrap);box.append(col);return;
+            }
+            const col=$('<div class="col-md-4"></div>');col.append($('<label class="sentence-text"></label>').text(f.label));const inp=$('<input type="number" step="any" class="form-control system-input icue-param-number">').attr('data-key',key);if(p[key]!==undefined&&!Array.isArray(p[key]))inp.val(p[key]);const raw=auth[key]&&auth[key].rawValues;if(raw&&raw.length)inp.attr('title','Authored: '+raw.join(' · '));col.append(inp);box.append(col);
+        });
+        const randomKey=Object.prototype.hasOwnProperty.call(auth,'isRandom')?'isRandom':'random';
+        if(!used.has(randomKey)){const col=$('<div class="col-12"></div>'),wrap=$('<label class="system-toggle compact"></label>'),inp=$('<input type="checkbox" class="icue-param-bool">').attr('data-key',randomKey).prop('checked',!!p[randomKey]);wrap.append(inp,$('<span class="toggle-track"></span>'),$('<span class="ms-2">Random</span>'));col.append(wrap);box.append(col);}
+    }
     function selectedDevice(){const i=parseInt($('#icueDeviceCanvas').val(),10);return Number.isFinite(i)?detectedDevices[i]:null;}
     function logicalFor(d,local){if(!d)return null;if(d.kind==='qx')return (d.qxOrdinal||0)*42+local;if(d.kind==='titan')return 756+local;return null;}
     function localSelected(local){if(!currentLayer)return false;if((currentLayer.selectionMode||'').toLowerCase()==='allleds')return true;const logical=logicalFor(selectedDevice(),local);if(logical===null)return false;return (currentLayer.leds||[]).some(x=>{const m=String(x).match(/(\d+)\s*$/);return m&&+m[1]===logical;});}
@@ -73,7 +103,7 @@ $(function () {
     $('#icueProfileForm').on('submit',function(e){e.preventDefault();const f=$('#icueProfileFile')[0].files[0];if(!f){toast.warning('Choose a .cueprofile first');return;}const fd=new FormData();fd.append('profileFile',f);$.ajax({url:'/api/icue/upload',type:'POST',data:fd,processData:false,contentType:false,success:r=>{toast.success(r.message||'Profile imported');refreshProfiles(r.profile&&r.profile.key);},error:x=>toast.warning(x.responseText||'Import failed')});});
     $('#icueDeviceCanvas').on('change',renderLEDs);$('#icueSelectionMode').on('change',function(){currentLayer.selectionMode=this.value;renderLEDs();apply({selectionMode:this.value});});$('#icueLayerEnabled').on('change',function(){currentLayer.enabled=this.checked;apply({enabled:this.checked});});
     $('#icueLayerName').on('change',function(){currentLayer.name=this.value;apply({name:this.value});});$('#icueEffectType').on('change',function(){currentLayer.effect=this.value;renderEffectControls();apply({effect:this.value});});
-    $('#icueEffectControls').on('change','.icue-param-number',function(){if(this.value!=='')applyParam($(this).data('key'),Number(this.value));}).on('change','.icue-param-color',function(){const key=$(this).data('key'),inputs=$('.icue-param-color[data-key="'+key+'"]'),colors=inputs.map((_,x)=>hexToRGB(x.value)).get();if(currentDecoded)currentDecoded.colors=inputs.map((_,x)=>({hex:x.value})).get();applyParam(key,colors);renderLEDs();}).on('change','#icueRandomTest',function(){applyParam(('isRandom' in (currentLayer.parameters||{}))?'isRandom':'random',this.checked);});
+    $('#icueEffectControls').on('change','.icue-param-number',function(){if(this.value!=='')applyParam($(this).data('key'),Number(this.value));}).on('change','.icue-param-color',function(){const key=$(this).data('key'),inputs=$('.icue-param-color[data-key="'+key+'"]'),colors=inputs.map((_,x)=>hexToRGB(x.value)).get();if(currentDecoded)currentDecoded.colors=inputs.map((_,x)=>({hex:x.value})).get();applyParam(key,colors);renderLEDs();}).on('change','.icue-param-bool',function(){applyParam($(this).data('key'),this.checked);});
     $('#icueApplyParameters').on('click',function(){try{const p=JSON.parse($('#icueParameters').val()||'{}');currentLayer.parameters=p;renderEffectControls();renderLEDs();apply({parameters:p});}catch(e){toast.warning('Parameters must be valid JSON');}});
     $('#icueSelectAll').on('click',()=>setDeviceSelection(true));$('#icueSelectNone').on('click',()=>setDeviceSelection(false));$('.icue-region-button').on('click',function(){inspectRegion=inspectRegion===$(this).data('region')?'':$(this).data('region');$('.icue-region-button').removeClass('active').filter('[data-region="'+inspectRegion+'"]').addClass('active');renderLEDs();});$('#icueTopologyProbe').on('change',function(){$('#icueProbePanel').toggle(this.checked);renderLEDs();});$('#icueProbePrev').on('click',()=>{probeLocal=(probeLocal+33)%34;renderLEDs();});$('#icueProbeNext').on('click',()=>{probeLocal=(probeLocal+1)%34;renderLEDs();});$('#icueProbeGroup').on('change',function(){const z=qxTopology.find(x=>x.key===this.value);if(z){probeLocal=z.start;renderLEDs();}});
     function layerAction(action){if(!currentTarget||!currentTarget.lightingLink){toast.warning('Layer structure editing currently applies to authored Lighting Link layers.');return;}const body={action:action,lightingLink:true,layerIndex:currentTarget.layerIndex,deviceIndex:currentTarget.deviceIndex,channelIndex:currentTarget.channelIndex};$.ajax({url:'/api/icue/profile?key='+encodeURIComponent(currentKey),type:'POST',contentType:'application/json',data:JSON.stringify(body),success:()=>loadProfile(currentKey),error:x=>toast.warning(x.responseText||'Unable to edit layer structure')});}

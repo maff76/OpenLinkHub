@@ -358,15 +358,27 @@ func authoredColorLeafValues(effect *Node) []string {
 // the parser's interpreted value. The editor can therefore present friendly
 // controls without losing the source representation needed for a lossless
 // writer or effect calibration.
+
+// authoredEffectParameterKeys is intentionally an extraction vocabulary, not a
+// claim about renderer semantics.  It lets the editor expose values iCUE
+// actually authored across the effect families while each effect is calibrated.
+// Unknown/unverified values remain raw and are never rewritten implicitly.
+func authoredEffectParameterKeys() []string {
+	return []string{
+		"duration", "brightness", "opacity", "speed", "direction", "clockwise",
+		"random", "isRandom", "color", "colors", "transitions", "background",
+		"autoDuration", "waveSpread", "velocity", "tailLength", "isDoublesided", "angle",
+		"width", "wavelength", "phase", "offset", "tail", "falloff", "frequency",
+		"period", "spacing", "size", "step", "steps", "count", "segments",
+		"start", "end", "delay", "hold", "fade", "reverse", "center", "spread", "rotation",
+	}
+}
+
 func authoredParameters(effect *Node, interpreted map[string]any) map[string]AuthoredParameter {
 	if effect == nil {
 		return nil
 	}
-	keys := []string{
-		"duration", "brightness", "opacity", "speed", "direction", "clockwise",
-		"random", "isRandom", "color", "colors", "transitions", "background",
-		"autoDuration", "waveSpread", "velocity", "tailLength", "isDoublesided", "angle",
-	}
+	keys := authoredEffectParameterKeys()
 	out := make(map[string]AuthoredParameter)
 	for _, key := range keys {
 		var raw []string
@@ -394,17 +406,9 @@ func authoredParameters(effect *Node, interpreted map[string]any) map[string]Aut
 }
 
 func extractParameters(effect *Node) map[string]any {
-	wanted := map[string]bool{
-		"duration": true, "brightness": true, "opacity": true, "speed": true,
-		"direction": true, "clockwise": true, "random": true, "isRandom": true, "color": true,
-		"colors": true, "transitions": true, "background": true,
-		// Captured RippleLighting fields. These are retained for diagnostics even
-		// while reactive key-centred Ripple playback remains intentionally unsupported.
-		"autoDuration": true, "waveSpread": true,
-		// Captured iCUE WaveLighting fields. Preserve these even before the
-		// renderer claims playback support; this keeps imported profile data
-		// intact without inventing unverified animation semantics.
-		"velocity": true, "tailLength": true, "isDoublesided": true, "angle": true,
+	wanted := make(map[string]bool)
+	for _, key := range authoredEffectParameterKeys() {
+		wanted[key] = true
 	}
 	result := map[string]any{}
 	for key := range wanted {
