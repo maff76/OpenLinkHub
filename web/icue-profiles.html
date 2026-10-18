@@ -120,7 +120,18 @@
                                     <div class="settings-row"><span class="settings-label">Duration scale</span><strong id="icueClockScale">1.0×</strong></div>
                                     <div class="settings-row"><span class="settings-label">Effective window</span><strong id="icueClockWindow">1000 ms</strong></div>
                                 </div>
-                                <div class="sentence-text mt-2"><small>Slow = 1.5× duration · Normal = 1.0× · Fast = 0.5×. Renderer cadence is independent of this clock.</small></div>
+                                <div class="row g-3 mt-1">
+                                    <div class="col-md-6">
+                                        <label class="sentence-text" for="icueSlowScale">Slow duration scale</label>
+                                        <div class="d-flex gap-2 align-items-center"><input id="icueSlowScaleRange" type="range" min="1" max="3" step="0.05" value="1.5" class="form-range flex-grow-1"><input id="icueSlowScale" type="number" min="1" max="3" step="0.05" value="1.5" class="form-control system-input" style="max-width:92px"></div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="sentence-text" for="icueFastScale">Fast duration scale</label>
+                                        <div class="d-flex gap-2 align-items-center"><input id="icueFastScaleRange" type="range" min="0.2" max="1" step="0.05" value="0.5" class="form-range flex-grow-1"><input id="icueFastScale" type="number" min="0.2" max="1" step="0.05" value="0.5" class="form-control system-input" style="max-width:92px"></div>
+                                    </div>
+                                </div>
+                                <div class="d-flex justify-content-between gap-2 flex-wrap align-items-center mt-3"><span id="icueTimingCalibrationStatus" class="sentence-text">Runtime calibration only · Normal stays fixed at 1.0×.</span><button type="button" class="system-button secondary" id="icueTimingReset">Reset 1.5 / 1.0 / 0.5</button></div>
+                                <div class="sentence-text mt-2"><small>Move Slow or Fast while comparing the same effect in iCUE. Changes apply globally to every animated effect immediately and are discarded on restart.</small></div>
                             </div>
                         </div>
                     </div>

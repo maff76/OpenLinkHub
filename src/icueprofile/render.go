@@ -571,6 +571,47 @@ var scorePlayers = struct {
 	byRun map[persistentStateKey]*scorePlayerState
 }{byRun: make(map[persistentStateKey]*scorePlayerState)}
 
+// TimingCalibration is a runtime-only calibration bench for the shared effect
+// clock. Normal remains the authored 1.0x reference; Slow and Fast can be
+// adjusted live while comparing OpenLinkHub against iCUE. Nothing is written
+// back to the imported .cueprofile.
+type TimingCalibration struct {
+	Slow float64 `json:"slow"`
+	Fast float64 `json:"fast"`
+}
+
+var timingCalibration = struct {
+	sync.RWMutex
+	Slow float64
+	Fast float64
+}{Slow: 1.5, Fast: 0.5}
+
+func GetTimingCalibration() TimingCalibration {
+	timingCalibration.RLock()
+	defer timingCalibration.RUnlock()
+	return TimingCalibration{Slow: timingCalibration.Slow, Fast: timingCalibration.Fast}
+}
+
+// SetTimingCalibration changes only the runtime experiment. Clearing compiled
+// player state makes the new factors take effect coherently on the next frame.
+func SetTimingCalibration(slow, fast float64) (TimingCalibration, error) {
+	if slow < 1.0 || slow > 3.0 {
+		return GetTimingCalibration(), fmt.Errorf("slow duration scale must be between 1.0 and 3.0")
+	}
+	if fast < 0.2 || fast > 1.0 {
+		return GetTimingCalibration(), fmt.Errorf("fast duration scale must be between 0.2 and 1.0")
+	}
+	timingCalibration.Lock()
+	timingCalibration.Slow = slow
+	timingCalibration.Fast = fast
+	timingCalibration.Unlock()
+
+	scorePlayers.Lock()
+	scorePlayers.byRun = make(map[persistentStateKey]*scorePlayerState)
+	scorePlayers.Unlock()
+	return GetTimingCalibration(), nil
+}
+
 func concreteCommand(col RGB, strength float64) RGB {
 	if strength < 0 {
 		strength = 0
@@ -1161,23 +1202,16 @@ func stringPhase(s string) float64 {
 	return float64(h%10000) / 10000.0
 }
 
-// effectDurationScale is the experimental common iCUE timing scale used by
-// v12.4.74z1. The three discrete speed presets are treated as symmetric duration
-// offsets around Normal:
-//
-//	Slow   = 1.5x duration
-//	Normal = 1.0x duration
-//	Fast   = 0.5x duration
-//
-// With an authored duration of 1000 ms this produces 1500 / 1000 / 500 ms.
-// Output cadence remains independent; this only changes progression through the
-// shared effect timebase.
+// effectDurationScale maps iCUE's discrete speed preset onto the shared
+// duration clock. Normal is fixed at 1.0x; Slow and Fast come from the
+// runtime calibration bench so their exact magnitude can be matched by eye.
 func effectDurationScale(l Layer) float64 {
+	cal := GetTimingCalibration()
 	switch discreteSpeed(l) {
 	case 1:
-		return 1.5
+		return cal.Slow
 	case 3:
-		return 0.5
+		return cal.Fast
 	default:
 		return 1.0
 	}
@@ -1192,13 +1226,9 @@ func effectWindowSeconds(l Layer) float64 {
 }
 
 // effectClock converts wall-clock seconds into the experimental common iCUE
-// effect clock. One effective window is one effect-second. For duration=1000:
-//
-//	Slow   -> 1.500 s wall time per effect second
-//	Normal -> 1.000 s wall time per effect second
-//	Fast   -> 0.500 s wall time per effect second
-//
-// Effects with no captured duration fall back to 1000 ms. Effect-specific
+// effect clock. One effective window is one effect-second. Normal is always
+// authored duration x 1.0; Slow and Fast use the current runtime calibration
+// factors. Effects with no captured duration fall back to 1000 ms. Effect-specific
 // geometry (tail, spread, velocity, direction, etc.) remains independent.
 func effectClock(l Layer, elapsed float64) float64 {
 	window := effectWindowSeconds(l)
@@ -1301,10 +1331,9 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		// iCUE Rain speed changes how quickly the same-density rain pattern cycles,
 		// rather than changing how much rain exists at once. Scale both the spawn
 		// cadence and event lifetime by the same factor so their overlap ratio stays
-		// constant at Slow/Normal/Fast. The temporary calibration controls supply the cadence for each preset.
+		// constant at Slow/Normal/Fast. The runtime calibration controls scale the
+		// shared effect clock globally; Rain does not own a separate speed model.
 		// 100 ms is the event cadence measured in normalized effect-clock time.
-		// With the v12.4.74z duration scale that becomes 150/100/50 ms wall time
-		// at Slow/Normal/Fast for an authored 1000 ms duration.
 		stepDuration := 0.100
 		// Preserve the calibrated overlap/density ratio while speed changes.
 		dropDuration := stepDuration * (0.55 / 0.115)

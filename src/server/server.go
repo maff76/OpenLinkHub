@@ -2781,6 +2781,35 @@ func uploadICUEProfile(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// icueTimingCalibration exposes the runtime-only Slow/Fast duration factors.
+// It is intentionally non-persistent: restart restores the experimental
+// 1.5 / 1.0 / 0.5 baseline and imported profiles are never modified.
+func icueTimingCalibration(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	switch r.Method {
+	case http.MethodGet:
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": 1, "timing": icueprofile.GetTimingCalibration(), "normal": 1.0, "persistent": false})
+	case http.MethodPost:
+		var req struct {
+			Slow float64 `json:"slow"`
+			Fast float64 `json:"fast"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
+			http.Error(w, "Unable to read timing calibration: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		cal, err := icueprofile.SetTimingCalibration(req.Slow, req.Fast)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": 1, "timing": cal, "normal": 1.0, "persistent": false})
+	default:
+		w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 // icueProfileWorkspace serves profile details and temporary live edits. Runtime
 // edits never rewrite the imported .cueprofile; they exist only in the parsed
 // profile cache and are discarded on restart/re-upload.
@@ -2802,7 +2831,7 @@ func icueProfileWorkspace(w http.ResponseWriter, r *http.Request) {
 		// canonical mirror of the same layers.
 		authoredLayers := icueprofile.EnrichAuthoredSourceColors(profile.LightingLinkLayers)
 
-		const editorBackendVersion = "v12.4.74z4"
+		const editorBackendVersion = "v12.4.74z5"
 		editorModel := map[string]interface{}{
 			"version": editorBackendVersion,
 			"source":  "authored-cueprofile",
@@ -3065,6 +3094,7 @@ func setRoutes() http.Handler {
 	handleFunc(r, "/api/icue/profiles", http.MethodGet, getICUEProfiles)
 	handleFunc(r, "/api/icue/devices", http.MethodGet, getICUEEditorDevices)
 	r.HandleFunc("/api/icue/profile", icueProfileWorkspace)
+	r.HandleFunc("/api/icue/timing-calibration", icueTimingCalibration)
 	handleFunc(r, "/api/backup", http.MethodGet, backup.PerformBackup)
 	handleFunc(r, "/api/position/", http.MethodGet, getPositionData)
 	handleFunc(r, "/api/headset/getEqualizers/", http.MethodGet, getEqualizers)

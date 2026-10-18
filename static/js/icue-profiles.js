@@ -57,6 +57,11 @@ $(function () {
     function editorSourceTrace(){const colors=authoredColors(),raw=(currentLayer&&currentLayer.rawColorValues)||[],trace={backendVersion:(currentData&&((currentData.editor||{}).version||currentData.editorBackendVersion))||null,layerIndex:currentTarget?currentTarget.layerIndex:null,layerName:currentLayer?layerLabel(currentLayer,currentTarget?currentTarget.layerIndex:0):'',authored:{rawColorValues:raw,displayColors:colors,parameters:authoredParameters()}};let d=$('#icueEditorBoundaryTrace');if(!d.length){d=$('<details id="icueEditorBoundaryTrace" class="mt-3"><summary>Authored source values</summary><pre class="mt-2 mb-0" style="white-space:pre-wrap;max-height:320px;overflow:auto"></pre></details>');$('#icueParameters').parent().append(d);}d.find('pre').text(JSON.stringify(trace,null,2));}
     function hexToRGB(h){return 'rgb('+[1,3,5].map(i=>(parseInt(h.slice(i,i+2),16)/255).toFixed(6).replace(/0+$/,'').replace(/\.$/,'')).join(' ')+')';}
     function authoredParameters(){return (currentLayer&&currentLayer.authoredParameters)||{};} function authoredValue(key){const a=authoredParameters()[key];return a&&a.value!==undefined?a.value:((currentLayer&&currentLayer.parameters)||{})[key];} function profileColor(){return authoredColors()[0]||'#2563eb';}
+    let timingCalibration={slow:1.5,fast:0.5},timingApplyTimer=null;
+    function timingScaleFor(speed){return speed===1?timingCalibration.slow:(speed===3?timingCalibration.fast:1.0);}
+    function syncTimingCalibrationUI(){const slow=Number(timingCalibration.slow),fast=Number(timingCalibration.fast);$('#icueSlowScale,#icueSlowScaleRange').val(slow);$('#icueFastScale,#icueFastScaleRange').val(fast);updateEffectClock();}
+    function loadTimingCalibration(){return $.getJSON('/api/icue/timing-calibration').then(r=>{if(r&&r.timing)timingCalibration={slow:Number(r.timing.slow)||1.5,fast:Number(r.timing.fast)||0.5};syncTimingCalibrationUI();});}
+    function applyTimingCalibration(slow,fast){slow=Math.max(1,Math.min(3,Number(slow)));fast=Math.max(0.2,Math.min(1,Number(fast)));if(!Number.isFinite(slow)||!Number.isFinite(fast))return;timingCalibration={slow,fast};syncTimingCalibrationUI();$('#icueTimingCalibrationStatus').text('Applying globally…');clearTimeout(timingApplyTimer);timingApplyTimer=setTimeout(()=>{$.ajax({url:'/api/icue/timing-calibration',type:'POST',contentType:'application/json',data:JSON.stringify(timingCalibration),success:r=>{if(r&&r.timing)timingCalibration={slow:Number(r.timing.slow),fast:Number(r.timing.fast)};syncTimingCalibrationUI();$('#icueTimingCalibrationStatus').text('Live globally · Normal fixed at 1.0× · runtime only.');},error:x=>{$('#icueTimingCalibrationStatus').text('Calibration update failed.');toast.warning(x.responseText||'Unable to update timing calibration');}});},120);}
 
     function updateEffectClock(){
         if(!currentLayer)return;
@@ -64,7 +69,7 @@ $(function () {
         const duration=Number.isFinite(rawDuration)&&rawDuration>0?rawDuration:1000;
         const rawSpeed=Number(authoredValue('speed')??2);
         const speed=rawSpeed<1?1:(rawSpeed>3?3:rawSpeed);
-        const scale=speed===1?1.5:(speed===3?0.5:1.0);
+        const scale=timingScaleFor(speed);
         const effective=duration*scale;
         const label=speed===1?'Slow':(speed===3?'Fast':'Normal');
         $('#icueClockLayer').text(layerLabel(currentLayer,currentTarget?currentTarget.layerIndex:0));
@@ -123,5 +128,8 @@ $(function () {
     $('#icueSelectAll').on('click',()=>setDeviceSelection(true));$('#icueSelectNone').on('click',()=>setDeviceSelection(false));$('.icue-region-button').on('click',function(){inspectRegion=inspectRegion===$(this).data('region')?'':$(this).data('region');$('.icue-region-button').removeClass('active').filter('[data-region="'+inspectRegion+'"]').addClass('active');renderLEDs();});$('#icueTopologyProbe').on('change',function(){$('#icueProbePanel').toggle(this.checked);renderLEDs();});$('#icueProbePrev').on('click',()=>{probeLocal=(probeLocal+33)%34;renderLEDs();});$('#icueProbeNext').on('click',()=>{probeLocal=(probeLocal+1)%34;renderLEDs();});$('#icueProbeGroup').on('change',function(){const z=qxTopology.find(x=>x.key===this.value);if(z){probeLocal=z.start;renderLEDs();}});
     function layerAction(action){if(!currentTarget||!currentTarget.lightingLink){toast.warning('Layer structure editing currently applies to authored Lighting Link layers.');return;}const body={action:action,lightingLink:true,layerIndex:currentTarget.layerIndex,deviceIndex:currentTarget.deviceIndex,channelIndex:currentTarget.channelIndex};$.ajax({url:'/api/icue/profile?key='+encodeURIComponent(currentKey),type:'POST',contentType:'application/json',data:JSON.stringify(body),success:()=>loadProfile(currentKey),error:x=>toast.warning(x.responseText||'Unable to edit layer structure')});}
     $('#icueAddLayer').on('click',()=>layerAction('add'));$('#icueDuplicateLayer').on('click',()=>layerAction('duplicate'));$('#icueMoveUp').on('click',()=>layerAction('up'));$('#icueMoveDown').on('click',()=>layerAction('down'));$('#icueDeleteLayer').on('click',()=>layerAction('delete'));
-    $.when(refreshDevices()).always(()=>{refreshProfiles();});
+    $('#icueSlowScaleRange,#icueSlowScale').on('input change',function(){const v=Number(this.value);if(Number.isFinite(v))applyTimingCalibration(v,timingCalibration.fast);});
+    $('#icueFastScaleRange,#icueFastScale').on('input change',function(){const v=Number(this.value);if(Number.isFinite(v))applyTimingCalibration(timingCalibration.slow,v);});
+    $('#icueTimingReset').on('click',()=>applyTimingCalibration(1.5,0.5));
+    $.when(refreshDevices(),loadTimingCalibration()).always(()=>{refreshProfiles();});
 });
