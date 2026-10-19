@@ -42,6 +42,10 @@ type V2DeviceModel struct {
 	LedChannels uint8
 }
 
+// mappingProbeLoggedGeneration suppresses per-frame mapper logs while still
+// confirming each newly selected raw LED at the final LINK output boundary.
+var mappingProbeLoggedGeneration sync.Map
+
 type RGBOverride struct {
 	Enabled        bool
 	RGBStartColor  rgb.Color
@@ -5037,26 +5041,28 @@ func (d *Device) generateRgbEffect(k int, channels uint8, startTime *time.Time, 
 			logger.Log(logger.Fields{"profile": profile.Name, "effects": unsupported}).Debug("Skipped unsupported iCUE lighting effects")
 		}
 
-		// Apply the calibration mapper to the raw per-device RGB frame as the
-		// final operation before it is returned to the LINK hardware-frame builder.
-		// No candidate physical topology is used to choose the raw LED.
-		mapperKind := ""
-		mapperOrdinal := 0
+		// Apply the mapper at the final LINK byte-frame boundary. This deliberately
+		// does not depend on LEDTopology: the mapper exists to discover raw physical
+		// LED order, so topology must never be a prerequisite for probing it.
+		kind := "link"
+		mapperOrdinal := k
 		name := strings.ToLower(d.Devices[k].Name)
 		if strings.Contains(name, "qx") && int(channels) == 34 {
-			mapperKind = "qx"
+			kind = "qx"
 			mapperOrdinal = ordinal
 		} else if strings.Contains(name, "titan") && int(channels) == 20 {
-			mapperKind = "titan"
+			kind = "titan"
+			mapperOrdinal = 0
 		}
-		if mapperKind != "" && mapperOrdinal >= 0 {
-			var applied bool
-			output, applied = icueprofile.ApplyMappingProbe(output, mapperKind, mapperOrdinal, int(channels))
-			if applied {
-				probe := icueprofile.GetMappingProbe()
-				if icueprofile.MappingProbeConfirmationNeeded(mapperKind, mapperOrdinal, probe.LocalLED) {
-					logger.Log(logger.Fields{"kind": mapperKind, "deviceOrdinal": mapperOrdinal, "rawLed": probe.LocalLED, "ledCount": channels, "purple": 1, "blue": int(channels) - 1}).Info("iCUE mapper hardware override")
-				}
+		if mapped, applied, probe := icueprofile.ApplyMappingProbe(output, kind, mapperOrdinal, int(channels)); applied {
+			output = mapped
+			logKey := fmt.Sprintf("%s:%d", kind, mapperOrdinal)
+			if previous, ok := mappingProbeLoggedGeneration.Load(logKey); !ok || previous.(uint64) != probe.Generation {
+				mappingProbeLoggedGeneration.Store(logKey, probe.Generation)
+				logger.Log(logger.Fields{
+					"device": d.Devices[k].Name, "kind": kind, "deviceOrdinal": mapperOrdinal,
+					"localLed": probe.LocalLED, "ledCount": channels, "generation": probe.Generation,
+				}).Info("iCUE LED mapper hardware override applied")
 			}
 		}
 		return output

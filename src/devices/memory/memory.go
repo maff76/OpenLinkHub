@@ -212,14 +212,15 @@ var crcTable = [256]uint8{
 }
 
 var (
-	pwd                   = ""
-	deviceRefreshInterval = 1000
-	maximumRegisters      = 8
-	colorAddresses        = []byte{0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f} // DDR4
-	temperatureAddresses  = []string{"0018", "0019", "001a", "001b", "001c", "001d", "001e", "001f"}
-	basePath              = "/sys/bus/i2c/drivers"
-	rgbProfileUpgrade     = []string{"led", "nebula", "marquee", "spiralrainbow", "openrgbrainbowwave", "gradient", "pastelrainbow", "pastelspiralrainbow"}
-	rgbModes              = []string{
+	mappingProbeLoggedGeneration sync.Map
+	pwd                          = ""
+	deviceRefreshInterval        = 1000
+	maximumRegisters             = 8
+	colorAddresses               = []byte{0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f} // DDR4
+	temperatureAddresses         = []string{"0018", "0019", "001a", "001b", "001c", "001d", "001e", "001f"}
+	basePath                     = "/sys/bus/i2c/drivers"
+	rgbProfileUpgrade            = []string{"led", "nebula", "marquee", "spiralrainbow", "openrgbrainbowwave", "gradient", "pastelrainbow", "pastelspiralrainbow"}
+	rgbModes                     = []string{
 		"circle",
 		"circleshift",
 		"colorpulse",
@@ -1597,12 +1598,18 @@ func (d *Device) setDeviceColor() {
 						}
 						moduleOrdinal := d.rgbModuleOrdinal(k)
 						output, unsupported := imported.RenderDRAM(moduleOrdinal, int(d.Devices[k].LedChannels), startTime, brightness)
-						var mapperApplied bool
-						output, mapperApplied = icueprofile.ApplyMappingProbe(output, "memory", moduleOrdinal, int(d.Devices[k].LedChannels))
-						if mapperApplied {
-							probe := icueprofile.GetMappingProbe()
-							if icueprofile.MappingProbeConfirmationNeeded("memory", moduleOrdinal, probe.LocalLED) {
-								logger.Log(logger.Fields{"kind": "memory", "locator": d.Devices[k].Locator, "deviceOrdinal": moduleOrdinal, "rawLed": probe.LocalLED, "ledCount": d.Devices[k].LedChannels, "purple": 1, "blue": int(d.Devices[k].LedChannels) - 1}).Info("iCUE mapper hardware override")
+
+						// Final raw DIMM byte-frame override. Memory topology is intentionally
+						// not required here because this probe is what measures that topology.
+						if mapped, applied, probe := icueprofile.ApplyMappingProbe(output, "memory", moduleOrdinal, int(d.Devices[k].LedChannels)); applied {
+							output = mapped
+							logKey := fmt.Sprintf("memory:%d", moduleOrdinal)
+							if previous, ok := mappingProbeLoggedGeneration.Load(logKey); !ok || previous.(uint64) != probe.Generation {
+								mappingProbeLoggedGeneration.Store(logKey, probe.Generation)
+								logger.Log(logger.Fields{
+									"device": d.Devices[k].Name, "locator": d.Devices[k].Locator, "deviceOrdinal": moduleOrdinal,
+									"localLed": probe.LocalLED, "ledCount": d.Devices[k].LedChannels, "generation": probe.Generation,
+								}).Info("iCUE LED mapper hardware override applied")
 							}
 						}
 						if len(unsupported) > 0 {

@@ -1,14 +1,9 @@
-OpenLinkHub v12.4.74z7d8 - live editor lifecycle + group targeting
+OpenLinkHub v12.4.74z7d8a - compile compatibility rebuild
 
-Changed complete files only; no patch/diff files.
+Clean replacement files only; no patch/diff files.
 
-- Reset Live Preview discards cached runtime edits and reparses the immutable imported .cueprofile.
-- Switching editor profiles clears a dirty previous live edit before opening the next profile.
-- Leaving the editor requests a best-effort live reset.
-- QX compiled concert state is keyed by profile identity as well as run/device, preventing a previous profile's compiled live state from surviving a profile switch.
-- Adds All QX Fans and All Memory targets. A physical-position click applies the equivalent local position across every detected device in that family; chain order is irrelevant.
-- Include/Exclude actions now target the selected device/family with concrete IDs rather than turning the whole layer into global AllLeds.
-- Live raw mapper remains individual-device only.
-- Imported source files remain immutable.
+Fixes the .74z7d8 package omission that allowed the newer icueprofile.ApplyMappingProbe API to be installed alongside older lsh.go and memory.go callers.
 
-Validation: JavaScript syntax checked with node --check; Go files gofmt'd. Full Go test/build could not run in this environment because go.mod requires Go >=1.25 while the installed local toolchain is Go 1.23.2.
+Includes the complete matching lsh.go and memory.go sources using the 3-value ApplyMappingProbe return and generation-based hardware confirmation logging.
+
+Functional scope remains .74z7d8: live preview lifecycle reset, profile-switch override clearing, All QX Fans, All Memory, and physical editor behavior.
