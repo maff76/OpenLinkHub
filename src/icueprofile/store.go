@@ -13,6 +13,7 @@ import (
 // ImportedProfile is the compact representation exposed to the UI. The full
 // parsed profile remains available by parsing Path when the renderer needs it.
 type ImportedProfile struct {
+	Key           string         `json:"key"`
 	FileName      string         `json:"fileName"`
 	Name          string         `json:"name"`
 	ID            string         `json:"id,omitempty"`
@@ -22,6 +23,33 @@ type ImportedProfile struct {
 	EnabledLayers int            `json:"enabledLayers"`
 	Effects       map[string]int `json:"effects"`
 	Compatibility Compatibility  `json:"compatibility"`
+}
+
+// WorkspaceLayerCount returns the authored lighting layer count for the iCUE LINK
+// System Hub canvas used by QX/LINK playback. Profile.Summary.Layers intentionally
+// counts every parsed device/channel compatibility entry (keyboards, DRAM, duplicate
+// device canvases, etc.), which is useful diagnostics but is not the layer count a
+// user sees for the selected LINK lighting canvas in iCUE.
+func WorkspaceLayerCount(p *Profile) int {
+	if p == nil {
+		return 0
+	}
+	for i := range p.Devices {
+		d := &p.Devices[i]
+		if d.USBVendorID != 6940 || d.USBProductID != 3135 || len(d.Channels) == 0 {
+			continue
+		}
+		count := 0
+		for _, l := range d.Channels[0].Layers {
+			if strings.EqualFold(l.Effect, "LightingLink") && len(p.LightingLinkLayers) > 0 {
+				count += len(p.LightingLinkLayers)
+			} else {
+				count++
+			}
+		}
+		return count
+	}
+	return p.Summary.Layers
 }
 
 func Directory(configPath string) string {
@@ -61,9 +89,9 @@ func Scan(configPath string) ([]ImportedProfile, map[string]string, error) {
 			continue
 		}
 		profiles = append(profiles, ImportedProfile{
-			FileName: entry.Name(), Name: p.Name, ID: p.ID,
+			Key: ProfileKey(entry.Name()), FileName: entry.Name(), Name: p.Name, ID: p.ID,
 			DeviceEntries: p.Summary.DeviceEntries, Channels: p.Summary.Channels,
-			Layers: p.Summary.Layers, EnabledLayers: p.Summary.EnabledLayers,
+			Layers: WorkspaceLayerCount(p), EnabledLayers: p.Summary.EnabledLayers,
 			Effects: p.Summary.Effects, Compatibility: BuildCompatibility(p.Summary.Effects),
 		})
 	}

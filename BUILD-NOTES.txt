@@ -1,68 +1,12 @@
-OpenLinkHub v12.4.74z7d9 - effect maths audit test build
+OpenLinkHub v12.4.74z7d9d - restore profile key + workspace layer count
 
-Scope
------
-Changed-file-only test build. No patch/diff files.
-Based on the current z7d8a renderer state; LINK discovery/retry/bounds logic is untouched.
+Authoritative baseline: user-supplied current source OpenLinkHub(20261019-231840).zip.
+Changed complete source file only:
+  src/icueprofile/store.go
 
-Maths audit findings applied
-----------------------------
-1. WaveLighting and RippleLighting had a genuine phase-wrap discontinuity when
-   velocity != 100. They multiplied a 0..1 wrapped phase by velocityScale, so
-   non-unit velocities jumped backwards at every authored-duration boundary.
-   They now advance from the unwrapped shared effect clock and wrap only after
-   velocity scaling. TIME and SPACE remain independent.
+Restores two behaviours accidentally removed by 9e05c557 (live reset + group editing):
+- ImportedProfile.Key and Scan() ProfileKey population, required by the profile-selection UI.
+- WorkspaceLayerCount() and its use in Scan(), so the profile list shows authored LINK workspace layers instead of total parsed compatibility layers.
 
-2. MarqueeLighting was still using raw local LED index (i) for its block/gap
-   geometry. It now uses the topology spatial coordinate when one is available,
-   with the old sequential index retained only as the unknown-topology fallback.
-
-3. SequentialLighting was still progressing through raw local LED order. It now
-   moves a spatial threshold across the topology projection. LEDs sharing a
-   physical projected position change together. Unknown hardware keeps the old
-   sequential fallback coordinates.
-
-4. VisorLighting was still computing beam distance from raw local LED index.
-   It now computes its out-and-back Gaussian beam against topology coordinates,
-   including topology min/max, while retaining sequential fallback for unknown
-   hardware.
-
-Audited and deliberately unchanged
-----------------------------------
-- RainLighting: keeps the previously successful periodic-distance/wrap fix.
-- ColorWaveLighting: already uses topology coordinates and the unwrapped common
-  clock for travelling fronts.
-- RainbowWave / RainbowChannel / Spiral / SpiralRainbow / WaterColor spatial
-  variants: already consume topology coordinates where available.
-- GradientLighting: imported iCUE Gradient is currently treated as a temporal
-  whole-selection transition curve, not a spatial gradient, so topology should
-  not be injected into it without capture evidence showing otherwise.
-- Blink / Breathe / ColorShift / ColorPulse / Rainbow: whole-selection temporal
-  effects; raw LED order is not part of their equations.
-
-Known limitation retained intentionally
----------------------------------------
-QX raw outputs 0..23 have measured outer-ring topology, including linked side
-emitters, but outputs 24..33 have not yet had their exact physical positions
-recorded. This build does not invent a new 2-D map for those ten outputs. It
-uses the existing one-dimensional topology projection so this test isolates
-renderer maths from further topology speculation.
-
-What to test
-------------
-- Wave at velocity values below and above 100: watch specifically for a jump at
-  the end of each authored-duration window. z7d9 should remain continuous.
-- Visor: should sweep according to physical/topology position rather than raw
-  Corsair LED number order.
-- Marquee: blocks should follow physical/topology position rather than raw LED
-  number order.
-- Sequential: transition boundary should move spatially rather than raw 0..33.
-- Rain: regression check only; it should still look like the good post-.74g rain.
-- Master Chief: regression check that authored Static + Rain + Visor composition
-  remains stable.
-
-Validation
-----------
-- render.go formatted with gofmt.
-- Full compile could not be run in this environment: repository requires Go
-  >= 1.25.0 while the available local toolchain is Go 1.23.2.
+No renderer, effect maths, LINK discovery, mapper, topology, server, HTML or JavaScript changes.
+No patch/diff files.
