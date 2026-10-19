@@ -247,7 +247,8 @@ func (p *Profile) RenderDRAM(moduleOrdinal, ledCount int, started time.Time, bri
 	}
 	layers := p.expandLightingLinks(d.Channels[0].Layers)
 	logicalBase := moduleOrdinal * ledCount
-	return renderCanvas(layers, logicalBase, ledCount, moduleOrdinal, started, brightness)
+	buf, unsupported := renderCanvas(layers, logicalBase, ledCount, moduleOrdinal, started, brightness)
+	return applyByteMappingProbe(buf, "memory", moduleOrdinal, ledCount), unsupported
 }
 
 // RenderLINKDevice renders a non-QX LINK device. AllLeds layers are exact and
@@ -426,7 +427,7 @@ var rainMethod = struct {
 
 // MappingProbe is a runtime-only LED identification overlay for verified LINK
 // topologies. It bypasses profile/effect output only for the selected QX/TITAN
-// device: every LED is blue and the selected local LED is purple. The authored profile and live
+// or memory device: every LED is blue and the selected local LED is purple. The authored profile and live
 // concert state continue untouched underneath so disabling the probe resumes
 // normal playback immediately.
 type MappingProbe struct {
@@ -458,9 +459,11 @@ func SetMappingProbe(enabled bool, kind string, deviceOrdinal, localLED int) (Ma
 		maxLED = 34
 	case "titan":
 		maxLED = 20
+	case "memory":
+		maxLED = 6
 	default:
 		if enabled {
-			return GetMappingProbe(), fmt.Errorf("mapping probe supports QX and TITAN only")
+			return GetMappingProbe(), fmt.Errorf("mapping probe supports QX, TITAN and memory only")
 		}
 	}
 	if deviceOrdinal < 0 {
@@ -476,6 +479,26 @@ func SetMappingProbe(enabled bool, kind string, deviceOrdinal, localLED int) (Ma
 	mappingProbe.LocalLED = localLED
 	mappingProbe.Unlock()
 	return GetMappingProbe(), nil
+}
+
+// applyByteMappingProbe overlays the mapper after normal DRAM rendering. It is
+// intentionally byte-level so probing cannot alter the DRAM canvas, authored
+// selection mapping, effect state, or persistent renderer state.
+func applyByteMappingProbe(buf []byte, kind string, deviceOrdinal, ledCount int) []byte {
+	probe := GetMappingProbe()
+	if !probe.Enabled || !strings.EqualFold(probe.Kind, kind) || probe.DeviceOrdinal != deviceOrdinal || ledCount <= 0 || len(buf) < ledCount*3 {
+		return buf
+	}
+	out := append([]byte(nil), buf...)
+	for i := 0; i < ledCount; i++ {
+		base := i * 3
+		out[base], out[base+1], out[base+2] = 0, 102, 255
+	}
+	if probe.LocalLED >= 0 && probe.LocalLED < ledCount {
+		base := probe.LocalLED * 3
+		out[base], out[base+1], out[base+2] = 128, 0, 255
+	}
+	return out
 }
 
 func GetRainMethod() RainMethod {

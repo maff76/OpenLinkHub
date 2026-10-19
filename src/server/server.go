@@ -2661,6 +2661,7 @@ func getICUEEditorDevices(w http.ResponseWriter, _ *http.Request) {
 		ChannelID int    `json:"channelId"`
 		PortID    int    `json:"portId,omitempty"`
 		Topology  string `json:"topology,omitempty"`
+		Locator   string `json:"locator,omitempty"`
 	}
 	out := make([]editorDevice, 0)
 	qxNumber, titanNumber, memoryNumber, linkNumber := 0, 0, 0, 0
@@ -2730,7 +2731,7 @@ func getICUEEditorDevices(w http.ResponseWriter, _ *http.Request) {
 				if validLabel(dev.Label) {
 					name = strings.TrimSpace(dev.Label)
 				}
-				out = append(out, editorDevice{Key: fmt.Sprintf("%s:%d", serial, k), Parent: registered.Product, Name: name, Kind: "memory", LEDs: int(dev.LedChannels), ChannelID: k, Topology: "linear"})
+				out = append(out, editorDevice{Key: fmt.Sprintf("%s:%d", serial, k), Parent: registered.Product, Name: name, Kind: "memory", LEDs: int(dev.LedChannels), ChannelID: k, Topology: "linear", Locator: strings.TrimSpace(dev.Locator)})
 			}
 		}
 	}
@@ -2839,7 +2840,7 @@ func icueMappingProbe(w http.ResponseWriter, r *http.Request) {
 			LocalLED      int    `json:"localLed"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
-			http.Error(w, "Unable to read QX mapping probe: "+err.Error(), http.StatusBadRequest)
+			http.Error(w, "Unable to read LED mapping probe: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 		probe, err := icueprofile.SetMappingProbe(req.Enabled, req.Kind, req.DeviceOrdinal, req.LocalLED)
