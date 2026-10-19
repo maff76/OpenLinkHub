@@ -1,15 +1,11 @@
-OpenLinkHub v12.4.74z7d6 - measured topology cleanup
+OpenLinkHub v12.4.74z7d7 — physical profile editor
 
-Complete replacement files only; no patch/diff files.
+Changed complete files only; no patch/diff files.
 
-Changes:
-- Records measured QX outer topology: front 0-11, rear 12-23 (+12 mirror).
-- Records QX dependent side-strip emitters without inventing extra addressable LEDs:
-  front 3,4,5,6 and 9,10,11,0; rear 15,16,17,18 and 21,22,23,12.
-- Leaves QX 24-33 inner spatial projection unchanged/pending dedicated physical capture.
-- Adds generic memory top-to-bottom physical-position helper; six-LED DIMMs are measured 0-5 top-to-bottom, other counts are explicitly inferred fallback.
-- Updates mapper/editor labels/tooltips to show measured topology and linked strip behaviour.
-- Corrects mapper status wording: backend acceptance no longer claims hardware confirmation.
-- Cache-busts icue-profiles.js with v=12.4.74z7d6.
-
-No LINK discovery/bounds/retry changes. No effect behaviour/timing changes.
+- Normal QX editor is physical: front/rear faces, outer/inner positions and linked side-strip segments.
+- Raw LED numbers are hidden during normal profile editing.
+- Clicking a linked QX side-strip segment selects the same hardware output as its parent ring position.
+- Raw IDs remain visible in Live LED Mapper diagnostic mode only.
+- Memory editor is a physical top-to-bottom DIMM representation with no raw numbering.
+- QX 24–33 retain the prior inner projection pending exact physical capture; no new mapping claim is made for them.
+- Cache-busted editor JS to 12.4.74z7d7.

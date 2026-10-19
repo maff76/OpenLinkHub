@@ -148,20 +148,67 @@ $(function () {
             $('#icueMapperHint').text('This device is not part of the current mapping pass.');
         }
     }
+    function ledButton(d,local,extraClass,label){
+        const selected=localSelected(local);
+        let title=d.name+' · '+(d.kind==='qx'?qxPhysicalLabel(local):('physical position '+(local+1)));
+        if(d.kind==='titan'&&d.leds===20)title=d.name+' · measured iCUE zone '+titan280Zones[local];
+        if(d.kind==='memory')title=d.name+' · '+(d.locator||('module '+((d.memoryOrdinal||0)+1)))+' · '+memoryPositionLabel(local,d.leds);
+        if(d.kind==='qx'&&d.leds===34){const strips=qxStripLabels(local);if(strips.length)title+=' · linked to '+strips.join(' + ');}
+        const b=$('<button type="button" class="icue-led"></button>').addClass(extraClass||'').attr({'title':title,'aria-label':title});
+        if(label)b.text(label);
+        if(selected)b.addClass('selected').css('background-color',profileColor());
+        if($('#icueTopologyProbe').prop('checked')&&mapperCapable(d)&&local===probeLocal)b.addClass('probe');
+        b.on('click',()=>{if($('#icueTopologyProbe').prop('checked')&&mapperCapable(d)){probeLocal=local;renderLEDs();applyMappingProbe();}else toggleLED(local);});
+        return b;
+    }
+    function placeFanLED(stage,d,local,angleDeg,radius,cls){
+        const a=(angleDeg-90)*Math.PI/180,x=50+Math.cos(a)*radius,y=50+Math.sin(a)*radius;
+        const b=ledButton(d,local,'fan-dot '+(cls||''),'').css({left:x+'%',top:y+'%'});stage.append(b);
+    }
+    function renderQXPhysical(map,d){
+        map.removeClass('linear').addClass('physical qx-physical');
+        const wrap=$('<div class="qx-layout"></div>');
+        ['front','rear'].forEach((face,faceIndex)=>{
+            const stage=$('<div class="icue-fan-stage"></div>').attr('aria-label',face+' face of '+d.name);
+            stage.append($('<div class="fan-face-label"></div>').text(face==='front'?'Front':'Rear'));
+            const base=faceIndex*12;
+            // Measured outer ring: raw 1 is approximately 5 o'clock on the front and IDs increase clockwise.
+            // Rear uses the measured +12 mirror. Raw IDs stay internal; the editor exposes physical positions only.
+            const origin=150-30; // local 1 = 150° (5 o'clock), therefore local 0 = 120°.
+            for(let j=0;j<12;j++)placeFanLED(stage,d,base+j,origin+j*30,40,'outer');
+            // Inner outputs retain the existing projection until their exact physical capture is completed.
+            const inner=face==='front'?[24,25,26,27,28,29]:[30,31,32,33];
+            inner.forEach((local,j)=>placeFanLED(stage,d,local,(360/inner.length)*j,23,'inner'));
+            const stripGroups=face==='front'?[[3,4,5,6],[9,10,11,0]]:[[15,16,17,18],[21,22,23,12]];
+            stripGroups.forEach((group,side)=>{
+                const bar=$('<div class="qx-side-strip"></div>').addClass(side===0?'strip-left':'strip-right');
+                group.forEach(local=>{
+                    const seg=ledButton(d,local,'strip-segment','');
+                    bar.append(seg);
+                });
+                stage.append(bar);
+            });
+            wrap.append(stage);
+        });
+        map.append(wrap);
+    }
+    function renderMemoryPhysical(map,d){
+        map.removeClass('linear').addClass('physical memory-physical');
+        const stick=$('<div class="memory-stick"></div>').attr('aria-label',(d.locator||d.name)+' physical LED positions');
+        for(let i=0;i<d.leds;i++)stick.append(ledButton(d,i,'memory-dot',''));
+        map.append(stick);
+    }
     function renderLEDs(){
-        const map=$('#icueLedMap').empty().addClass('linear'),d=selectedDevice();if(!d){$('#icueLedCount').text('No RGB device selected');return;}let count=0;
-        for(let i=0;i<d.leds;i++){
-            const selected=localSelected(i);if(selected)count++;
-            let title=d.name+' · raw LED '+i;
-            if(d.kind==='titan'&&d.leds===20)title+=' · measured iCUE zone '+titan280Zones[i]+' · logical '+(756+i);
-            if(d.kind==='memory')title+=' · '+(d.locator||('module '+((d.memoryOrdinal||0)+1)))+' · '+memoryPositionLabel(i,d.leds);
-            if(d.kind==='qx'&&d.leds===34){title+=' · '+qxPhysicalLabel(i);const strips=qxStripLabels(i);if(strips.length)title+=' · also lights '+strips.join(' + ');}
-            const b=$('<button type="button" class="icue-led"></button>').text(i).attr('title',title);
-            if(selected)b.addClass('selected').css('background-color',profileColor());
-            if($('#icueTopologyProbe').prop('checked')&&mapperCapable(d)&&i===probeLocal)b.addClass('probe');
-            b.on('click',()=>{if($('#icueTopologyProbe').prop('checked')&&mapperCapable(d)){probeLocal=i;renderLEDs();applyMappingProbe();}else toggleLED(i);});map.append(b);
+        const map=$('#icueLedMap').empty().removeClass('linear physical qx-physical memory-physical'),d=selectedDevice();if(!d){$('#icueLedCount').text('No RGB device selected');return;}let count=0;
+        for(let i=0;i<d.leds;i++)if(localSelected(i))count++;
+        const diagnostic=$('#icueTopologyProbe').prop('checked');
+        if(!diagnostic&&d.kind==='qx'&&d.leds===34)renderQXPhysical(map,d);
+        else if(!diagnostic&&d.kind==='memory')renderMemoryPhysical(map,d);
+        else{
+            map.addClass('linear');
+            for(let i=0;i<d.leds;i++)map.append(ledButton(d,i,'',diagnostic?String(i):''));
         }
-        $('#icueLedCount').text(count+' / '+d.leds+' LEDs on '+d.name);$('#icueTopologyProbe').closest('label').toggle(mapperCapable(d));syncMapperDeviceUI(d);updateProbeLabel();editorSourceTrace();
+        $('#icueLedCount').text(count+' / '+d.leds+' physical positions on '+d.name);$('#icueTopologyProbe').closest('label').toggle(mapperCapable(d));syncMapperDeviceUI(d);updateProbeLabel();editorSourceTrace();
     }
     function updateProbeLabel(){
         const d=selectedDevice();if(!mapperCapable(d))return;const max=mapperLedCount(d);if(probeLocal>=max)probeLocal=max-1;
