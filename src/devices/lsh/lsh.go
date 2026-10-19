@@ -258,7 +258,6 @@ type Device struct {
 	instance               *common.Device
 	stopOnce               sync.Once
 	Psu                    bool
-	icueTopologyAuditOnce  sync.Once
 }
 
 var (
@@ -835,61 +834,6 @@ func (d *Device) loadICUEProfiles() {
 
 // qxOrdinal maps the current LINK QX ordering onto the 42-id stride observed
 // in iCUE captures. Only QX devices participate in this logical canvas.
-func (d *Device) auditICUELinkTopology() {
-	d.icueTopologyAuditOnce.Do(func() {
-		keys := make([]int, 0, len(d.Devices))
-		for k := range d.Devices {
-			keys = append(keys, k)
-		}
-		sort.Ints(keys)
-
-		qxGlobal := 0
-		qxByPort := make(map[uint8]int)
-		for _, k := range keys {
-			dev := d.Devices[k]
-			if dev == nil || dev.LedChannels == 0 {
-				continue
-			}
-			name := strings.ToLower(dev.Name)
-			isQX := strings.Contains(name, "qx")
-			isTitan := strings.Contains(name, "titan") || dev.TitanAIO
-			if !isQX && !isTitan {
-				continue
-			}
-
-			fields := logger.Fields{
-				"mapKey":       k,
-				"channelId":    dev.ChannelId,
-				"portId":       dev.PortId,
-				"position":     dev.Position,
-				"deviceId":     dev.DeviceId,
-				"name":         dev.Name,
-				"label":        dev.Label,
-				"leds":         dev.LedChannels,
-				"containsPump": dev.ContainsPump,
-				"titanAIO":     dev.TitanAIO,
-			}
-			if isQX {
-				portOrdinal := qxByPort[dev.PortId]
-				fields["family"] = "QX"
-				fields["qxGlobalOrdinal"] = qxGlobal
-				fields["qxPortOrdinal"] = portOrdinal
-				fields["logicalStartGlobal42"] = qxGlobal * 42
-				fields["logicalEndGlobal42"] = qxGlobal*42 + 33
-				fields["reservedGlobal42"] = fmt.Sprintf("%d-%d", qxGlobal*42+34, qxGlobal*42+41)
-				fields["logicalStartPort42"] = portOrdinal * 42
-				fields["logicalEndPort42"] = portOrdinal*42 + 33
-				fields["reservedPort42"] = fmt.Sprintf("%d-%d", portOrdinal*42+34, portOrdinal*42+41)
-				qxByPort[dev.PortId] = portOrdinal + 1
-				qxGlobal++
-			} else {
-				fields["family"] = "TITAN"
-			}
-			logger.Log(fields).Info("iCUE LINK IDENTITY AUDIT: v12.4.74e")
-		}
-	})
-}
-
 func (d *Device) qxOrdinal(channelID int) int {
 	keys := make([]int, 0)
 	for k, dev := range d.Devices {
@@ -5049,7 +4993,6 @@ func (d *Device) setDeviceColor() {
 func (d *Device) generateRgbEffect(k int, channels uint8, startTime *time.Time, rgbProfile string, subDeviceId int) []byte {
 	buff := make([]byte, 0)
 	if strings.HasPrefix(rgbProfile, "icue-") {
-		d.auditICUELinkTopology()
 		profile, _, err := icueprofile.LoadByKey(pwd, rgbProfile)
 		if err != nil {
 			logger.Log(logger.Fields{"error": err, "profile": rgbProfile}).Warn("Unable to load imported iCUE profile")
@@ -5525,40 +5468,11 @@ func (d *Device) read(endpoint, bufferType []byte, psu bool, v2 byte) []byte {
 		logger.Log(logger.Fields{"error": err}).Error("Unable to read endpoint")
 	}
 
-	// getDevices is sensitive to stale or unexpected HID packets because the
-	// parser expects bytes 4:6 to identify the requested data type and byte 6
-	// to contain the device count.  Log the first packet header before deciding
-	// whether a continuation packet belongs to this response.
-	if bytes.Equal(endpoint, modeGetDevices) {
-		headerLen := 16
-		if len(buffer) < headerLen {
-			headerLen = len(buffer)
-		}
-		logger.Log(logger.Fields{
-			"serial":       d.Serial,
-			"responseLen":  len(buffer),
-			"expectedType": fmt.Sprintf("% 2x", bufferType),
-			"header":       fmt.Sprintf("% 2x", buffer[:headerLen]),
-			"typeMatch":    responseMatchSafe(buffer, bufferType),
-		}).Warn("getDevices() - First HID response diagnostic")
-	}
-
 	if responseMatchSafe(buffer, bufferType) {
 		next, e := d.transfer(cmdRead, endpoint, psu, v2)
 		if e != nil {
 			logger.Log(logger.Fields{"error": e}).Error("Unable to read endpoint")
 		} else if len(next) >= 4 {
-			if bytes.Equal(endpoint, modeGetDevices) {
-				headerLen := 16
-				if len(next) < headerLen {
-					headerLen = len(next)
-				}
-				logger.Log(logger.Fields{
-					"serial":      d.Serial,
-					"responseLen": len(next),
-					"header":      fmt.Sprintf("% 2x", next[:headerLen]),
-				}).Warn("getDevices() - Continuation HID response diagnostic")
-			}
 			buffer = append(buffer, next[4:]...)
 		}
 	}

@@ -2,7 +2,6 @@ package icueprofile
 
 import (
 	"fmt"
-	"log"
 	"math"
 	"regexp"
 	"sort"
@@ -178,49 +177,6 @@ func applyPatch(dst RGB, patch LEDPatch) RGB {
 	}
 }
 
-// v12.4.47 persistent-state A/B retains the v12.4.46 command-clash audit. This is observational only: it does not alter
-// rendering. A clash means two or more layers issue an active command to the
-// same physical LED on the same renderer tick. A conflicting clash means those
-// commands request visibly different RGB values.
-type commandClashStats struct {
-	mu                sync.Mutex
-	bucket            int64
-	frames            int64
-	commands          int64
-	ledsWithCommand   int64
-	clashLEDs         int64
-	conflictingLEDs   int64
-	maxCommandsPerLED int
-	perLEDCommands    []int64
-	perLEDClashes     []int64
-	effectCommands    map[string]int64
-	effectLEDSlots    map[string]int64
-}
-
-var commandClashAudit = map[int]*commandClashStats{}
-var commandClashAuditMu sync.Mutex
-
-func clashStatsFor(deviceOrdinal, ledCount int) *commandClashStats {
-	commandClashAuditMu.Lock()
-	defer commandClashAuditMu.Unlock()
-	s := commandClashAudit[deviceOrdinal]
-	if s == nil {
-		s = &commandClashStats{effectCommands: make(map[string]int64), effectLEDSlots: make(map[string]int64)}
-		commandClashAudit[deviceOrdinal] = s
-	}
-	if s.effectCommands == nil {
-		s.effectCommands = make(map[string]int64)
-	}
-	if s.effectLEDSlots == nil {
-		s.effectLEDSlots = make(map[string]int64)
-	}
-	if len(s.perLEDCommands) != ledCount {
-		s.perLEDCommands = make([]int64, ledCount)
-		s.perLEDClashes = make([]int64, ledCount)
-	}
-	return s
-}
-
 func rgbCommandNear(a, b RGB, eps float64) bool {
 	return math.Abs(a.R-b.R) <= eps && math.Abs(a.G-b.G) <= eps && math.Abs(a.B-b.B) <= eps
 }
@@ -231,138 +187,6 @@ var ledNumber = regexp.MustCompile(`(?i)Led_Cmd_Led(\d+)$`)
 // profile clock. A patch has an explicit active bit, so "no command" can never
 // be confused with RGB black. Layers are applied base-to-top using iCUE's
 // serialized top-to-bottom stack order. Authored black remains an active patch.
-
-// Gradient event diagnostics are intentionally observational only: they do not
-// change the v12.4.15 rendering. They count authored transition boundaries that
-// the ~20 ms render cadence crosses, so hardware logs can distinguish scheduler
-// problems from compositor problems before we change Gradient semantics again.
-var gradientDiag = struct {
-	sync.Mutex
-	bucket       int64
-	evaluated    int
-	crossed      int
-	selectedLEDs int
-	samples      []string
-}{}
-
-// outputDiag traces Gradient events through topology selection and into the final
-// per-fan RGB buffer. It is diagnostic-only and does not alter rendered colours.
-var outputDiag = struct {
-	sync.Mutex
-	bucket             int64
-	crossed            int
-	mappedLEDRefs      int
-	changedByGradients int
-	finalChangedLEDs   int
-	previous           map[int][]byte
-}{previous: map[int][]byte{}}
-
-var contributionAudit = struct {
-	sync.Mutex
-	bucket int64
-}{}
-
-func rgbNear(a, b RGB, tolerance float64) bool {
-	return math.Abs(a.R-b.R) <= tolerance && math.Abs(a.G-b.G) <= tolerance && math.Abs(a.B-b.B) <= tolerance
-}
-
-// topologyLogicalBase returns the exact logical base only when the topology can
-// express one. It is used solely for the diagnostic authored-selection count;
-// actual mapping continues to use selectedWithTopology unchanged.
-func topologyLogicalBase(topology LEDTopology, deviceOrdinal int) int {
-	if topology == nil {
-		return -1
-	}
-	logical, ok := topology.LogicalLED(deviceOrdinal, 0)
-	if !ok {
-		return -1
-	}
-	return logical
-}
-
-func gradientCrossings(elapsed, dur float64, stops []transitionStop) int {
-	if dur <= 0 || len(stops) < 2 {
-		return 0
-	}
-	const frameWindow = 0.025
-	prev := elapsed - frameWindow
-	if prev < 0 {
-		prev = 0
-	}
-	crossed := 0
-	startCycle := int(math.Floor(prev / dur))
-	endCycle := int(math.Floor(elapsed / dur))
-	for cycle := startCycle; cycle <= endCycle; cycle++ {
-		base := float64(cycle) * dur
-		for si, st := range stops {
-			if si == len(stops)-1 && st.T >= 0.999999 {
-				continue
-			}
-			eventTime := base + st.T*dur
-			if eventTime > prev && eventTime <= elapsed {
-				crossed++
-			}
-		}
-	}
-	return crossed
-}
-
-func diagnoseGradientEvents(l Layer, elapsed, dur float64, stops []transitionStop) {
-	if dur <= 0 || len(stops) < 2 {
-		return
-	}
-	// LSH normally renders every ~20 ms. Looking back 25 ms intentionally spans
-	// one frame without requiring persistent per-layer state in the renderer.
-	const frameWindow = 0.025
-	prev := elapsed - frameWindow
-	if prev < 0 {
-		prev = 0
-	}
-	bucket := int64(math.Floor(elapsed))
-	crossed := 0
-	var sample string
-	startCycle := int(math.Floor(prev / dur))
-	endCycle := int(math.Floor(elapsed / dur))
-	for cycle := startCycle; cycle <= endCycle; cycle++ {
-		base := float64(cycle) * dur
-		for si, st := range stops {
-			// The final 1.0 stop is the next cycle's 0.0 boundary; count it once.
-			if si == len(stops)-1 && st.T >= 0.999999 {
-				continue
-			}
-			eventTime := base + st.T*dur
-			if eventTime > prev && eventTime <= elapsed {
-				crossed++
-				if sample == "" {
-					sample = l.ID + " dur=" + strconv.FormatFloat(dur, 'f', 3, 64) +
-						" stop=" + strconv.FormatFloat(st.T, 'f', 3, 64) +
-						" leds=" + strconv.Itoa(len(l.LEDs))
-				}
-			}
-		}
-	}
-
-	gradientDiag.Lock()
-	defer gradientDiag.Unlock()
-	if gradientDiag.bucket == 0 {
-		gradientDiag.bucket = bucket
-	}
-	if bucket != gradientDiag.bucket {
-		log.Printf("iCUE Gradient diagnostic: evaluated=%d crossedEvents=%d selectedLEDRefs=%d samples=%v",
-			gradientDiag.evaluated, gradientDiag.crossed, gradientDiag.selectedLEDs, gradientDiag.samples)
-		gradientDiag.bucket = bucket
-		gradientDiag.evaluated = 0
-		gradientDiag.crossed = 0
-		gradientDiag.selectedLEDs = 0
-		gradientDiag.samples = gradientDiag.samples[:0]
-	}
-	gradientDiag.evaluated++
-	gradientDiag.crossed += crossed
-	gradientDiag.selectedLEDs += len(l.LEDs)
-	if crossed > 0 && sample != "" && len(gradientDiag.samples) < 6 {
-		gradientDiag.samples = append(gradientDiag.samples, sample)
-	}
-}
 
 // LinkDevice returns the imported lighting entry for the iCUE LINK System Hub.
 func (p *Profile) LinkDevice() *Device {
@@ -552,9 +376,6 @@ type scorePlayerState struct {
 	lastElapsed       float64
 	started           bool
 	logBucket         int64
-	visualSamples     []RGB
-	visualSampleSet   []bool
-	visualLogAt       []float64
 	renderCalls       int
 	renderDeltaSum    float64
 	renderDeltaMin    float64
@@ -765,103 +586,10 @@ func recordLayerTrack(l Layer, li, fanOrdinal, ledCount int, duration float64, t
 	return nil, true
 }
 
-func logScoreTimingCandidate(li int, l Layer, topology LEDTopology, fanOrdinal, ledCount int, repeat float64, oneShot bool) {
-	effect := strings.ToLower(l.Effect)
-	serialized := layerScoreDuration(l)
-	window := effectWindowSeconds(l)
-	speedPreset := discreteSpeed(l)
-	logBase := func(model, timing string) {
-		log.Printf("iCUE TRACK EFFECT: leds=%d xml=%d effect=%s repeat=%.6fs oneShot=%t serializedDuration=%.6fs effectiveWindow=%.6fs speedPreset=%.0f model=%s timing=%s", ledCount, li, l.Effect, repeat, oneShot, serialized, window, speedPreset, model, timing)
-	}
-	if effect == "staticlighting" {
-		logBase("static-opening-state", "profile-start-only; holds-until-overwritten")
-		return
-	}
-
-	// All animated effects now share one normalized timebase:
-	// authored duration -> Slow/Normal/Fast duration scale -> effective window
-	// -> normalized phase. Effect-specific parameters only shape spatial travel,
-	// colour, width, tail and direction; they do not create another wall clock.
-	log.Printf("iCUE EFFECT CLOCK: leds=%d xml=%d effect=%s authoredDuration=%.6fs speedPreset=%.0f durationScale=%.3f effectiveWindow=%.6fs phaseModel=normalized-0..1", ledCount, li, l.Effect, serialized, speedPreset, effectDurationScale(l), window)
-
-	switch effect {
-	case "rainlighting":
-		if GetRainMethod().Method == "native" {
-			logBase("native-rain-events", "native OpenLinkHub independent spawn/lifetime model; runtime A/B only")
-		} else {
-			logBase("normalized-rain-events", "shared-clock; 0.100 effect-clock event step; periodic spatial wrap; transient restore")
-		}
-	case "colorwavelighting":
-		logBase("normalized-color-wave", "shared-clock; continuous pass counter; direction/spatial route remain effect-local")
-	case "wavelighting":
-		velocity := number(l.Parameters["velocity"], 100)
-		tail := number(l.Parameters["tailLength"], 4)
-		log.Printf("iCUE EFFECT GEOMETRY: leds=%d xml=%d effect=%s velocity=%.3f velocityScale=%.3f tail=%.3f", ledCount, li, l.Effect, velocity, math.Abs(velocity)/100.0, tail)
-		logBase("normalized-wave", "shared-phase; velocity scales spatial travel; tail shapes falloff")
-	case "ripplelighting":
-		velocity := number(l.Parameters["velocity"], 100)
-		tail := number(l.Parameters["tailLength"], 4)
-		log.Printf("iCUE EFFECT GEOMETRY: leds=%d xml=%d effect=%s velocity=%.3f velocityScale=%.3f tail=%.3f", ledCount, li, l.Effect, velocity, math.Abs(velocity)/100.0, tail)
-		logBase("normalized-ripple", "shared-phase; velocity scales radius; tail shapes falloff")
-	default:
-		logBase("normalized-effect-phase", "shared-phase; effect-local geometry/colour only")
-	}
-}
-
-func auditRGBHex(leds []RGB) []string {
-	out := make([]string, len(leds))
-	for i, c := range leds {
-		out[i] = fmt.Sprintf("%d=#%02X%02X%02X", i, int(clamp(c.R)), int(clamp(c.G)), int(clamp(c.B)))
-	}
-	return out
-}
-
 // auditStaticOpeningFrame reconstructs only the authored StaticLighting opening
 // state. It deliberately excludes Rain and every other live performer so the
 // diagnostic proves what colour each physical LED should hold before live
 // effects begin touching it.
-func auditStaticOpeningFrame(layers []Layer, topology LEDTopology, deviceOrdinal, ledCount, sourceDeviceCount int) []RGB {
-	out := make([]RGB, ledCount)
-	for li := len(layers) - 1; li >= 0; li-- {
-		l := layers[li]
-		if !l.Enabled || !strings.EqualFold(l.Effect, "StaticLighting") {
-			continue
-		}
-		colors, alpha, ok := renderLayer(l, deviceOrdinal, ledCount, 0, topologyPositions(topology, deviceOrdinal, ledCount))
-		if !ok {
-			continue
-		}
-		for local := 0; local < ledCount; local++ {
-			if !selectedWithTopology(l, topology, deviceOrdinal, local, sourceDeviceCount) || local >= len(colors) || local >= len(alpha) {
-				continue
-			}
-			out[local] = mixRGB(out[local], colors[local], alpha[local])
-		}
-	}
-	return out
-}
-
-func auditCanvasStaticOpeningFrame(layers []Layer, logicalBase, ledCount, ordinal int) []RGB {
-	out := make([]RGB, ledCount)
-	for li := len(layers) - 1; li >= 0; li-- {
-		l := layers[li]
-		if !l.Enabled || !strings.EqualFold(l.Effect, "StaticLighting") {
-			continue
-		}
-		patches, ok := renderLayerPatches(l, ordinal, ledCount, 0, nil)
-		if !ok {
-			continue
-		}
-		for local := 0; local < ledCount; local++ {
-			if !selectedAt(l, logicalBase, local) {
-				continue
-			}
-			out[local] = applyPatch(out[local], patches[local])
-		}
-	}
-	return out
-}
-
 func compileLiveConcert(p *Profile, topology LEDTopology, deviceOrdinal, ledCount int) *compiledScore {
 	d := p.LinkDevice()
 	if d == nil || len(d.Channels) == 0 {
@@ -1035,36 +763,6 @@ func applyLiveContinuous(state *scorePlayerState, at float64) int {
 			active++
 		}
 
-		// Diagnostic visual cue: report only a large representative colour change,
-		// so a real-hardware observer can compare the timestamp with what iCUE/OLH
-		// visibly did. This does not affect rendering and is deliberately limited
-		// to rendererOrdinal 0 to avoid duplicate fan/device spam.
-		if state.deviceOrdinal == 0 && active > 0 && ti < len(state.visualSamples) {
-			rep := RGB{R: sum.R / float64(active), G: sum.G / float64(active), B: sum.B / float64(active)}
-			if state.visualSampleSet[ti] {
-				delta := visualDistance(state.visualSamples[ti], rep)
-				if delta >= 80 && at-state.visualLogAt[ti] >= 0.20 {
-					local := math.Mod(at, track.repeat)
-					if local < 0 {
-						local += track.repeat
-					}
-					prev := state.visualSamples[ti]
-					expect := "noticeable-colour-change"
-					switch strings.ToLower(track.effect) {
-					case "wavelighting", "colorwavelighting":
-						expect = "travelling-blended-colour-change"
-					case "gradientlighting", "breathelighting", "colorshiftlighting", "colorpulselighting", "watercolorlighting":
-						expect = "gradual-expression-change"
-					case "rainlighting", "ripplelighting":
-						expect = "event-hit-or-propagation-change"
-					}
-					log.Printf("iCUE VISUAL CUE: t=%.3fs xml=%d effect=%s phraseLocal=%.3fs activeLEDs=%d region=LED%d-LED%d avgRGB=(%.0f,%.0f,%.0f)->(%.0f,%.0f,%.0f) delta=%.1f EXPECT=%s", at, track.layerIndex, track.effect, local, active, firstActive+1, lastActive+1, prev.R, prev.G, prev.B, rep.R, rep.G, rep.B, delta, expect)
-					state.visualLogAt[ti] = at
-				}
-			}
-			state.visualSamples[ti] = rep
-			state.visualSampleSet[ti] = true
-		}
 	}
 	return len(changed)
 }
@@ -1124,7 +822,7 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 		if d != nil && len(d.Channels) > 0 {
 			sourceCount = sourceQXFanCount(p.expandLightingLinks(d.Channels[0].Layers), topology)
 		}
-		state = &scorePlayerState{score: score, topology: topology, deviceOrdinal: deviceOrdinal, sourceDeviceCount: sourceCount, leds: make([]RGB, ledCount), visualSamples: make([]RGB, len(score.tracks)), visualSampleSet: make([]bool, len(score.tracks)), visualLogAt: make([]float64, len(score.tracks)), rainBase: make([][]RGB, len(score.tracks)), rainLast: make([][]RGB, len(score.tracks)), rainActive: make([][]bool, len(score.tracks))}
+		state = &scorePlayerState{score: score, topology: topology, deviceOrdinal: deviceOrdinal, sourceDeviceCount: sourceCount, leds: make([]RGB, ledCount), rainBase: make([][]RGB, len(score.tracks)), rainLast: make([][]RGB, len(score.tracks)), rainActive: make([][]bool, len(score.tracks))}
 		for ti := range score.tracks {
 			state.rainBase[ti] = make([]RGB, ledCount)
 			state.rainLast[ti] = make([]RGB, ledCount)
@@ -1965,7 +1663,6 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 			dur = 1
 		}
 		if stops := transitionStops(l); len(stops) >= 2 {
-			diagnoseGradientEvents(l, elapsed, dur, stops)
 			t := phase
 			if t < 0 {
 				t += 1
