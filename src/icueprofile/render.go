@@ -424,6 +424,60 @@ var rainMethod = struct {
 	Method string
 }{Method: "normalized"}
 
+// MappingProbe is a runtime-only LED identification overlay for verified LINK
+// topologies. It bypasses profile/effect output only for the selected QX/TITAN
+// device: every LED is blue and the selected local LED is purple. The authored profile and live
+// concert state continue untouched underneath so disabling the probe resumes
+// normal playback immediately.
+type MappingProbe struct {
+	Enabled       bool   `json:"enabled"`
+	Kind          string `json:"kind"`
+	DeviceOrdinal int    `json:"deviceOrdinal"`
+	LocalLED      int    `json:"localLed"`
+}
+
+var mappingProbe = struct {
+	sync.RWMutex
+	Enabled       bool
+	Kind          string
+	DeviceOrdinal int
+	LocalLED      int
+}{}
+
+func GetMappingProbe() MappingProbe {
+	mappingProbe.RLock()
+	defer mappingProbe.RUnlock()
+	return MappingProbe{Enabled: mappingProbe.Enabled, Kind: mappingProbe.Kind, DeviceOrdinal: mappingProbe.DeviceOrdinal, LocalLED: mappingProbe.LocalLED}
+}
+
+func SetMappingProbe(enabled bool, kind string, deviceOrdinal, localLED int) (MappingProbe, error) {
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	maxLED := 0
+	switch kind {
+	case "qx":
+		maxLED = 34
+	case "titan":
+		maxLED = 20
+	default:
+		if enabled {
+			return GetMappingProbe(), fmt.Errorf("mapping probe supports QX and TITAN only")
+		}
+	}
+	if deviceOrdinal < 0 {
+		return GetMappingProbe(), fmt.Errorf("device ordinal must be zero or greater")
+	}
+	if enabled && (localLED < 0 || localLED >= maxLED) {
+		return GetMappingProbe(), fmt.Errorf("%s local LED must be between 0 and %d", strings.ToUpper(kind), maxLED-1)
+	}
+	mappingProbe.Lock()
+	mappingProbe.Enabled = enabled
+	mappingProbe.Kind = kind
+	mappingProbe.DeviceOrdinal = deviceOrdinal
+	mappingProbe.LocalLED = localLED
+	mappingProbe.Unlock()
+	return GetMappingProbe(), nil
+}
+
 func GetRainMethod() RainMethod {
 	rainMethod.RLock()
 	defer rainMethod.RUnlock()
@@ -845,6 +899,20 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 	leds := append([]RGB(nil), state.leds...)
 	unsupported := append([]string(nil), state.score.unsupported...)
 	scorePlayers.Unlock()
+
+	// Dedicated QX mapping overlay: blue references + one purple probe LED.
+	// This is deliberately applied after the concert state is advanced so the
+	// mapper cannot alter profile playback semantics or persistent renderer state.
+	probe := GetMappingProbe()
+	if probe.Enabled && topology != nil && strings.EqualFold(topology.Name(), "QX") && deviceOrdinal == probe.DeviceOrdinal && len(leds) == 34 {
+		for i := range leds {
+			leds[i] = RGB{R: 0, G: 102, B: 255}
+		}
+		if probe.LocalLED >= 0 && probe.LocalLED < len(leds) {
+			leds[probe.LocalLED] = RGB{R: 128, G: 0, B: 255}
+		}
+	}
+
 	if brightness <= 0 {
 		brightness = 1
 	}

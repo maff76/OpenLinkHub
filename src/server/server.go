@@ -2823,6 +2823,37 @@ func icueRainMethod(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// icueMappingProbe controls the runtime-only QX/TITAN LED identification overlay.
+// It never modifies imported profiles: the selected device is rendered blue with
+// one purple local LED so physical LED order can be mapped unambiguously.
+func icueMappingProbe(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	switch r.Method {
+	case http.MethodGet:
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": 1, "probe": icueprofile.GetMappingProbe(), "persistent": false})
+	case http.MethodPost:
+		var req struct {
+			Enabled       bool   `json:"enabled"`
+			Kind          string `json:"kind"`
+			DeviceOrdinal int    `json:"deviceOrdinal"`
+			LocalLED      int    `json:"localLed"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
+			http.Error(w, "Unable to read QX mapping probe: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		probe, err := icueprofile.SetMappingProbe(req.Enabled, req.Kind, req.DeviceOrdinal, req.LocalLED)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": 1, "probe": probe, "persistent": false})
+	default:
+		w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 // icueTimingCalibration exposes the runtime-only Slow/Fast duration factors.
 // It is intentionally non-persistent: restart restores the experimental
 // 1.5 / 1.0 / 0.5 baseline and imported profiles are never modified.
@@ -2873,7 +2904,7 @@ func icueProfileWorkspace(w http.ResponseWriter, r *http.Request) {
 		// canonical mirror of the same layers.
 		authoredLayers := icueprofile.EnrichAuthoredSourceColors(profile.LightingLinkLayers)
 
-		const editorBackendVersion = "v12.4.74z7d2"
+		const editorBackendVersion = "v12.4.74z7d3-map"
 		editorModel := map[string]interface{}{
 			"version": editorBackendVersion,
 			"source":  "authored-cueprofile",
@@ -3139,6 +3170,7 @@ func setRoutes() http.Handler {
 	r.HandleFunc("/api/icue/profile", icueProfileWorkspace)
 	r.HandleFunc("/api/icue/timing-calibration", icueTimingCalibration)
 	r.HandleFunc("/api/icue/rain-method", icueRainMethod)
+	r.HandleFunc("/api/icue/mapping-probe", icueMappingProbe)
 	handleFunc(r, "/api/backup", http.MethodGet, backup.PerformBackup)
 	handleFunc(r, "/api/position/", http.MethodGet, getPositionData)
 	handleFunc(r, "/api/headset/getEqualizers/", http.MethodGet, getEqualizers)
