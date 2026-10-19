@@ -34,10 +34,51 @@ func (qxTopology) LogicalLED(deviceOrdinal, localLED int) (int, bool) {
 	return deviceOrdinal*42 + localLED, true
 }
 
+// qxLocalX remains the one-dimensional spatial projection used by effects.
+// The raw hardware topology around it is now measured for the two 12-output
+// outer rings:
+//
+//	0..11   front outer ring, increasing clockwise when viewed from the front
+//	12..23  rear outer ring, same electrical layout at a +12 offset
+//
+// QX side strips are dependent emitters, not additional addressable outputs.
+// The two front strips mirror 3,4,5,6 and 9,10,11,0; the corresponding rear
+// strips mirror 15,16,17,18 and 21,22,23,12.  Keep those aliases out of the
+// LED count/logical map: the device still has exactly 34 controllable outputs.
+//
+// Outputs 24..33 retain the existing spatial projection until their inner-ring
+// physical positions are independently measured.  Do not infer extra logical
+// LEDs for the side strips.
 var qxLocalX = [...]float64{
 	10, 30, 50, 70, 90, 110, 130, 150, 170, 190, 210, 230,
 	50, 30, 10, 230, 210, 190, 170, 150, 130, 110, 90, 70,
 	270, 280, 290, 310, 320, 330, 260, 320, 300, 280,
+}
+
+// QXLinkedEmitters describes measured side-strip aliases. Each group contains
+// raw outputs that also illuminate one physical side strip. The aliases are
+// metadata for editors/visualisers only; they must never be rendered as extra
+// addressable LEDs.
+var QXLinkedEmitters = [...][4]int{
+	{3, 4, 5, 6},
+	{9, 10, 11, 0},
+	{15, 16, 17, 18},
+	{21, 22, 23, 12},
+}
+
+// MemoryVerticalPosition returns a normalized physical position for a DIMM LED.
+// 0 is the measured top and 1 is the measured bottom. Six-output Corsair DDR5
+// DIMMs were verified in hardware as raw 0..5 = top..bottom. Other LED counts
+// deliberately use the same orientation as a generic inferred fallback until a
+// model-specific capture proves otherwise.
+func MemoryVerticalPosition(localLED, ledCount int) (float64, bool) {
+	if ledCount <= 0 || localLED < 0 || localLED >= ledCount {
+		return 0, false
+	}
+	if ledCount == 1 {
+		return 0, true
+	}
+	return float64(localLED) / float64(ledCount-1), true
 }
 
 // titan280Topology is the measured active-LED geometry and .cueprofile

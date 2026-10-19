@@ -1,41 +1,15 @@
-OpenLinkHub v12.4.74z7d5 - clean raw LED mapper
-Baseline source supplied by user: 7faae5f976855cf31654dbc80d702babb123e0ed
+OpenLinkHub v12.4.74z7d6 - measured topology cleanup
 
-Complete replacement files only. No patch files.
+Complete replacement files only; no patch/diff files.
 
-Changed files:
-- src/icueprofile/render.go
-- src/devices/lsh/lsh.go
-- src/devices/memory/memory.go
-- src/server/server.go
-- static/js/icue-profiles.js
-- web/icue-profiles.html
+Changes:
+- Records measured QX outer topology: front 0-11, rear 12-23 (+12 mirror).
+- Records QX dependent side-strip emitters without inventing extra addressable LEDs:
+  front 3,4,5,6 and 9,10,11,0; rear 15,16,17,18 and 21,22,23,12.
+- Leaves QX 24-33 inner spatial projection unchanged/pending dedicated physical capture.
+- Adds generic memory top-to-bottom physical-position helper; six-LED DIMMs are measured 0-5 top-to-bottom, other counts are explicitly inferred fallback.
+- Updates mapper/editor labels/tooltips to show measured topology and linked strip behaviour.
+- Corrects mapper status wording: backend acceptance no longer claims hardware confirmation.
+- Cache-busts icue-profiles.js with v=12.4.74z7d6.
 
-Mapper behaviour:
-- QX: anonymous raw outputs 0-33. No front/rear/ring grouping is assumed.
-- Memory: anonymous raw outputs 0-5, with DMI locator retained in UI.
-- TITAN 280: existing measured mapping retained.
-- Selected raw LED: purple #8000FF.
-- Other raw LEDs on selected device: blue #0066FF.
-- Other devices continue normal imported profile playback.
-- QX observations record Front/Rear, Outer/Inner, and physical position.
-- Memory observations record physical vertical position.
-- Observations are runtime-only and never alter topology or source profiles.
-- Normal Include/Exclude controls are hidden while mapper is active.
-
-Hardware path:
-- QX/TITAN override is applied to the final per-device LINK RGB buffer in generateRgbEffect().
-- Memory override is applied immediately before the imported iCUE DIMM frame validation/write path.
-- Previous QX renderer-level mapper overlay was removed.
-- Previous DRAM renderer-level mapper overlay was removed.
-
-Logging:
-- Mapper selection changes: Info, one event per state change.
-- Mapper observations: Info, when Record is pressed.
-- Hardware override confirmation: Info, once per new kind/device/raw-LED selection.
-- No per-frame mapper log spam.
-
-Validation performed here:
-- gofmt completed successfully on all four changed Go files.
-- Mapper hook locations and UI IDs were checked from the generated files.
-- Full Go type/build test could not run in this environment because go.mod requires Go 1.25 while the local runtime is Go 1.23.2 and network access to download the Go 1.25 toolchain is blocked.
+No LINK discovery/bounds/retry changes. No effect behaviour/timing changes.
