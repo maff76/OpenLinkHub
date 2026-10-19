@@ -1,12 +1,9 @@
-OpenLinkHub v12.4.74z7d9d - restore profile key + workspace layer count
+OpenLinkHub v12.4.74z7d9e - iCUE profile hardware activation fix
 
-Authoritative baseline: user-supplied current source OpenLinkHub(20261019-231840).zip.
-Changed complete source file only:
-  src/icueprofile/store.go
+Changed complete files only; no patch/diff files.
 
-Restores two behaviours accidentally removed by 9e05c557 (live reset + group editing):
-- ImportedProfile.Key and Scan() ProfileKey population, required by the profile-selection UI.
-- WorkspaceLayerCount() and its use in Scan(), so the profile list shows authored LINK workspace layers instead of total parsed compatibility layers.
-
-No renderer, effect maths, LINK discovery, mapper, topology, server, HTML or JavaScript changes.
-No patch/diff files.
+- Profile-row selection now applies the imported icue-* RGB mode to each detected RGB hardware channel through the existing /api/color activation path before opening the editor workspace.
+- Previous dirty live edit is reset before activation when switching profiles.
+- Activation failures are surfaced instead of silently changing only the editor selection.
+- Cache-busts icue-profiles.js to v12.4.74z7d9e.
+- No renderer maths, topology, mapper, LINK discovery, or store/layer-count changes.
