@@ -2858,7 +2858,7 @@ func icueProfileWorkspace(w http.ResponseWriter, r *http.Request) {
 		// canonical mirror of the same layers.
 		authoredLayers := icueprofile.EnrichAuthoredSourceColors(profile.LightingLinkLayers)
 
-		const editorBackendVersion = "v12.4.74z7b"
+		const editorBackendVersion = "v12.4.74z7c"
 		editorModel := map[string]interface{}{
 			"version": editorBackendVersion,
 			"source":  "authored-cueprofile",

@@ -5332,18 +5332,35 @@ func (d *Device) setSoftwareMode() {
 // getLedDevices will get all connected LED data
 func (d *Device) getLedDevices() {
 	buf := d.read(modeGetLeds, nil, false, v2)
-	channels := buf[6]
+	if len(buf) < 7 {
+		logger.Log(logger.Fields{"serial": d.Serial, "responseLen": len(buf)}).Warn("getLedDevices() - Response too short")
+		return
+	}
+
+	channels := int(buf[6])
 	data := buf[7:]
 
 	if d.Debug {
 		logger.Log(logger.Fields{"led-data": fmt.Sprintf("% 2x", data), "channels": channels}).Info("LED DEBUG DATA")
 	}
 
-	for i := 1; i <= int(channels); i++ {
-		var numLEDs uint16 = 0
-		connected := binary.LittleEndian.Uint16(data[i*4:i*4+2]) == 2
+	for i := 1; i <= channels; i++ {
+		offset := i * 4
+		if offset+4 > len(data) {
+			logger.Log(logger.Fields{
+				"serial":             d.Serial,
+				"channel":            i,
+				"advertisedChannels": channels,
+				"dataLen":            len(data),
+				"requiredEnd":        offset + 4,
+			}).Warn("getLedDevices() - LED channel record exceeds response length")
+			break
+		}
+
+		var numLEDs uint16
+		connected := binary.LittleEndian.Uint16(data[offset:offset+2]) == 2
 		if connected {
-			numLEDs = binary.LittleEndian.Uint16(data[i*4+2 : i*4+2+2])
+			numLEDs = binary.LittleEndian.Uint16(data[offset+2 : offset+4])
 			if numLEDs > 50 {
 				numLEDs = 50
 			}
@@ -5369,28 +5386,48 @@ func (d *Device) getLedDevices() {
 // getLedDeviceTypes will fetch each connected device command code for LED activation
 func (d *Device) getLedDeviceTypes() {
 	buffer := d.readDeviceData(cmdDeviceCommandCodes)
-	d.LedDeviceTypes = buffer[7:]
-	d.LedDeviceTypeLength = buffer[6]
+	if len(buffer) < 7 {
+		logger.Log(logger.Fields{"serial": d.Serial, "responseLen": len(buffer)}).Warn("getLedDeviceTypes() - Command-code response too short")
+		d.LedDeviceTypes = nil
+		d.LedDeviceTypeLength = 0
+	} else {
+		d.LedDeviceTypes = buffer[7:]
+		d.LedDeviceTypeLength = buffer[6]
+	}
 
 	buffer = d.readDeviceData(cmdDeviceCommandLeds)
 	var leds []byte
-
-	// We have data
-	if buffer[2] == 0x08 {
-		leds = append(leds, buffer[6:8]...)
-		data := buffer[8:]
-
-		packetLen := (buffer[6] * 2) - 1
-		for i := 0; i < int(packetLen); i++ {
-			leds = append(leds, data[i])
-		}
+	if len(buffer) < 3 || buffer[2] != 0x08 {
+		d.LedDeviceTypeLed = leds
+		return
 	}
+	if len(buffer) < 8 {
+		logger.Log(logger.Fields{"serial": d.Serial, "responseLen": len(buffer)}).Warn("getLedDeviceTypes() - LED response too short")
+		d.LedDeviceTypeLed = leds
+		return
+	}
+
+	leds = append(leds, buffer[6:8]...)
+	data := buffer[8:]
+	packetLen := int(buffer[6])*2 - 1
+	if packetLen < 0 {
+		packetLen = 0
+	}
+	if packetLen > len(data) {
+		logger.Log(logger.Fields{
+			"serial":       d.Serial,
+			"packetLen":    packetLen,
+			"availableLen": len(data),
+		}).Warn("getLedDeviceTypes() - LED payload shorter than advertised")
+		packetLen = len(data)
+	}
+	leds = append(leds, data[:packetLen]...)
 	d.LedDeviceTypeLed = leds
 }
 
 func (d *Device) updateAdapterLedsAmount(adapterIndex int, newValue byte) bool {
 	idx := (adapterIndex * 2) + 1
-	if idx > len(d.LedDeviceTypeLed) {
+	if idx < 0 || idx >= len(d.LedDeviceTypeLed) {
 		return false
 	}
 	d.LedDeviceTypeLed[idx] = newValue
