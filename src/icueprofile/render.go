@@ -1489,7 +1489,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		// Normalize authored velocity around 100: at velocity=100 the ripple
 		// traverses one complete route+tail during one shared effect window.
 		velocityScale := velocity / 100.0
-		radius := math.Mod(phase*velocityScale*(span+tail), span+tail)
+		radius := wrapPeriodic(clockElapsed*velocityScale*(span+tail), span+tail)
 		for i, x := range coords {
 			dist := math.Abs(x - minC)
 			d := radius - dist
@@ -1544,7 +1544,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 			}
 		}
 		span := maxC - minC + 1
-		head := math.Mod(phase*velocityScale*(span+tail), span+tail)
+		head := wrapPeriodic(clockElapsed*velocityScale*(span+tail), span+tail)
 		for i, x := range coords {
 			d := head - (x - minC)
 			for d < 0 {
@@ -1587,8 +1587,17 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		if direction == 1 || direction == 3 {
 			offset = -offset
 		}
-		for i := 0; i < n; i++ {
-			pos := i + offset
+		coords := spatial
+		if len(coords) != n {
+			coords = make([]float64, n)
+			for i := range coords {
+				coords[i] = float64(i)
+			}
+		}
+		for i, x := range coords {
+			// Marquee is a spatial pattern. Quantize the topology projection into
+			// route cells instead of accidentally using raw hardware LED order.
+			pos := int(math.Floor(x)) + offset
 			pos %= patternSize
 			if pos < 0 {
 				pos += patternSize
@@ -1617,17 +1626,33 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 				current, previous = c2, c1
 			}
 		}
-		step := int(math.Floor(phase * float64(n)))
-		if step >= n {
-			step = n - 1
+		coords := spatial
+		if len(coords) != n {
+			coords = make([]float64, n)
+			for i := range coords {
+				coords[i] = float64(i)
+			}
+		}
+		minC, maxC := coords[0], coords[0]
+		for _, x := range coords[1:] {
+			if x < minC {
+				minC = x
+			}
+			if x > maxC {
+				maxC = x
+			}
 		}
 		direction := int(number(l.Parameters["direction"], 0))
-		for i := 0; i < n; i++ {
-			route := i
+		threshold := minC + phase*(maxC-minC)
+		if direction == 1 || direction == 3 {
+			threshold = maxC - phase*(maxC-minC)
+		}
+		for i, x := range coords {
+			reached := x <= threshold
 			if direction == 1 || direction == 3 {
-				route = n - 1 - i
+				reached = x >= threshold
 			}
-			if route <= step {
+			if reached {
 				c[i] = current
 			} else if previous != (RGB{}) {
 				c[i] = previous
@@ -1650,11 +1675,27 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		if travel > 1 {
 			travel = 2 - travel
 		}
-		span := math.Max(float64(n-1), 1)
-		head := travel * span
+		coords := spatial
+		if len(coords) != n {
+			coords = make([]float64, n)
+			for i := range coords {
+				coords[i] = float64(i)
+			}
+		}
+		minC, maxC := coords[0], coords[0]
+		for _, x := range coords[1:] {
+			if x < minC {
+				minC = x
+			}
+			if x > maxC {
+				maxC = x
+			}
+		}
+		span := math.Max(maxC-minC, 1)
+		head := minC + travel*span
 		sigma := math.Max(width, 0.5)
-		for i := 0; i < n; i++ {
-			dist := math.Abs(float64(i) - head)
+		for i, x := range coords {
+			dist := math.Abs(x - head)
 			intensity := math.Exp(-0.5 * math.Pow(dist/sigma, 2))
 			c[i] = col
 			a[i] *= intensity
