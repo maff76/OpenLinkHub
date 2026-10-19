@@ -2824,14 +2824,17 @@ func icueRainMethod(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// icueMappingProbe controls the runtime-only, topology-blind raw LED mapper.
-// It never modifies imported profiles. QX observations annotate what the user
-// physically sees; they do not influence which raw hardware output is selected.
+// icueMappingProbe controls the runtime-only raw LED identification overlay.
+// It never modifies imported profiles. The mapper is intentionally topology-blind:
+// one raw output is purple and all other raw outputs on the selected device are blue.
 func icueMappingProbe(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	switch r.Method {
 	case http.MethodGet:
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": 1, "probe": icueprofile.GetMappingProbe(), "observations": icueprofile.GetMappingObservations(), "persistent": false})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": 1, "probe": icueprofile.GetMappingProbe(),
+			"observations": icueprofile.GetMappingObservations(), "persistent": false,
+		})
 	case http.MethodPost:
 		var req struct {
 			Enabled       bool   `json:"enabled"`
@@ -2847,24 +2850,34 @@ func icueMappingProbe(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Unable to read LED mapping probe: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		previous := icueprofile.GetMappingProbe()
 		probe, err := icueprofile.SetMappingProbe(req.Enabled, req.Kind, req.DeviceOrdinal, req.LocalLED)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if previous != probe {
-			logger.Log(logger.Fields{"kind": probe.Kind, "deviceOrdinal": probe.DeviceOrdinal, "rawLed": probe.LocalLED, "enabled": probe.Enabled}).Info("iCUE mapper selection")
-		}
+		logger.Log(logger.Fields{
+			"enabled": probe.Enabled, "kind": probe.Kind, "deviceOrdinal": probe.DeviceOrdinal,
+			"rawLed": probe.LocalLED, "generation": probe.Generation,
+		}).Info("iCUE LED mapper selection updated")
+
 		if req.Record {
-			obs, obsErr := icueprofile.SetMappingObservation(icueprofile.MappingObservation{Kind: req.Kind, DeviceOrdinal: req.DeviceOrdinal, LocalLED: req.LocalLED, Face: req.Face, Ring: req.Ring, Position: req.Position})
+			obs, obsErr := icueprofile.SetMappingObservation(icueprofile.MappingObservation{
+				Kind: req.Kind, DeviceOrdinal: req.DeviceOrdinal, LocalLED: req.LocalLED,
+				Face: req.Face, Ring: req.Ring, Position: req.Position,
+			})
 			if obsErr != nil {
 				http.Error(w, obsErr.Error(), http.StatusBadRequest)
 				return
 			}
-			logger.Log(logger.Fields{"kind": obs.Kind, "deviceOrdinal": obs.DeviceOrdinal, "rawLed": obs.LocalLED, "face": obs.Face, "ring": obs.Ring, "position": obs.Position}).Info("iCUE mapper observation")
+			logger.Log(logger.Fields{
+				"kind": obs.Kind, "deviceOrdinal": obs.DeviceOrdinal, "rawLed": obs.LocalLED,
+				"face": obs.Face, "ring": obs.Ring, "position": obs.Position,
+			}).Info("iCUE LED mapper observation recorded")
 		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": 1, "probe": probe, "observations": icueprofile.GetMappingObservations(), "persistent": false})
+
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": 1, "probe": probe, "observations": icueprofile.GetMappingObservations(), "persistent": false,
+		})
 	default:
 		w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -2921,7 +2934,7 @@ func icueProfileWorkspace(w http.ResponseWriter, r *http.Request) {
 		// canonical mirror of the same layers.
 		authoredLayers := icueprofile.EnrichAuthoredSourceColors(profile.LightingLinkLayers)
 
-		const editorBackendVersion = "v12.4.74z7d3-map"
+		const editorBackendVersion = "v12.4.74z7d8-live-reset"
 		editorModel := map[string]interface{}{
 			"version": editorBackendVersion,
 			"source":  "authored-cueprofile",
@@ -2934,6 +2947,16 @@ func icueProfileWorkspace(w http.ResponseWriter, r *http.Request) {
 			"editor":               editorModel,
 			"lightingLinkLayers":   authoredLayers,
 		})
+
+	case http.MethodDelete:
+		profile, path, err = icueprofile.ResetRuntimeProfile(config.GetConfig().ConfigPath, key)
+		if err != nil {
+			http.Error(w, "Unable to reset live profile: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		logger.Log(logger.Fields{"profile": profile.Name, "file": filepath.Base(path)}).Info("Reset iCUE live editor to authored profile")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": 1, "key": key, "persistent": false})
 
 	case http.MethodPost:
 		var edit icueprofile.RuntimeLayerEdit
@@ -2949,7 +2972,7 @@ func icueProfileWorkspace(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": 1, "layer": layer, "persistent": false})
 	default:
-		w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
+		w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost+", "+http.MethodDelete)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
 }

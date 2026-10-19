@@ -1,11 +1,14 @@
-OpenLinkHub v12.4.74z7d7 — physical profile editor
+OpenLinkHub v12.4.74z7d8 - live editor lifecycle + group targeting
 
 Changed complete files only; no patch/diff files.
 
-- Normal QX editor is physical: front/rear faces, outer/inner positions and linked side-strip segments.
-- Raw LED numbers are hidden during normal profile editing.
-- Clicking a linked QX side-strip segment selects the same hardware output as its parent ring position.
-- Raw IDs remain visible in Live LED Mapper diagnostic mode only.
-- Memory editor is a physical top-to-bottom DIMM representation with no raw numbering.
-- QX 24–33 retain the prior inner projection pending exact physical capture; no new mapping claim is made for them.
-- Cache-busted editor JS to 12.4.74z7d7.
+- Reset Live Preview discards cached runtime edits and reparses the immutable imported .cueprofile.
+- Switching editor profiles clears a dirty previous live edit before opening the next profile.
+- Leaving the editor requests a best-effort live reset.
+- QX compiled concert state is keyed by profile identity as well as run/device, preventing a previous profile's compiled live state from surviving a profile switch.
+- Adds All QX Fans and All Memory targets. A physical-position click applies the equivalent local position across every detected device in that family; chain order is irrelevant.
+- Include/Exclude actions now target the selected device/family with concrete IDs rather than turning the whole layer into global AllLeds.
+- Live raw mapper remains individual-device only.
+- Imported source files remain immutable.
+
+Validation: JavaScript syntax checked with node --check; Go files gofmt'd. Full Go test/build could not run in this environment because go.mod requires Go >=1.25 while the installed local toolchain is Go 1.23.2.
