@@ -247,8 +247,7 @@ func (p *Profile) RenderDRAM(moduleOrdinal, ledCount int, started time.Time, bri
 	}
 	layers := p.expandLightingLinks(d.Channels[0].Layers)
 	logicalBase := moduleOrdinal * ledCount
-	buf, unsupported := renderCanvas(layers, logicalBase, ledCount, moduleOrdinal, started, brightness)
-	return applyByteMappingProbe(buf, "memory", moduleOrdinal, ledCount), unsupported
+	return renderCanvas(layers, logicalBase, ledCount, moduleOrdinal, started, brightness)
 }
 
 // RenderLINKDevice renders a non-QX LINK device. AllLeds layers are exact and
@@ -425,16 +424,26 @@ var rainMethod = struct {
 	Method string
 }{Method: "normalized"}
 
-// MappingProbe is a runtime-only LED identification overlay for verified LINK
-// topologies. It bypasses profile/effect output only for the selected QX/TITAN
-// or memory device: every LED is blue and the selected local LED is purple. The authored profile and live
-// concert state continue untouched underneath so disabling the probe resumes
-// normal playback immediately.
+// MappingProbe is a runtime-only, topology-blind LED identification overlay.
+// The selected device is overridden only at its final raw hardware-output stage:
+// every raw LED is blue and the selected raw LED is purple. Profile/effect state
+// continues underneath so disabling the mapper resumes normal playback immediately.
 type MappingProbe struct {
 	Enabled       bool   `json:"enabled"`
 	Kind          string `json:"kind"`
 	DeviceOrdinal int    `json:"deviceOrdinal"`
 	LocalLED      int    `json:"localLed"`
+}
+
+// MappingObservation records what the operator physically sees for one raw LED.
+// These fields never influence hardware output or renderer topology.
+type MappingObservation struct {
+	Kind          string `json:"kind"`
+	DeviceOrdinal int    `json:"deviceOrdinal"`
+	LocalLED      int    `json:"localLed"`
+	Face          string `json:"face,omitempty"`
+	Ring          string `json:"ring,omitempty"`
+	Position      string `json:"position,omitempty"`
 }
 
 var mappingProbe = struct {
@@ -443,6 +452,16 @@ var mappingProbe = struct {
 	Kind          string
 	DeviceOrdinal int
 	LocalLED      int
+}{}
+
+var mappingObservations = struct {
+	sync.RWMutex
+	Items map[string]MappingObservation
+}{Items: make(map[string]MappingObservation)}
+
+var mappingHardwareConfirmation = struct {
+	sync.Mutex
+	Signature string
 }{}
 
 func GetMappingProbe() MappingProbe {
@@ -470,24 +489,29 @@ func SetMappingProbe(enabled bool, kind string, deviceOrdinal, localLED int) (Ma
 		return GetMappingProbe(), fmt.Errorf("device ordinal must be zero or greater")
 	}
 	if enabled && (localLED < 0 || localLED >= maxLED) {
-		return GetMappingProbe(), fmt.Errorf("%s local LED must be between 0 and %d", strings.ToUpper(kind), maxLED-1)
+		return GetMappingProbe(), fmt.Errorf("%s raw LED must be between 0 and %d", strings.ToUpper(kind), maxLED-1)
 	}
+	previous := GetMappingProbe()
 	mappingProbe.Lock()
 	mappingProbe.Enabled = enabled
 	mappingProbe.Kind = kind
 	mappingProbe.DeviceOrdinal = deviceOrdinal
 	mappingProbe.LocalLED = localLED
 	mappingProbe.Unlock()
+	if previous.Enabled != enabled || previous.Kind != kind || previous.DeviceOrdinal != deviceOrdinal || previous.LocalLED != localLED {
+		mappingHardwareConfirmation.Lock()
+		mappingHardwareConfirmation.Signature = ""
+		mappingHardwareConfirmation.Unlock()
+	}
 	return GetMappingProbe(), nil
 }
 
-// applyByteMappingProbe overlays the mapper after normal DRAM rendering. It is
-// intentionally byte-level so probing cannot alter the DRAM canvas, authored
-// selection mapping, effect state, or persistent renderer state.
-func applyByteMappingProbe(buf []byte, kind string, deviceOrdinal, ledCount int) []byte {
+// ApplyMappingProbe overlays a raw RGB byte buffer without consulting topology.
+// It is intended to be called immediately before a device's hardware write.
+func ApplyMappingProbe(buf []byte, kind string, deviceOrdinal, ledCount int) ([]byte, bool) {
 	probe := GetMappingProbe()
 	if !probe.Enabled || !strings.EqualFold(probe.Kind, kind) || probe.DeviceOrdinal != deviceOrdinal || ledCount <= 0 || len(buf) < ledCount*3 {
-		return buf
+		return buf, false
 	}
 	out := append([]byte(nil), buf...)
 	for i := 0; i < ledCount; i++ {
@@ -498,6 +522,76 @@ func applyByteMappingProbe(buf []byte, kind string, deviceOrdinal, ledCount int)
 		base := probe.LocalLED * 3
 		out[base], out[base+1], out[base+2] = 128, 0, 255
 	}
+	return out, true
+}
+
+// MappingProbeConfirmationNeeded suppresses per-frame mapper logging. It returns
+// true once for each new enabled kind/device/raw-LED selection after the actual
+// final hardware-output override has been applied.
+func MappingProbeConfirmationNeeded(kind string, deviceOrdinal, localLED int) bool {
+	signature := fmt.Sprintf("%s:%d:%d", strings.ToLower(strings.TrimSpace(kind)), deviceOrdinal, localLED)
+	mappingHardwareConfirmation.Lock()
+	defer mappingHardwareConfirmation.Unlock()
+	if mappingHardwareConfirmation.Signature == signature {
+		return false
+	}
+	mappingHardwareConfirmation.Signature = signature
+	return true
+}
+
+func mappingObservationKey(kind string, deviceOrdinal, localLED int) string {
+	return fmt.Sprintf("%s:%d:%d", strings.ToLower(strings.TrimSpace(kind)), deviceOrdinal, localLED)
+}
+
+func SetMappingObservation(obs MappingObservation) (MappingObservation, error) {
+	obs.Kind = strings.ToLower(strings.TrimSpace(obs.Kind))
+	obs.Face = strings.ToLower(strings.TrimSpace(obs.Face))
+	obs.Ring = strings.ToLower(strings.TrimSpace(obs.Ring))
+	obs.Position = strings.TrimSpace(obs.Position)
+	maxLED := 0
+	switch obs.Kind {
+	case "qx":
+		maxLED = 34
+	case "titan":
+		maxLED = 20
+	case "memory":
+		maxLED = 6
+	default:
+		return obs, fmt.Errorf("unsupported mapper observation kind %q", obs.Kind)
+	}
+	if obs.DeviceOrdinal < 0 || obs.LocalLED < 0 || obs.LocalLED >= maxLED {
+		return obs, fmt.Errorf("invalid mapper observation device/raw LED")
+	}
+	if obs.Kind == "qx" {
+		if obs.Face != "" && obs.Face != "front" && obs.Face != "rear" {
+			return obs, fmt.Errorf("QX face must be front or rear")
+		}
+		if obs.Ring != "" && obs.Ring != "outer" && obs.Ring != "inner" {
+			return obs, fmt.Errorf("QX ring must be outer or inner")
+		}
+	}
+	mappingObservations.Lock()
+	mappingObservations.Items[mappingObservationKey(obs.Kind, obs.DeviceOrdinal, obs.LocalLED)] = obs
+	mappingObservations.Unlock()
+	return obs, nil
+}
+
+func GetMappingObservations() []MappingObservation {
+	mappingObservations.RLock()
+	defer mappingObservations.RUnlock()
+	out := make([]MappingObservation, 0, len(mappingObservations.Items))
+	for _, obs := range mappingObservations.Items {
+		out = append(out, obs)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind < out[j].Kind
+		}
+		if out[i].DeviceOrdinal != out[j].DeviceOrdinal {
+			return out[i].DeviceOrdinal < out[j].DeviceOrdinal
+		}
+		return out[i].LocalLED < out[j].LocalLED
+	})
 	return out
 }
 
@@ -922,19 +1016,6 @@ func (p *Profile) RenderFan(topology LEDTopology, deviceOrdinal, ledCount int, s
 	leds := append([]RGB(nil), state.leds...)
 	unsupported := append([]string(nil), state.score.unsupported...)
 	scorePlayers.Unlock()
-
-	// Dedicated QX mapping overlay: blue references + one purple probe LED.
-	// This is deliberately applied after the concert state is advanced so the
-	// mapper cannot alter profile playback semantics or persistent renderer state.
-	probe := GetMappingProbe()
-	if probe.Enabled && topology != nil && strings.EqualFold(topology.Name(), "QX") && deviceOrdinal == probe.DeviceOrdinal && len(leds) == 34 {
-		for i := range leds {
-			leds[i] = RGB{R: 0, G: 102, B: 255}
-		}
-		if probe.LocalLED >= 0 && probe.LocalLED < len(leds) {
-			leds[probe.LocalLED] = RGB{R: 128, G: 0, B: 255}
-		}
-	}
 
 	if brightness <= 0 {
 		brightness = 1

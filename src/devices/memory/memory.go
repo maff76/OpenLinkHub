@@ -1595,7 +1595,16 @@ func (d *Device) setDeviceColor() {
 						if d.GlobalBrightness != 0 {
 							brightness = d.GlobalBrightness
 						}
-						output, unsupported := imported.RenderDRAM(d.rgbModuleOrdinal(k), int(d.Devices[k].LedChannels), startTime, brightness)
+						moduleOrdinal := d.rgbModuleOrdinal(k)
+						output, unsupported := imported.RenderDRAM(moduleOrdinal, int(d.Devices[k].LedChannels), startTime, brightness)
+						var mapperApplied bool
+						output, mapperApplied = icueprofile.ApplyMappingProbe(output, "memory", moduleOrdinal, int(d.Devices[k].LedChannels))
+						if mapperApplied {
+							probe := icueprofile.GetMappingProbe()
+							if icueprofile.MappingProbeConfirmationNeeded("memory", moduleOrdinal, probe.LocalLED) {
+								logger.Log(logger.Fields{"kind": "memory", "locator": d.Devices[k].Locator, "deviceOrdinal": moduleOrdinal, "rawLed": probe.LocalLED, "ledCount": d.Devices[k].LedChannels, "purple": 1, "blue": int(d.Devices[k].LedChannels) - 1}).Info("iCUE mapper hardware override")
+							}
+						}
 						if len(unsupported) > 0 {
 							logger.Log(logger.Fields{"profile": imported.Name, "effects": unsupported}).Debug("Skipped unsupported iCUE memory lighting effects")
 						}

@@ -2824,31 +2824,47 @@ func icueRainMethod(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// icueMappingProbe controls the runtime-only QX/TITAN LED identification overlay.
-// It never modifies imported profiles: the selected device is rendered blue with
-// one purple local LED so physical LED order can be mapped unambiguously.
+// icueMappingProbe controls the runtime-only, topology-blind raw LED mapper.
+// It never modifies imported profiles. QX observations annotate what the user
+// physically sees; they do not influence which raw hardware output is selected.
 func icueMappingProbe(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	switch r.Method {
 	case http.MethodGet:
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": 1, "probe": icueprofile.GetMappingProbe(), "persistent": false})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": 1, "probe": icueprofile.GetMappingProbe(), "observations": icueprofile.GetMappingObservations(), "persistent": false})
 	case http.MethodPost:
 		var req struct {
 			Enabled       bool   `json:"enabled"`
 			Kind          string `json:"kind"`
 			DeviceOrdinal int    `json:"deviceOrdinal"`
 			LocalLED      int    `json:"localLed"`
+			Record        bool   `json:"record"`
+			Face          string `json:"face"`
+			Ring          string `json:"ring"`
+			Position      string `json:"position"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
 			http.Error(w, "Unable to read LED mapping probe: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+		previous := icueprofile.GetMappingProbe()
 		probe, err := icueprofile.SetMappingProbe(req.Enabled, req.Kind, req.DeviceOrdinal, req.LocalLED)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": 1, "probe": probe, "persistent": false})
+		if previous != probe {
+			logger.Log(logger.Fields{"kind": probe.Kind, "deviceOrdinal": probe.DeviceOrdinal, "rawLed": probe.LocalLED, "enabled": probe.Enabled}).Info("iCUE mapper selection")
+		}
+		if req.Record {
+			obs, obsErr := icueprofile.SetMappingObservation(icueprofile.MappingObservation{Kind: req.Kind, DeviceOrdinal: req.DeviceOrdinal, LocalLED: req.LocalLED, Face: req.Face, Ring: req.Ring, Position: req.Position})
+			if obsErr != nil {
+				http.Error(w, obsErr.Error(), http.StatusBadRequest)
+				return
+			}
+			logger.Log(logger.Fields{"kind": obs.Kind, "deviceOrdinal": obs.DeviceOrdinal, "rawLed": obs.LocalLED, "face": obs.Face, "ring": obs.Ring, "position": obs.Position}).Info("iCUE mapper observation")
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": 1, "probe": probe, "observations": icueprofile.GetMappingObservations(), "persistent": false})
 	default:
 		w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

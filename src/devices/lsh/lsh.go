@@ -5036,6 +5036,29 @@ func (d *Device) generateRgbEffect(k int, channels uint8, startTime *time.Time, 
 		if len(unsupported) > 0 {
 			logger.Log(logger.Fields{"profile": profile.Name, "effects": unsupported}).Debug("Skipped unsupported iCUE lighting effects")
 		}
+
+		// Apply the calibration mapper to the raw per-device RGB frame as the
+		// final operation before it is returned to the LINK hardware-frame builder.
+		// No candidate physical topology is used to choose the raw LED.
+		mapperKind := ""
+		mapperOrdinal := 0
+		name := strings.ToLower(d.Devices[k].Name)
+		if strings.Contains(name, "qx") && int(channels) == 34 {
+			mapperKind = "qx"
+			mapperOrdinal = ordinal
+		} else if strings.Contains(name, "titan") && int(channels) == 20 {
+			mapperKind = "titan"
+		}
+		if mapperKind != "" && mapperOrdinal >= 0 {
+			var applied bool
+			output, applied = icueprofile.ApplyMappingProbe(output, mapperKind, mapperOrdinal, int(channels))
+			if applied {
+				probe := icueprofile.GetMappingProbe()
+				if icueprofile.MappingProbeConfirmationNeeded(mapperKind, mapperOrdinal, probe.LocalLED) {
+					logger.Log(logger.Fields{"kind": mapperKind, "deviceOrdinal": mapperOrdinal, "rawLed": probe.LocalLED, "ledCount": channels, "purple": 1, "blue": int(channels) - 1}).Info("iCUE mapper hardware override")
+				}
+			}
+		}
 		return output
 	}
 	rgbCustomColor := true

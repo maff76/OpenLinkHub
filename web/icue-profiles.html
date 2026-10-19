@@ -69,29 +69,30 @@
                                         </div>
                                         <div id="icueDetectedSummary" class="sentence-text mb-3"></div>
                                         <div class="d-flex justify-content-between align-items-center gap-2 flex-wrap mb-2">
-                                            <div class="sentence-text"><strong>LED topology mapper</strong> <small>— QX physical ring order and six-LED DIMM orientation are the remaining mapping tasks; TITAN 280 mapping is measured and included.</small></div>
+                                            <div class="sentence-text"><strong>Raw LED mapper</strong> <small>— QX and memory are measured from anonymous hardware outputs; TITAN 280 remains the measured reference.</small></div>
                                             <label class="system-toggle compact"><input type="checkbox" id="icueTopologyProbe"><span class="toggle-track"></span><span class="ms-2">Live QX / TITAN / Memory mapper</span></label>
                                         </div>
-                                        <div class="icue-topology-key mb-3">
-                                            <button type="button" class="icue-region-button" data-region="front-outer"><strong>0–11</strong> Front Outer · 12</button>
-                                            <button type="button" class="icue-region-button" data-region="back-outer"><strong>12–23</strong> Back Outer · 12</button>
-                                            <button type="button" class="icue-region-button" data-region="front-inner"><strong>24–29</strong> Front Inner · 6</button>
-                                            <button type="button" class="icue-region-button" data-region="back-inner"><strong>30–33</strong> Back Inner · 4</button>
-                                        </div><div id="icueLedMap" class="icue-led-map" aria-label="QX 34 LED spatial topology"></div><div class="sentence-text mt-2"><small>Known: face, ring and ID range. Unknown: physical clock start and clockwise/counter-clockwise order inside each range. Visual ring positions are candidates until verified.</small></div>
+                                        <div id="icueLedMap" class="icue-led-map linear" aria-label="Raw LED outputs"></div>
+                                        <div class="sentence-text mt-2"><small>Calibration is topology-blind. Raw output numbers do not imply front/rear, inner/outer or physical order.</small></div>
                                         <div id="icueProbePanel" class="icue-probe-panel mt-3" style="display:none">
                                             <div class="d-flex align-items-center gap-2 flex-wrap">
-                                                <select id="icueProbeGroup" class="form-select system-select icue-probe-group" aria-label="Probe QX segment"><option value="front-outer">Front Outer · 0–11</option><option value="back-outer">Back Outer · 12–23</option><option value="front-inner">Front Inner · 24–29</option><option value="back-inner">Back Inner · 30–33</option></select>
                                                 <button type="button" class="system-button secondary" id="icueProbePrev">Previous</button>
                                                 <button type="button" class="system-button" id="icueProbeNext">Next LED</button>
-                                                <strong id="icueProbeLed">Local LED 0 · Logical 0</strong>
-                                                <strong id="icueProbeZone" class="icue-probe-zone">Front Outer Ring · candidate order 1/12</strong>
-                                                <span class="sentence-text">Selected physical LED is purple (#8000FF); all other LEDs on the selected QX, TITAN or memory device are blue (#0066FF). Click any numbered dot or use Previous / Next. TITAN tooltips show its measured iCUE zone/logical ID; memory tooltips show the DMI locator and current six-LED DRAM logical block. The source profile is never rewritten.</span>
+                                                <strong id="icueProbeLed">Raw LED 0</strong>
+                                                <strong id="icueProbeZone" class="icue-probe-zone">Unmapped</strong>
                                             </div>
+                                            <div id="icueMappingObservation" class="row g-2 mt-2" style="display:none">
+                                                <div id="icueQXFaceField" class="col-md-3"><label class="sentence-text" for="icueMapFace">Face</label><select id="icueMapFace" class="form-select system-select"><option value="">Unknown</option><option value="front">Front</option><option value="rear">Rear</option></select></div>
+                                                <div id="icueQXRingField" class="col-md-3"><label class="sentence-text" for="icueMapRing">Ring</label><select id="icueMapRing" class="form-select system-select"><option value="">Unknown</option><option value="outer">Outer</option><option value="inner">Inner</option></select></div>
+                                                <div class="col-md-4"><label class="sentence-text" for="icueMapPosition">Physical position</label><input id="icueMapPosition" class="form-control system-input" type="text" placeholder="e.g. 12 o'clock"></div>
+                                                <div class="col-md-2 d-flex align-items-end"><button type="button" class="system-button w-100" id="icueMapRecord">Record</button></div>
+                                            </div>
+                                            <div class="sentence-text mt-2">Selected raw output is purple (#8000FF); every other raw output on that selected device is blue (#0066FF). For QX, record Front/Rear + Outer/Inner + physical position from what you actually see.</div>
                                             <div id="icueProbeStatus" class="sentence-text mt-2">Mapper off · profile playback unchanged.</div>
                                         </div>
-                                        <div class="d-flex gap-2 flex-wrap mt-3">
-                                            <button type="button" class="system-button" id="icueSelectAll">Include 34</button>
-                                            <button type="button" class="system-button secondary" id="icueSelectNone">Exclude 34</button>
+                                        <div id="icueNormalLedControls" class="d-flex gap-2 flex-wrap mt-3">
+                                            <button type="button" class="system-button" id="icueSelectAll">Include all</button>
+                                            <button type="button" class="system-button secondary" id="icueSelectNone">Exclude all</button>
                                             <span id="icueLedCount" class="sentence-text align-self-center"></span>
                                         </div>
                                     </div>

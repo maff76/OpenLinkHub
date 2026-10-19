@@ -1,0 +1,41 @@
+OpenLinkHub v12.4.74z7d5 - clean raw LED mapper
+Baseline source supplied by user: 7faae5f976855cf31654dbc80d702babb123e0ed
+
+Complete replacement files only. No patch files.
+
+Changed files:
+- src/icueprofile/render.go
+- src/devices/lsh/lsh.go
+- src/devices/memory/memory.go
+- src/server/server.go
+- static/js/icue-profiles.js
+- web/icue-profiles.html
+
+Mapper behaviour:
+- QX: anonymous raw outputs 0-33. No front/rear/ring grouping is assumed.
+- Memory: anonymous raw outputs 0-5, with DMI locator retained in UI.
+- TITAN 280: existing measured mapping retained.
+- Selected raw LED: purple #8000FF.
+- Other raw LEDs on selected device: blue #0066FF.
+- Other devices continue normal imported profile playback.
+- QX observations record Front/Rear, Outer/Inner, and physical position.
+- Memory observations record physical vertical position.
+- Observations are runtime-only and never alter topology or source profiles.
+- Normal Include/Exclude controls are hidden while mapper is active.
+
+Hardware path:
+- QX/TITAN override is applied to the final per-device LINK RGB buffer in generateRgbEffect().
+- Memory override is applied immediately before the imported iCUE DIMM frame validation/write path.
+- Previous QX renderer-level mapper overlay was removed.
+- Previous DRAM renderer-level mapper overlay was removed.
+
+Logging:
+- Mapper selection changes: Info, one event per state change.
+- Mapper observations: Info, when Record is pressed.
+- Hardware override confirmation: Info, once per new kind/device/raw-LED selection.
+- No per-frame mapper log spam.
+
+Validation performed here:
+- gofmt completed successfully on all four changed Go files.
+- Mapper hook locations and UI IDs were checked from the generated files.
+- Full Go type/build test could not run in this environment because go.mod requires Go 1.25 while the local runtime is Go 1.23.2 and network access to download the Go 1.25 toolchain is blocked.
