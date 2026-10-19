@@ -443,20 +443,33 @@ func Init(vendorId, productId uint16, serial, path string) *common.Device {
 	}
 
 	// Bootstrap
-	d.getDebugMode()         // Debug mode
-	d.getManufacturer()      // Manufacturer
-	d.getProduct()           // Product
-	d.getSerial()            // Serial
-	d.loadDeviceMetadata()   // Device metadata
-	d.loadExternalDevices()  // External metadata
-	d.loadRgb()              // Load RGB
-	d.loadICUEProfiles()     // Imported iCUE profiles
-	d.loadDeviceProfiles()   // Load all device profiles
-	d.getDeviceLcd()         // Check for LCDs
-	d.getDeviceFirmware()    // Firmware
-	d.setSoftwareMode()      // Activate software mode
-	d.getLedDeviceTypes()    // Device led types
-	d.getDevices()           // Get devices connected to a hub
+	d.getDebugMode()        // Debug mode
+	d.getManufacturer()     // Manufacturer
+	d.getProduct()          // Product
+	d.getSerial()           // Serial
+	d.loadDeviceMetadata()  // Device metadata
+	d.loadExternalDevices() // External metadata
+	d.loadRgb()             // Load RGB
+	d.loadICUEProfiles()    // Imported iCUE profiles
+	d.loadDeviceProfiles()  // Load all device profiles
+	d.getDeviceLcd()        // Check for LCDs
+	d.getDeviceFirmware()   // Firmware
+	d.setSoftwareMode()     // Activate software mode
+	d.getLedDeviceTypes()   // Device led types
+	deviceCount := d.getDevices()
+	// LINK enumeration can occasionally receive a stale or incomplete HID response
+	// immediately after switching the hub into software mode.  The known-good
+	// parser is intentionally left unchanged; retry the complete discovery pair
+	// instead of accepting an empty device map for the lifetime of the process.
+	for attempt := 2; deviceCount == 0 && attempt <= 3; attempt++ {
+		logger.Log(logger.Fields{
+			"serial":  d.Serial,
+			"attempt": attempt,
+		}).Warn("LINK device discovery returned no devices; retrying")
+		time.Sleep(150 * time.Millisecond)
+		d.getLedDeviceTypes()
+		deviceCount = d.getDevices()
+	}
 	d.getLedDevices()        // Get connected LED devices
 	d.setColorEndpoint()     // Set device color endpoint
 	d.setDeviceProtection()  // Protect device
