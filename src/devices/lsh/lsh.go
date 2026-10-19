@@ -5791,9 +5791,15 @@ func (d *Device) setupLCD() {
 											val = int(systeminfo.GetCpuUtilization())
 											sensor = 3
 											break
-										case 4:
+										case 4: // GPU utilization
 											val = systeminfo.GetGPUUtilization()
 											sensor = 4
+											break
+										case 5: // Pump speed
+											val = int(d.getPumpSpeed())
+											sensor = 5
+											arcType = 5
+											break
 										}
 										image := lcd.GenerateArcScreenImage(arcType, sensor, val)
 										if image != nil {
@@ -5808,6 +5814,7 @@ func (d *Device) setupLCD() {
 											d.getLiquidTemperature(),
 											float32(systeminfo.GetCpuUtilization()),
 											float32(systeminfo.GetGPUUtilization()),
+											float32(d.getPumpSpeed()),
 										}
 										image := lcd.GenerateDoubleArcScreenImage(values)
 										if image != nil {

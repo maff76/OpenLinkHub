@@ -1563,7 +1563,7 @@ func (d *Device) getDevices() int {
 		if d.Debug {
 			logger.Log(logger.Fields{"serial": d.Serial, "status": status, "device": d.Product, "channel": i}).Info("getDevices() - Speed")
 		}
-		if status == 0x07 {
+		if status == 0x07 || status == 0x02 {
 			// Get a persistent speed profile. Fallback to Normal is anything fails
 			speedProfile := "Normal"
 			label := "Set Label"
@@ -2131,7 +2131,7 @@ func (d *Device) getDeviceData() {
 
 		currentSensor := sensorData[s : s+2]
 		status := channels[6:][i]
-		if status == 0x07 {
+		if status == 0x07 || status == 0x02 {
 			if _, ok := d.Devices[m]; ok {
 				rpm := int16(binary.LittleEndian.Uint16(currentSensor))
 				if rpm > 20 {
@@ -3764,6 +3764,12 @@ func (d *Device) setupLCD(reload bool) {
 						case 4: // GPU utilization
 							val = systeminfo.GetGPUUtilization()
 							sensor = 4
+							break
+						case 5: // Pump speed
+							val = int(d.getPumpSpeed())
+							sensor = 5
+							arcType = 5
+							break
 						}
 						image := lcd.GenerateArcScreenImage(arcType, sensor, val)
 						if image == nil {
@@ -3779,6 +3785,7 @@ func (d *Device) setupLCD(reload bool) {
 							d.getLiquidTemperature(),
 							float32(systeminfo.GetCpuUtilization()),
 							float32(systeminfo.GetGPUUtilization()),
+							float32(d.getPumpSpeed()),
 						}
 						image := lcd.GenerateDoubleArcScreenImage(values)
 						if image != nil {

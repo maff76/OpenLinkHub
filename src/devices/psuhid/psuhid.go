@@ -69,27 +69,27 @@ type DeviceProfile struct {
 }
 
 type Device struct {
-	dev           *hid.Device
-	deviceKey     string                    // devices.go registration key; "<productId>-<usb port>" for a duplicate
+	dev       *hid.Device
+	deviceKey string // devices.go registration key; "<productId>-<usb port>" for a duplicate
 	// Per device, not package globals: with two PSUs, globals made both refresh
 	// goroutines share one ticker (each refreshed at about half rate) and one mutex.
 	mutex           sync.Mutex
 	timer           *time.Ticker
 	autoRefreshChan chan bool
-	Manufacturer  string                    `json:"manufacturer"`
-	Product       string                    `json:"product"`
-	Serial        string                    `json:"serial"`
-	Firmware      string                    `json:"firmware"`
-	Devices       map[int]*Devices          `json:"devices"`
-	UserProfiles  map[string]*DeviceProfile `json:"userProfiles"`
-	DeviceProfile *DeviceProfile
-	Template      string
-	CpuTemp       float32
-	GpuTemp       float32
-	FanModes      map[int]string
-	InputVoltage  float32
-	instance      *common.Device
-	IsPSU         bool
+	Manufacturer    string                    `json:"manufacturer"`
+	Product         string                    `json:"product"`
+	Serial          string                    `json:"serial"`
+	Firmware        string                    `json:"firmware"`
+	Devices         map[int]*Devices          `json:"devices"`
+	UserProfiles    map[string]*DeviceProfile `json:"userProfiles"`
+	DeviceProfile   *DeviceProfile
+	Template        string
+	CpuTemp         float32
+	GpuTemp         float32
+	FanModes        map[int]string
+	InputVoltage    float32
+	instance        *common.Device
+	IsPSU           bool
 }
 
 var (
@@ -115,11 +115,11 @@ var (
 	deviceRefreshInterval = 1000
 	// A PSU that never answers a request would otherwise block transfer() (and Init)
 	// forever: hid Read has no timeout.
-	readTimeout           = 1000 * time.Millisecond
-	bufferSize            = 64
-	readBufferSize        = 64
-	bufferSizeWrite       = bufferSize + 1
-	temperatureChannels   = 2
+	readTimeout         = 1000 * time.Millisecond
+	bufferSize          = 64
+	readBufferSize      = 64
+	bufferSizeWrite     = bufferSize + 1
+	temperatureChannels = 2
 )
 
 func Init(vendorId, productId uint16, key, path string) *common.Device {
@@ -258,6 +258,7 @@ func (d *Device) getProductData() {
 	product = strings.ReplaceAll(product, "\x00", "")
 	product = strings.Replace(product, "CORSAIR ", "", -1)
 	product = strings.Replace(product, " PSU", "", -1)
+	product = strings.Replace(product, "Power Supply", "", -1)
 
 	d.Product = product
 
@@ -609,7 +610,7 @@ func (d *Device) getDeviceData() {
 // updateDeviceMetrics publishes every channel's latest readings to the metrics endpoint
 func (d *Device) updateDeviceMetrics() {
 	for _, device := range d.Devices {
-		metrics.PopulatePsu(&metrics.PsuChannel{
+		header := &metrics.Header{
 			Product:     d.Product,
 			Serial:      d.Serial,
 			ChannelId:   strconv.Itoa(device.ChannelId),
@@ -624,7 +625,10 @@ func (d *Device) updateDeviceMetrics() {
 			HasAmps:     device.HasAmps,
 			HasTemps:    device.HasTemps,
 			HasSpeed:    device.HasSpeed,
-		})
+			IsPSU:       true,
+			MainPSU:     device.MainPSU,
+		}
+		metrics.Populate(header)
 	}
 }
 

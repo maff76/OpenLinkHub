@@ -706,7 +706,7 @@ func applyLiveContinuous(state *scorePlayerState, at float64) int {
 		}
 		var sum RGB
 		active := 0
-		firstActive, lastActive := -1, -1
+		firstActive := -1
 		for led := 0; led < len(state.leds); led++ {
 			if !selectedWithTopology(track.layer, state.topology, state.deviceOrdinal, led, state.sourceDeviceCount) {
 				continue
@@ -754,7 +754,6 @@ func applyLiveContinuous(state *scorePlayerState, at float64) int {
 			if firstActive < 0 {
 				firstActive = led
 			}
-			lastActive = led
 			state.leds[led] = cmd
 			changed[led] = struct{}{}
 			sum.R += cmd.R

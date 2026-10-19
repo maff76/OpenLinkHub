@@ -402,6 +402,21 @@ func getDevices(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// getDeviceProfiles returns available profiles for a device.
+func getDeviceProfiles(w http.ResponseWriter, r *http.Request) {
+	deviceId, valid := getVar("/api/device/profiles/", r)
+	if !valid {
+		(&Response{Code: http.StatusOK, Data: nil}).Send(w)
+		return
+	}
+	results := devices.CallDeviceMethod(deviceId, "GetDeviceProfiles")
+	if len(results) > 0 {
+		(&Response{Code: http.StatusOK, Status: 1, Data: results[0].Interface()}).Send(w)
+		return
+	}
+	(&Response{Code: http.StatusOK, Status: 0, Data: nil}).Send(w)
+}
+
 // getDeviceLed returns response on /led
 func getDeviceLed(w http.ResponseWriter, r *http.Request) {
 	deviceId, valid := getVar("/api/led/", r)
@@ -2858,7 +2873,7 @@ func icueProfileWorkspace(w http.ResponseWriter, r *http.Request) {
 		// canonical mirror of the same layers.
 		authoredLayers := icueprofile.EnrichAuthoredSourceColors(profile.LightingLinkLayers)
 
-		const editorBackendVersion = "v12.4.74z7c"
+		const editorBackendVersion = "v12.4.74z7d"
 		editorModel := map[string]interface{}{
 			"version": editorBackendVersion,
 			"source":  "authored-cueprofile",
@@ -3096,6 +3111,7 @@ func setRoutes() http.Handler {
 	handleFunc(r, "/api/storageTemp", http.MethodGet, getStorageTemperature)
 	handleFunc(r, "/api/batteryStats", http.MethodGet, getBatteryStats)
 	handleFunc(r, "/api/devices/", http.MethodGet, getDevices)
+	handleFunc(r, "/api/device/profiles/", http.MethodGet, getDeviceProfiles)
 	handleFunc(r, "/api/color/", http.MethodGet, getColor)
 	handleFunc(r, "/api/color/zone/", http.MethodGet, getZoneColor)
 	handleFunc(r, "/api/color/profile/", http.MethodGet, getColorData)

@@ -49,6 +49,8 @@ var (
 	boardSerial = ""
 	motherboard Motherboards
 	mutex       sync.Mutex
+	modeMin     = 0
+	modeMax     = 5
 )
 
 func Init() {
