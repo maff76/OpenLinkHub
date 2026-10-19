@@ -899,7 +899,7 @@ func GenerateArcScreenImage(arcType, sensor, value int) []byte {
 		drawColorString(x, y+120, 40, unit, img, arc.TextColor)
 	} else if isSpeedTemperature(uint8(sensor)) {
 		v := strconv.Itoa(value)
-		x, y = calculateStringXY(220, v)
+		x, y := calculateStringXY(220, v)
 		drawColorString(x, y, 220, v, img, arc.TextColor)
 		unit := "[ RPM ]"
 		x, y = calculateStringXY(40, unit)
