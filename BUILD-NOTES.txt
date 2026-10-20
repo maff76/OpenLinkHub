@@ -1,53 +1,34 @@
-OpenLinkHub v12.4.74z7d9j — effect-family profile mapping fix
+OpenLinkHub v12.4.74z7d9k — canonical all-effect colour mapping
 
-Scope
-- Fixes imported iCUE compatibility-canvas selection for DRAM across all effects.
-- Makes the profile editor use the same hardware-family canvas as runtime playback.
-- Does not change the working z7d9h profile activation/lifecycle path.
-- Does not change effect timing/maths in this build.
+Base
+----
+Built directly on v12.4.74z7d9j effect-family mapping fix.
 
-Root cause
-- iCUE profiles author separate compatibility canvases (LINK, Dram1030, Dram1031,
-  Dominator, Default). Their layer stacks, colours and ConcreteLeds selections can
-  differ substantially.
-- Canvas type must not be inferred from the highest LED touched by an effect.
-  Cobalt and Electricity prove that an authored effect may intentionally leave the
-  final canvas LEDs untouched.
-- Six-LED VENGEANCE RGB RS must consume Dram1030 directly; ten-LED VENGEANCE uses
-  Dram1031; 12-LED DOMINATOR PLATINUM RGB uses Dominator; unknown layouts fall
-  back to Default.
-
-Runtime changes
-- Added DRAMLightingTypeForHardware / DRAMDeviceForType / DRAMDeviceForHardware.
-- RenderDRAM now selects the authored compatibility family from physical hardware
-  identity and renders that family's complete layer stack.
-- Memory playback passes the detected DIMM name and physical LED count into the
-  resolver.
-- Lighting Link wrappers inside a DRAM canvas still expand through the shared
-  profile LightingLinkProperty.
-
-Editor changes
-- Selecting All Memory or a memory DIMM now changes the layer list to the matching
-  DRAM compatibility canvas instead of continuing to display LINK layers.
-- Six-LED memory therefore shows Dram1030's real layers/selections (for example
-  Master Chief: Visor + Rain 1 + Rain 2 + Green).
-- QX/TITAN continue to use the LINK workspace.
-- Live edits target the actual selected compatibility layer.
-
-Verification
-- gofmt: PASS on changed Go files.
-- node --check static/js/icue-profiles.js: PASS.
-- Standalone Go 1.23 icueprofile package test: PASS using the four supplied real
-  profiles: Master Chief, Cobalt, Electricity and Sci-fi Dark.
-- All four resolved six-LED VENGEANCE RGB RS to Dram1030 and produced non-black
-  six-LED frames with no unsupported effects at the sampled time.
-- Master Chief Dram1030 resolves four authored layers and rendered the expected
-  orange Visor colour on selected DRAM LEDs in the test frame.
-- Full OpenLinkHub compile not run: repository go.mod requires Go 1.25 while the
-  available environment is Go 1.23.2.
-
-Changed complete files only
+Changed files
+-------------
 - src/icueprofile/render.go
-- src/devices/memory/memory.go
-- static/js/icue-profiles.js
 - BUILD-NOTES.txt
+
+What changed
+------------
+1. Added one canonical authored-colour resolver for imported iCUE effects.
+2. WaveLighting, RippleLighting and GradientLighting now expose the complete ordered transition palette instead of collapsing to the first transition colour in the editor/decoded model.
+3. RainLighting, ColorWaveLighting, ColorShiftLighting, ColorPulseLighting and SequentialLighting use the same first/second colour decoder as playback.
+4. Static/single-colour effects continue to use the renderer's transition-aware layerColor decoder.
+5. RawParameters/AuthoredParameters remain untouched and available alongside decoded colours.
+6. QX logical numbering and measured physical topology are unchanged.
+7. DRAM keeps the z7d9j compatibility-family resolver (including Dram1030 handling).
+8. Profile activation/lifecycle is unchanged.
+9. Rain direction=4 is intentionally not guessed in this build; its semantics still need capture-based proof.
+
+Validation
+----------
+- gofmt: PASS
+- node --check static/js/icue-profiles.js: PASS (unchanged JS, checked against base)
+- Go compile/test: NOT RUN in this container because the repository requires Go >= 1.25.0 while the installed local toolchain is Go 1.23.2 and network toolchain download is unavailable.
+
+Test focus
+----------
+- Master Chief: QX Rain should decode #192f09 -> #64a92d; DRAM should retain the z7d9j compatibility mapping.
+- Cobalt: Wave/Ripple/Gradient editor colours should now show their full authored transition palettes rather than a single colour.
+- Color Wave captures: first/second packed colours should remain unchanged.

@@ -2253,40 +2253,68 @@ func editorColor(c RGB) EditorColor {
 	return EditorColor{Hex: fmt.Sprintf("#%02x%02x%02x", r, g, b), R: c.R, G: c.G, B: c.B}
 }
 
-func rendererDecodedLayerColors(l Layer) []EditorColor {
-	// The editor must not independently interpret Corsair serialization. Ask the
-	// exact same helpers used by renderLayer for the authored effect colours and
-	// use NaN sentinels so a missing colour is distinguishable from authored black.
-	missing := RGB{R: math.NaN(), G: math.NaN(), B: math.NaN()}
-	valid := func(c RGB) bool {
-		return !math.IsNaN(c.R) && !math.IsNaN(c.G) && !math.IsNaN(c.B)
-	}
-	appendUnique := func(out []EditorColor, c RGB) []EditorColor {
-		if !valid(c) {
-			return out
-		}
-		e := editorColor(c)
+func canonicalAuthoredColors(l Layer) []RGB {
+	// Keep one colour interpretation path for playback diagnostics and the editor.
+	// Effects authored as transition curves (Wave/Ripple/Gradient) must retain the
+	// complete ordered palette; reducing them to layerColor() loses most of the
+	// source profile. Two-colour effects use the same effectColors() decoder as
+	// renderLayer, while single-colour effects use layerColor().
+	var out []RGB
+	appendUnique := func(c RGB) {
 		for _, existing := range out {
-			if strings.EqualFold(existing.Hex, e.Hex) {
-				return out
+			if existing == c {
+				return
 			}
 		}
-		return append(out, e)
+		out = append(out, c)
 	}
 
-	var out []EditorColor
 	switch strings.ToLower(l.Effect) {
-	case "staticlighting", "blinklighting", "breathelighting", "marqueelighting", "visorlighting":
-		out = appendUnique(out, layerColor(l, missing))
-	default:
-		c1, c2 := effectColors(l, missing, missing)
-		out = appendUnique(out, c1)
-		out = appendUnique(out, c2)
-		// Several single-colour effects use layerColor rather than effectColors.
-		// This fallback is still renderer-owned decoding, not browser inference.
-		if len(out) == 0 {
-			out = appendUnique(out, layerColor(l, missing))
+	case "wavelighting", "ripplelighting", "gradientlighting":
+		for _, stop := range transitionStops(l) {
+			appendUnique(stop.C)
 		}
+		if len(out) == 0 {
+			if c, ok := authoredLayerColor(l); ok {
+				appendUnique(c)
+			}
+		}
+	case "rainlighting", "colorwavelighting", "colorshiftlighting", "colorpulselighting", "sequentiallighting":
+		missing := RGB{R: math.NaN(), G: math.NaN(), B: math.NaN()}
+		c1, c2 := effectColors(l, missing, missing)
+		if !math.IsNaN(c1.R) && !math.IsNaN(c1.G) && !math.IsNaN(c1.B) {
+			appendUnique(c1)
+		}
+		if !math.IsNaN(c2.R) && !math.IsNaN(c2.G) && !math.IsNaN(c2.B) {
+			appendUnique(c2)
+		}
+		if len(out) == 0 {
+			if c, ok := authoredLayerColor(l); ok {
+				appendUnique(c)
+			}
+		}
+	default:
+		if c, ok := authoredLayerColor(l); ok {
+			appendUnique(c)
+		}
+	}
+	return out
+}
+
+func authoredLayerColor(l Layer) (RGB, bool) {
+	missing := RGB{R: math.NaN(), G: math.NaN(), B: math.NaN()}
+	c := layerColor(l, missing)
+	if math.IsNaN(c.R) || math.IsNaN(c.G) || math.IsNaN(c.B) {
+		return RGB{}, false
+	}
+	return c, true
+}
+
+func rendererDecodedLayerColors(l Layer) []EditorColor {
+	decoded := canonicalAuthoredColors(l)
+	out := make([]EditorColor, 0, len(decoded))
+	for _, c := range decoded {
+		out = append(out, editorColor(c))
 	}
 	return out
 }
