@@ -1929,6 +1929,17 @@ type transitionStop struct {
 }
 
 func transitionStops(l Layer) []transitionStop {
+	// Live editor colour overrides are normalized and deliberately independent
+	// of the source .cueprofile serialization. Dynamic effects can therefore
+	// be recoloured without rewriting packed colors or transition XML.
+	if cs := editorOverrideColors(l); len(cs) > 0 {
+		out := make([]transitionStop, 0, len(cs))
+		denom := math.Max(1, float64(len(cs)-1))
+		for i, c := range cs {
+			out = append(out, transitionStop{T: float64(i) / denom, C: c, A: 1})
+		}
+		return out
+	}
 	v, ok := l.Parameters["transitions"]
 	if !ok {
 		return nil
@@ -2088,7 +2099,40 @@ func layerParameterColor(l Layer, key string, fallback RGB) RGB {
 	return fallback
 }
 
+func editorOverrideColors(l Layer) []RGB {
+	v, ok := l.Parameters["editorColors"]
+	if !ok {
+		return nil
+	}
+	var out []RGB
+	switch xs := v.(type) {
+	case []string:
+		for _, x := range xs {
+			if c, ok := parseColor(x); ok {
+				out = append(out, c)
+			}
+		}
+	case []interface{}:
+		for _, x := range xs {
+			if c, ok := parseColor(x); ok {
+				out = append(out, c)
+			}
+		}
+	default:
+		if c, ok := parseColor(v); ok {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 func effectColors(l Layer, fallback1, fallback2 RGB) (RGB, RGB) {
+	if cs := editorOverrideColors(l); len(cs) > 0 {
+		if len(cs) == 1 {
+			return cs[0], cs[0]
+		}
+		return cs[0], cs[1]
+	}
 	if v, ok := l.Parameters["colors"]; ok {
 		var found []RGB
 		switch xs := v.(type) {
@@ -2131,6 +2175,9 @@ func maxInt(a, b int) int {
 }
 
 func layerColor(l Layer, fallback RGB) RGB {
+	if cs := editorOverrideColors(l); len(cs) > 0 {
+		return cs[0]
+	}
 	// StaticLighting in exported iCUE profiles normally stores its colour in
 	// the first transition rather than a top-level color field. Prefer that
 	// source so imported profiles keep their authored colours (for example
@@ -2145,6 +2192,12 @@ func layerColor(l Layer, fallback RGB) RGB {
 	return fallback
 }
 func gradientColors(l Layer) (RGB, RGB) {
+	if cs := editorOverrideColors(l); len(cs) > 0 {
+		if len(cs) == 1 {
+			return cs[0], cs[0]
+		}
+		return cs[0], cs[len(cs)-1]
+	}
 	if v, ok := l.Parameters["colors"]; ok {
 		if xs, ok := v.([]string); ok {
 			var cs []RGB

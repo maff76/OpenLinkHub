@@ -1,25 +1,17 @@
-OpenLinkHub v12.4.74z7d9l - editor authored-colour bridge fix
-
-Base: v12.4.74z7d9k canonical all-effect colours
+OpenLinkHub v12.4.74z7d9m - basic effect colour editing
 
 Changed files:
 - src/icueprofile/render.go
-- BUILD-NOTES.txt
+- static/js/icue-profiles.js
 
-Fix:
-- EnrichAuthoredSourceColors now populates Layer.SourceColors from canonicalAuthoredColors().
-- This connects the canonical decoder added in z7d9k to the existing /api/icue/profile editor payload.
-- Rain / ColorWave packed first/second values are therefore exposed to the browser even when RawColorValues has no color=#... leaf.
-- Wave / Ripple / Gradient expose their decoded transition palette through the same SourceColors field.
-- RawColorValues and AuthoredParameters remain untouched.
+Scope:
+- Keep imported .cueprofile colour decoding/sourceColors from z7d9l.
+- Add runtime-only normalized editorColors override consumed by all major renderer colour paths:
+  effectColors, transitionStops, layerColor and gradientColors.
+- Effect colour controls now edit sourceColors immediately and send editorColors to the live runtime instead of trying to rewrite each effect's different Corsair serialization.
+- Selected LEDs in the editor remain a selection display, not an effect simulation. One colour stays solid; 2+ colours cycle every 700 ms as a simple palette indication.
+- No changes to profile activation, QX topology, DRAM family mapping, Rain timing/maths, or source .cueprofile files.
 
-No changes:
-- playback renderer maths
-- QX logical/physical topology
-- DRAM Dram1030 family mapping
-- profile activation/lifecycle
-
-Validation:
-- gofmt: passed
-- diff inspected: only the authored SourceColors enrichment bridge changed in render.go
-- full Go compile not run here because this environment's installed Go toolchain is older than the source tree requirement.
+Checks:
+- gofmt: PASS
+- node --check static/js/icue-profiles.js: PASS
