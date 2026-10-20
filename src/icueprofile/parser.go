@@ -370,6 +370,7 @@ func authoredEffectParameterKeys() []string {
 		"autoDuration", "waveSpread", "velocity", "tailLength", "isDoublesided", "angle",
 		"width", "wavelength", "phase", "offset", "tail", "falloff", "frequency",
 		"period", "spacing", "size", "step", "steps", "count", "segments",
+		"sensorId", "typeLightingBehavior",
 		"start", "end", "delay", "hold", "fade", "reverse", "center", "spread", "rotation",
 	}
 }
