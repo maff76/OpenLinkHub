@@ -679,11 +679,11 @@ func waveTrackRepeat(l Layer, topology LEDTopology, fanOrdinal, ledCount int) fl
 	}
 	// Defensive fallback for profiles with no captured phrase time: use one natural
 	// spatial pass rather than inventing a global/master duration.
-	velocity := math.Abs(number(l.Parameters["velocity"], 100)) / 10.0
+	velocity := math.Abs(number(l.Parameters["velocity"], 100))
 	if velocity <= 0.000001 {
-		velocity = 10
+		velocity = 100
 	}
-	tail := number(l.Parameters["tailLength"], 40) / 10.0
+	tail := number(l.Parameters["tailLength"], 4)
 	if tail <= 0 {
 		tail = 1
 	}
@@ -1481,11 +1481,11 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 	case "ripplelighting":
 		// Ripple uses the shared normalized phase. Velocity scales spatial travel
 		// while tailLength shapes the falloff; neither creates a second clock.
-		velocity := math.Abs(number(l.Parameters["velocity"], 100)) / 10.0
+		velocity := math.Abs(number(l.Parameters["velocity"], 100))
 		if velocity <= 0.000001 {
-			velocity = 10
+			velocity = 100
 		}
-		tail := number(l.Parameters["tailLength"], 40) / 10.0
+		tail := number(l.Parameters["tailLength"], 4)
 		if tail <= 0 {
 			tail = 1
 		}
@@ -1511,9 +1511,10 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 			}
 		}
 		span := maxC - minC + 1
-		// Velocity is serialized in tenths of a light/sec.  Propagation is spatial
-		// and independent of the graph/duration clock: distance = lights/sec * seconds.
-		radius := wrapPeriodic(elapsed*velocity, span+tail)
+		// Normalize authored velocity around 100: at velocity=100 the ripple
+		// traverses one complete route+tail during one shared effect window.
+		velocityScale := velocity / 100.0
+		radius := wrapPeriodic(clockElapsed*velocityScale*(span+tail), span+tail)
 		for i, x := range coords {
 			dist := math.Abs(x - minC)
 			d := radius - dist
@@ -1529,16 +1530,20 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		applyLayerOpacity(l, a)
 		return c, a, true
 	case "wavelighting":
-		// Wave captures velocity, tailLength and isDoublesided. Captured UI values
-		// establish velocity and tail as tenths of lights/sec and lights respectively.
+		// Wave captures velocity, tailLength and isDoublesided. Do not assign a
+		// physical unit to velocity here: the profile proves the value, not its unit.
 		// Captured profiles also carry an authored transition
 		// curve. Render that curve along the moving tail. Angle is retained by the
 		// parser but is intentionally not interpreted on the 1-D LINK topology.
-		velocity := math.Abs(number(l.Parameters["velocity"], 100)) / 10.0
-		if velocity <= 0.000001 {
-			velocity = 10
+		velocity := number(l.Parameters["velocity"], 100)
+		if velocity == 0 {
+			velocity = 100
 		}
-		tail := number(l.Parameters["tailLength"], 40) / 10.0
+		// The shared 0..1 phase is the timebase. Treat authored velocity=100 as
+		// one complete route traversal per effective duration; other velocity
+		// values scale that spatial travel without creating a second clock.
+		velocityScale := math.Abs(velocity) / 100.0
+		tail := number(l.Parameters["tailLength"], 4)
 		if tail <= 0 {
 			tail = 1
 		}
@@ -1564,7 +1569,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 			}
 		}
 		span := maxC - minC + 1
-		head := wrapPeriodic(elapsed*velocity, span+tail)
+		head := wrapPeriodic(clockElapsed*velocityScale*(span+tail), span+tail)
 		for i, x := range coords {
 			d := head - (x - minC)
 			for d < 0 {

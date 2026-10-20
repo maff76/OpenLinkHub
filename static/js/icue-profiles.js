@@ -126,7 +126,7 @@ $(function () {
         visorlighting:{name:'Visor',fields:[['Colour mode','@random'],['Colours','@colors'],['Speed','speed'],['Direction','direction']]},
         marqueelighting:{name:'Marquee',fields:[['Colour','@colors'],['Speed','speed'],['Direction','direction']]},
         sequentiallighting:{name:'Sequential',fields:[['Colour mode','@random'],['Colour','@colors'],['Speed','speed'],['Direction','direction']]},
-        gradientlighting:{name:'Gradient',graph:true,fields:[]},
+        gradientlighting:{name:'Gradient',graph:true,fields:[['Lighting time (sec)','duration','seconds']]},
         watercolorlighting:{name:'Watercolor',fields:[['Colours','@colors'],['Speed','speed']]},
         spirallighting:{name:'Spiral',fields:[['Colours','@colors'],['Speed','speed'],['Direction','direction']]},
         spiralrainbowlighting:{name:'Spiral Rainbow',fields:[['Speed','speed'],['Direction','direction']]},
@@ -157,21 +157,34 @@ $(function () {
         const cs=authoredColors();stops.forEach((x,i)=>{if(!x.color)x.color=cs[i%Math.max(1,cs.length)]||'#ffffff';x.level=Math.max(0,Math.min(100,Number.isFinite(x.level)?x.level:100));});
         return stops.filter(x=>Number.isFinite(x.time));
     }
+    function graphDurationMs(){
+        const raw=Number(authoredValue('duration')??((currentLayer&&currentLayer.parameters)||{}).duration);
+        return Number.isFinite(raw)&&raw>0?raw:1000;
+    }
     function renderTransitionGraph(){
         const panel=$('#icueTransitionPanel'),graph=$('#icueTransitionGraph').empty(),stops=transitionStops();
         const cfg=friendlyEffects[String(currentLayer&&currentLayer.effect||'').toLowerCase()]||{};
         if(!cfg.graph||!stops.length){panel.hide();return;}
-        panel.show();const min=Math.min(...stops.map(x=>x.time)),max=Math.max(...stops.map(x=>x.time)),span=(max-min)||1;
-        // The line/fill and HTML control points share the same percentage X and
-        // pixel Y coordinates. This keeps the joins centred on the dots while the
-        // dots themselves stay circular at any responsive graph width.
-        const pts=stops.map(x=>({x:(x.time-min)/span*100,y:4+(100-x.level)*0.72,color:x.color,time:x.time,level:x.level}));
+        panel.show();
+        // iCUE graph timestamps are normalized positions inside the layer's total
+        // Lighting Time.  Never re-scale them against the first/last point: a stop
+        // at 0.5 is halfway through the authored duration even when no stop exists
+        // at 0 or 1.
+        const durationMs=graphDurationMs(),durationSec=durationMs/1000;
+        const pts=stops.map(x=>{
+            const t=Math.max(0,Math.min(1,Number(x.time)));
+            return {x:t*100,y:4+(100-x.level)*0.72,color:x.color,time:t,seconds:t*durationSec,level:x.level};
+        });
         const esc=s=>String(s||'#ffffff').replace(/[^#0-9a-fA-F]/g,'');
-        const gradStops=pts.map((pt,i)=>'<stop offset="'+(pts.length===1?0:(i/(pts.length-1)*100))+'%" stop-color="'+esc(pt.color)+'"/>').join('');
-        const points=pts.map(pt=>pt.x.toFixed(3)+','+pt.y.toFixed(2)).join(' '),area=points+' 100,76 0,76';
+        const gradStops=pts.map(pt=>'<stop offset="'+pt.x.toFixed(3)+'%" stop-color="'+esc(pt.color)+'"/>').join('');
+        const points=pts.map(pt=>pt.x.toFixed(3)+','+pt.y.toFixed(2)).join(' '),area=points+' '+pts[pts.length-1].x.toFixed(3)+',76 '+pts[0].x.toFixed(3)+',76';
         graph.html('<svg class="icue-transition-svg" viewBox="0 0 100 80" preserveAspectRatio="none"><defs><linearGradient id="icueTransitionColour" x1="0%" x2="100%">'+gradStops+'</linearGradient><linearGradient id="icueTransitionFade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="white" stop-opacity=".72"/><stop offset="1" stop-color="white" stop-opacity=".08"/></linearGradient><mask id="icueTransitionMask"><rect width="100" height="80" fill="url(#icueTransitionFade)"/></mask></defs><polygon points="'+area+'" fill="url(#icueTransitionColour)" opacity=".55" mask="url(#icueTransitionMask)"/><polyline points="'+points+'" fill="none" stroke="url(#icueTransitionColour)" stroke-width=".65" vector-effect="non-scaling-stroke"/></svg>');
-        pts.forEach((pt,i)=>{const dot=$('<button type="button" class="icue-transition-stop" aria-label="Edit transition colour"></button>').css({left:pt.x+'%',top:pt.y+'px',background:pt.color}).attr('title','Click to edit colour · time '+pt.time+' · '+Math.round(pt.level)+'% · '+pt.color).attr('data-stop',i);graph.append(dot);});
-        $('#icueTransitionSummary').text(stops.length+' stops · '+min+' → '+max);
+        pts.forEach((pt,i)=>{
+            const when=pt.seconds.toFixed(3).replace(/0+$/,'').replace(/\.$/,'');
+            const dot=$('<button type="button" class="icue-transition-stop" aria-label="Edit transition colour"></button>').css({left:pt.x+'%',top:pt.y+'px',background:pt.color}).attr('title','Click to edit colour · '+when+' s of '+durationSec.toFixed(3).replace(/0+$/,'').replace(/\.$/,'')+' s · '+Math.round(pt.level)+'% · '+pt.color).attr('data-stop',i);
+            graph.append(dot);
+        });
+        $('#icueTransitionSummary').text(stops.length+' stops · total '+durationSec.toFixed(3).replace(/0+$/,'').replace(/\.$/,'')+' s');
     }
     function renderFriendlyEffect(){
         if(!currentLayer)return;const key=String(currentLayer.effect||'').toLowerCase(),cfg=friendlyEffects[key]||{name:currentLayer.effect||'Effect',fields:[]};
