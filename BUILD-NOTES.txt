@@ -1,9 +1,13 @@
-OpenLinkHub v12.4.74z7d9e - iCUE profile hardware activation fix
+OpenLinkHub v12.4.74z7d9h - safe profile activation + RGB worker ownership
 
-Changed complete files only; no patch/diff files.
+Baseline: user-supplied current source OpenLinkHub(20261019-231840).zip, retaining today's renderer/topology/group/live-reset work, plus the verified z7d9d store regression repair.
 
-- Profile-row selection now applies the imported icue-* RGB mode to each detected RGB hardware channel through the existing /api/color activation path before opening the editor workspace.
-- Previous dirty live edit is reset before activation when switching profiles.
-- Activation failures are surfaced instead of silently changing only the editor selection.
-- Cache-busts icue-profiles.js to v12.4.74z7d9e.
-- No renderer maths, topology, mapper, LINK discovery, or store/layer-count changes.
+Changes:
+- Profile selection loads editor controls independently of hardware activation.
+- One /api/color activation per physical OpenLinkHub device using channelId -1; no per-channel/bulk fan-out.
+- Same-profile editor refreshes and layer-structure refreshes do not restart hardware RGB.
+- LSH and memory UpdateRgbProfile calls are serialized with the existing rgbMutex.
+- Dynamic RGB workers now own a local ActiveRGB handle created before goroutine launch; worker exit no longer dereferences mutable d.activeRgb.
+- Restores ImportedProfile.Key and WorkspaceLayerCount from z7d9d.
+
+No effect maths, topology, mapper, LINK discovery/bounds, or imported .cueprofile persistence semantics were removed.

@@ -2685,6 +2685,9 @@ func (d *Device) UpdateRgbProfileData(profileName string, profile rgb.Profile) u
 
 // UpdateRgbProfile will update device RGB profile
 func (d *Device) UpdateRgbProfile(channelId int, profile string) uint8 {
+	d.rgbMutex.Lock()
+	defer d.rgbMutex.Unlock()
+
 	if d.DeviceProfile == nil {
 		return 0
 	}
@@ -4945,16 +4948,18 @@ func (d *Device) setDeviceColor() {
 		return
 	}
 
-	go func() {
+	activeRgb := rgb.Exit()
+	activeRgb.RGBStartColor = rgb.GenerateRandomColor(1)
+	activeRgb.RGBEndColor = rgb.GenerateRandomColor(1)
+	d.activeRgb = activeRgb
+
+	go func(active *rgb.ActiveRGB) {
 		startTime := time.Now()
-		d.activeRgb = rgb.Exit()
-		d.activeRgb.RGBStartColor = rgb.GenerateRandomColor(1)
-		d.activeRgb.RGBEndColor = rgb.GenerateRandomColor(1)
 		rand.New(rand.NewSource(time.Now().UnixNano()))
 
 		for {
 			select {
-			case <-d.activeRgb.Exit:
+			case <-active.Exit:
 				return
 			default:
 				buff := make([]byte, 0)
@@ -5003,7 +5008,7 @@ func (d *Device) setDeviceColor() {
 				time.Sleep(20 * time.Millisecond)
 			}
 		}
-	}()
+	}(activeRgb)
 }
 
 // generateRgbEffect will generate RGB effect for given device index

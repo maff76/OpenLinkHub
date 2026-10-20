@@ -86,52 +86,47 @@ $(function () {
     function refreshProfiles(selectKey){$.getJSON('/api/icue/profiles',r=>{ $('#icueProfileDirectory').text(r.directory?'Stored in: '+r.directory:'');const list=$('#icueProfileList').empty();(r.profiles||[]).forEach(p=>{const row=$('<div class="settings-row icue-profile-row"></div>').attr('data-key',p.key);row.append($('<span class="settings-label text-ellipsis"></span>').text(p.name||p.fileName),$('<small></small>').text(p.layers+' layers')).on('click',()=>loadProfile(p.key));list.append(row);});if(!(r.profiles||[]).length)list.append('<div class="settings-row"><span class="settings-label">No iCUE profiles imported</span></div>');if(selectKey)loadProfile(selectKey);});}
     function workspaceLayers(data){const p=data.profile||{},out=[];let di=(p.devices||[]).findIndex(d=>Number(d.usbVid)===6940&&Number(d.usbPid)===3135&&(d.channels||[]).length);if(di<0)return out;const c=p.devices[di].channels[0];(c.layers||[]).forEach((l,li)=>{if(String(l.effect||'').toLowerCase()==='lightinglink'&&(data.lightingLinkLayers||[]).length){data.lightingLinkLayers.forEach((linked,lli)=>{const v=Object.assign({},linked,{enabled:!!l.enabled&&!!linked.enabled,selectionMode:l.selectionMode,leds:Array.isArray(l.leds)?l.leds.slice():[]});out.push({layer:v,deviceIndex:di,channelIndex:0,layerIndex:lli,lightingLink:true,selectionSource:l,selectionLayerIndex:li});});}else out.push({layer:l,deviceIndex:di,channelIndex:0,layerIndex:li,lightingLink:false});});return out;}
     function resetRuntimeProfile(key,quiet){if(!key)return $.Deferred().resolve().promise();return $.ajax({url:'/api/icue/profile?key='+encodeURIComponent(key),type:'DELETE'}).then(()=>{if(!quiet)toast.success('Live preview reset to imported profile');});}
-    let profileLoadSerial=0;
-    function loadProfileData(key){
-        const serial=++profileLoadSerial;
-        status('Loading profile…');
-        return $.getJSON('/api/icue/profile?key='+encodeURIComponent(key)).done(data=>{
-            if(serial!==profileLoadSerial)return;
-            currentKey=key;currentData=data;currentTarget=null;currentLayer=null;
-            const backend=((data.editor||{}).version||data.editorBackendVersion||'UNKNOWN');console.info('[ICUE-EDITOR-BACKEND]',backend,'source=authored-cueprofile');
-            $('.icue-profile-row').removeClass('active').filter(function(){return $(this).attr('data-key')===key;}).addClass('active');
-            $('#icueEmpty').hide();$('#icueWorkspace').show();const p=data.profile||{};$('#icueProfileTitle').text(p.name||data.fileName||key);$('#icueMetaFile').text(data.fileName||'—');$('#icueMetaDevices').text((p.summary||{}).deviceEntries??(p.devices||[]).length);$('#icueMetaChannels').text((p.summary||{}).channels??'—');const layers=workspaceLayers(data);$('#icueMetaLayers').text(layers.length);const list=$('#icueLayerList').empty();layers.forEach((x,i)=>{const row=$('<div class="settings-row icue-layer-row"></div>').attr('data-i',i);row.append($('<span class="settings-label text-ellipsis"></span>').text((i+1)+' · '+layerLabel(x.layer,i)),$('<span class="icue-layer-effect"></span>').text(x.layer.effect||'unknown')).on('click',()=>selectLayer(x,i));list.append(row);});if(!layers.length)list.append('<div class="settings-row"><span class="settings-label">No iCUE LINK lighting layers found</span></div>');$('#icueSaveName').val((p.name||'Profile')+'-EDIT-001');if(layers.length)selectLayer(layers[0],0);else status('Profile loaded · no editable iCUE LINK layers found.');
-        }).fail(x=>{if(serial===profileLoadSerial){toast.warning(x.responseText||'Unable to load iCUE profile');status('Profile load failed.');}});
-    }
+    function loadProfileData(key){currentKey=key;$.getJSON('/api/icue/profile?key='+encodeURIComponent(key),data=>{currentData=data;const backend=((data.editor||{}).version||data.editorBackendVersion||'UNKNOWN');console.info('[ICUE-EDITOR-BACKEND]',backend,'source=authored-cueprofile');$('.icue-profile-row').removeClass('active').filter('[data-key="'+CSS.escape(key)+'"]').addClass('active');$('#icueEmpty').hide();$('#icueWorkspace').show();const p=data.profile||{};$('#icueProfileTitle').text(p.name||data.fileName||key);$('#icueMetaFile').text(data.fileName||'—');$('#icueMetaDevices').text((p.summary||{}).deviceEntries??(p.devices||[]).length);$('#icueMetaChannels').text((p.summary||{}).channels??'—');const layers=workspaceLayers(data);$('#icueMetaLayers').text(layers.length);const list=$('#icueLayerList').empty();layers.forEach((x,i)=>{const row=$('<div class="settings-row icue-layer-row"></div>').attr('data-i',i);row.append($('<span class="settings-label text-ellipsis"></span>').text((i+1)+' · '+layerLabel(x.layer,i)),$('<span class="icue-layer-effect"></span>').text(x.layer.effect||'unknown')).on('click',()=>selectLayer(x,i));list.append(row);});if(!layers.length)list.append('<div class="settings-row"><span class="settings-label">No iCUE LINK lighting layers found</span></div>');$('#icueSaveName').val((p.name||'Profile')+'-EDIT-001');if(layers.length)selectLayer(layers[0],0);});}
+    let profileActivationSerial=0;
     function activateHardwareProfile(key){
-        const targets=new Map();
-        detectedDevices.forEach(d=>{
+        const serial=++profileActivationSerial;
+        const deviceIds=[...new Set(detectedDevices.map(d=>{
             const raw=String(d.key||'');
             const cut=raw.lastIndexOf(':');
-            if(cut<=0)return;
-            const deviceId=raw.slice(0,cut),channelId=Number(raw.slice(cut+1));
-            if(!deviceId||!Number.isInteger(channelId))return;
-            targets.set(deviceId+':'+channelId,{deviceId,channelId,profile:key});
+            return cut>0?raw.slice(0,cut):'';
+        }).filter(Boolean))];
+        if(!deviceIds.length)return $.Deferred().resolve().promise();
+        let chain=$.Deferred().resolve().promise();
+        deviceIds.forEach(deviceId=>{
+            chain=chain.then(()=>{
+                if(serial!==profileActivationSerial)return $.Deferred().reject({superseded:true}).promise();
+                return $.ajax({url:'/api/color',type:'POST',contentType:'application/json',data:JSON.stringify({deviceId:deviceId,channelId:-1,profile:key})}).then(r=>{
+                    if(!r||Number(r.status)!==1)return $.Deferred().reject({responseText:(r&&r.message)||('Unable to activate '+key)}).promise();
+                    return r;
+                });
+            });
         });
-        if(!targets.size)return $.Deferred().reject({responseText:'No detected RGB hardware targets are available for this profile.'}).promise();
-        const requests=[...targets.values()].map(body=>$.ajax({url:'/api/color',type:'POST',contentType:'application/json',data:JSON.stringify(body)}).then(r=>{
-            if(!r||Number(r.status)!==1)return $.Deferred().reject({responseText:(r&&r.message)||('Hardware rejected '+key)}).promise();
-            return r;
-        }));
-        return $.when.apply($,requests);
+        return chain;
     }
     function loadProfile(key){
         if(!key)return;
         const previous=currentKey;
-        $('.icue-profile-row').removeClass('active').filter(function(){return $(this).attr('data-key')===key;}).addClass('active');
-        const activateAndLoad=()=>{
-            status('Applying selected profile to hardware…');
-            activateHardwareProfile(key).done(()=>{loadProfileData(key);status('Selected profile applied to hardware.');}).fail(x=>{
-                toast.warning((x&&x.responseText)||'Unable to apply selected profile to hardware');
-                status('Profile activation failed.');
+        const select=()=>{
+            loadProfileData(key);
+            if(previous===key)return;
+            status('Applying selected profile…');
+            activateHardwareProfile(key).done(()=>status('Selected profile applied.')).fail(x=>{
+                if(x&&x.superseded)return;
+                toast.warning((x&&x.responseText)||'Unable to change device RGB profile');
+                status('Profile loaded in editor · hardware activation failed.');
             });
         };
         if(previous&&previous!==key&&liveDirty){
             status('Clearing previous live edit…');
-            resetRuntimeProfile(previous,true).always(()=>{liveDirty=false;$('#icueResetLive').prop('disabled',true);activateAndLoad();});
+            resetRuntimeProfile(previous,true).always(()=>{liveDirty=false;$('#icueResetLive').prop('disabled',true);select();});
             return;
         }
-        activateAndLoad();
+        select();
     }
     function resetLivePreview(){
         if(!currentKey)return;
@@ -293,7 +288,7 @@ $(function () {
     $('#icueSelectAll').on('click',()=>setDeviceSelection(true));$('#icueSelectNone').on('click',()=>setDeviceSelection(false));$('#icueTopologyProbe').on('change',function(){$('#icueProbePanel').toggle(this.checked);$('#icueSelectionActions').toggle(!this.checked);renderLEDs();applyMappingProbe();});$('#icueProbePrev').on('click',()=>{const d=selectedDevice(),n=mapperLedCount(d);probeLocal=(probeLocal+n-1)%n;renderLEDs();applyMappingProbe();});$('#icueProbeNext').on('click',()=>{const d=selectedDevice(),n=mapperLedCount(d);probeLocal=(probeLocal+1)%n;renderLEDs();applyMappingProbe();});$('#icueMapRecord').on('click',recordMappingObservation);
     $('#icueResetLive').on('click',resetLivePreview);
     $(window).on('pagehide',function(){if(liveDirty&&currentKey)fetch('/api/icue/profile?key='+encodeURIComponent(currentKey),{method:'DELETE',keepalive:true});});
-    function layerAction(action){if(!currentTarget||!currentTarget.lightingLink){toast.warning('Layer structure editing currently applies to authored Lighting Link layers.');return;}const body={action:action,lightingLink:true,layerIndex:currentTarget.layerIndex,deviceIndex:currentTarget.deviceIndex,channelIndex:currentTarget.channelIndex};$.ajax({url:'/api/icue/profile?key='+encodeURIComponent(currentKey),type:'POST',contentType:'application/json',data:JSON.stringify(body),success:()=>loadProfile(currentKey),error:x=>toast.warning(x.responseText||'Unable to edit layer structure')});}
+    function layerAction(action){if(!currentTarget||!currentTarget.lightingLink){toast.warning('Layer structure editing currently applies to authored Lighting Link layers.');return;}const body={action:action,lightingLink:true,layerIndex:currentTarget.layerIndex,deviceIndex:currentTarget.deviceIndex,channelIndex:currentTarget.channelIndex};$.ajax({url:'/api/icue/profile?key='+encodeURIComponent(currentKey),type:'POST',contentType:'application/json',data:JSON.stringify(body),success:()=>loadProfileData(currentKey),error:x=>toast.warning(x.responseText||'Unable to edit layer structure')});}
     $('#icueAddLayer').on('click',()=>layerAction('add'));$('#icueDuplicateLayer').on('click',()=>layerAction('duplicate'));$('#icueMoveUp').on('click',()=>layerAction('up'));$('#icueMoveDown').on('click',()=>layerAction('down'));$('#icueDeleteLayer').on('click',()=>layerAction('delete'));
     $('#icueSlowScaleRange,#icueSlowScale').on('input change',function(){const v=Number(this.value);if(Number.isFinite(v))applyTimingCalibration(v,timingCalibration.fast);});
     $('#icueFastScaleRange,#icueFastScale').on('input change',function(){const v=Number(this.value);if(Number.isFinite(v))applyTimingCalibration(timingCalibration.slow,v);});
