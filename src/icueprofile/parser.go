@@ -1,0 +1,588 @@
+package icueprofile
+
+import (
+	"encoding/xml"
+	"fmt"
+	"io"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+)
+
+// Node is a deliberately small generic XML tree. Corsair's cereal XML contains
+// many polymorphic shapes, so the diagnostic parser keeps unknown fields rather
+// than binding the whole format to a brittle set of structs.
+type Node struct {
+	XMLName  xml.Name
+	Text     string
+	Attrs    []xml.Attr
+	Children []*Node
+}
+
+func (n *Node) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
+	n.XMLName = start.Name
+	n.Attrs = append([]xml.Attr(nil), start.Attr...)
+	var text strings.Builder
+	for {
+		tok, err := d.Token()
+		if err != nil {
+			return err
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			child := &Node{}
+			if err := d.DecodeElement(child, &t); err != nil {
+				return err
+			}
+			n.Children = append(n.Children, child)
+		case xml.CharData:
+			text.Write([]byte(t))
+		case xml.EndElement:
+			n.Text = strings.TrimSpace(text.String())
+			return nil
+		}
+	}
+}
+
+type Profile struct {
+	Name               string   `json:"name"`
+	ID                 string   `json:"id,omitempty"`
+	Devices            []Device `json:"devices"`
+	Summary            Summary  `json:"summary"`
+	LightingLinkLayers []Layer  `json:"-"`
+}
+
+type Device struct {
+	DeviceID           string    `json:"deviceId,omitempty"`
+	USBVendorID        int       `json:"usbVid,omitempty"`
+	USBProductID       int       `json:"usbPid,omitempty"`
+	HIDCaps            string    `json:"hidCaps,omitempty"`
+	DeviceLightingType string    `json:"deviceLightingType,omitempty"`
+	Channels           []Channel `json:"channels"`
+}
+
+type Channel struct {
+	Index  string  `json:"index"`
+	Layers []Layer `json:"layers"`
+}
+
+type AuthoredParameter struct {
+	RawValues []string `json:"rawValues,omitempty"`
+	Value     any      `json:"value,omitempty"`
+}
+
+type Layer struct {
+	Name          string         `json:"name"`
+	ID            string         `json:"id,omitempty"`
+	Enabled       bool           `json:"enabled"`
+	SelectionMode string         `json:"selectionMode,omitempty"`
+	LEDs          []string       `json:"leds,omitempty"`
+	Effect        string         `json:"effect"`
+	EffectName    string         `json:"effectName,omitempty"`
+	Parameters    map[string]any `json:"parameters,omitempty"`
+	ParserTrace   map[string]any `json:"-"`
+	// RawColorValues preserves colour-bearing leaf values exactly as authored in
+	// the .cueprofile. SourceColors is populated later by the Go colour decoder
+	// and exposed directly on the authored layer for the profile editor.
+	RawColorValues     []string                     `json:"rawColorValues,omitempty"`
+	SourceColors       []string                     `json:"sourceColors,omitempty"`
+	AuthoredParameters map[string]AuthoredParameter `json:"authoredParameters,omitempty"`
+	StartOnKeyPress    bool                         `json:"startOnKeyPress,omitempty"`
+	StartWithProfile   bool                         `json:"startWithProfile,omitempty"`
+	StopOnKeyPress     bool                         `json:"stopOnKeyPress,omitempty"`
+	StopOnKeyRelease   bool                         `json:"stopOnKeyRelease,omitempty"`
+	StopAfterTimes     int                          `json:"stopAfterTimes,omitempty"`
+	PlayOption         string                       `json:"playOption,omitempty"`
+}
+
+type Summary struct {
+	DeviceEntries int            `json:"deviceEntries"`
+	Channels      int            `json:"channels"`
+	Layers        int            `json:"layers"`
+	EnabledLayers int            `json:"enabledLayers"`
+	Effects       map[string]int `json:"effects"`
+	LEDSelections map[string]int `json:"ledSelectionModes"`
+}
+
+func ParseFile(path string) (*Profile, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return Parse(f)
+}
+
+func Parse(r io.Reader) (*Profile, error) {
+	dec := xml.NewDecoder(r)
+	var root Node
+	if err := dec.Decode(&root); err != nil {
+		return nil, fmt.Errorf("parse iCUE XML: %w", err)
+	}
+
+	profileNode := firstDescendant(&root, "profile")
+	if profileNode == nil {
+		return nil, fmt.Errorf("iCUE profile node not found")
+	}
+
+	typeNames := buildPolymorphicTypeMap(&root)
+
+	out := &Profile{
+		Name:    childText(profileNode, "name"),
+		ID:      childText(profileNode, "id"),
+		Summary: Summary{Effects: map[string]int{}, LEDSelections: map[string]int{}},
+	}
+
+	// Lighting Link is serialized as a profile-level LightingLinkProperty.
+	// Device layers contain a LightingLink wrapper that references this shared
+	// property. Capture the authored linked lighting here so playback can resolve
+	// the wrapper without inventing a separate animation.
+	walk(profileNode, func(n *Node) {
+		if childText(n, "polymorphic_name") != "LightingLinkProperty" {
+			return
+		}
+		data := firstPath(n, "ptr_wrapper", "data")
+		if data == nil {
+			return
+		}
+		layers := directChild(data, "layers")
+		if layers == nil {
+			return
+		}
+		for _, entry := range layers.Children {
+			if l := parseLightingLinkPropertyLayer(entry, typeNames); l != nil {
+				out.LightingLinkLayers = append(out.LightingLinkLayers, *l)
+			}
+		}
+	})
+
+	walk(profileNode, func(n *Node) {
+		key := directChild(n, "key")
+		value := directChild(n, "value")
+		if key == nil || value == nil || !looksLikeDeviceKey(key) {
+			return
+		}
+		dev := parseDevice(key, value, typeNames)
+		if len(dev.Channels) == 0 {
+			return
+		}
+		out.Devices = append(out.Devices, dev)
+	})
+
+	// Cereal can contain duplicate/default device entries. Keep all of them in
+	// diagnostics because that is valuable while reverse engineering.
+	out.Summary.DeviceEntries = len(out.Devices)
+	for _, d := range out.Devices {
+		out.Summary.Channels += len(d.Channels)
+		for _, c := range d.Channels {
+			for _, l := range c.Layers {
+				out.Summary.Layers++
+				if l.Enabled {
+					out.Summary.EnabledLayers++
+				}
+				out.Summary.Effects[l.Effect]++
+				out.Summary.LEDSelections[l.SelectionMode]++
+			}
+		}
+	}
+	return out, nil
+}
+
+func parseDevice(key, value *Node, typeNames map[int]string) Device {
+	model := firstDescendant(key, "modelId")
+	d := Device{
+		DeviceID:           childText(key, "deviceId"),
+		HIDCaps:            childText(key, "hidCaps"),
+		DeviceLightingType: childText(key, "deviceLightingType"),
+	}
+	if model != nil {
+		d.USBVendorID = parseInt(childText(model, "usbVid"))
+		d.USBProductID = parseInt(childText(model, "usbPid"))
+	}
+
+	// channelProperties is a map encoded as valueN -> key + value.
+	cp := firstDescendant(value, "channelProperties")
+	if cp == nil {
+		return d
+	}
+	for _, entry := range cp.Children {
+		idx := childText(entry, "key")
+		channelValue := directChild(entry, "value")
+		if channelValue == nil {
+			continue
+		}
+		layersNode := firstDescendant(channelValue, "layers")
+		if layersNode == nil {
+			continue
+		}
+		ch := Channel{Index: idx}
+		for _, layerEntry := range layersNode.Children {
+			if layer := parseLayer(layerEntry, typeNames); layer != nil {
+				ch.Layers = append(ch.Layers, *layer)
+			}
+		}
+		if len(ch.Layers) > 0 {
+			d.Channels = append(d.Channels, ch)
+		}
+	}
+	return d
+}
+
+func parseLayer(entry *Node, typeNames map[int]string) *Layer {
+	data := firstPath(entry, "ptr_wrapper", "data")
+	if data == nil {
+		return nil
+	}
+	base := directChild(data, "base")
+	lighting := directChild(data, "lighting")
+	if base == nil || lighting == nil {
+		return nil
+	}
+
+	l := &Layer{
+		Name:          childText(base, "name"),
+		ID:            childText(base, "id"),
+		Enabled:       strings.EqualFold(childText(base, "enabled"), "true") || childText(base, "enabled") == "1",
+		SelectionMode: childText(base, "option"),
+	}
+	if keys := directChild(base, "keys"); keys != nil {
+		for _, k := range keys.Children {
+			if s := strings.TrimSpace(k.Text); s != "" {
+				l.LEDs = append(l.LEDs, s)
+			}
+		}
+	}
+
+	parseExecutionHints(base, l)
+
+	l.Effect = childText(lighting, "polymorphic_name")
+	if l.Effect == "" {
+		l.Effect = typeNames[polymorphicTypeID(childText(lighting, "polymorphic_id"))]
+	}
+	effectData := firstPath(lighting, "ptr_wrapper", "data")
+	if effectData != nil {
+		if l.Effect == "" {
+			l.Effect = childText(effectData, "polymorphic_name")
+		}
+		l.EffectName = findFirstField(effectData, "name")
+		l.Parameters = extractParameters(effectData)
+		l.RawColorValues = authoredColorLeafValues(effectData)
+		l.AuthoredParameters = authoredParameters(effectData, l.Parameters)
+	}
+	if l.Effect == "" {
+		l.Effect = "UnknownLighting"
+	}
+	return l
+}
+
+func parseLightingLinkPropertyLayer(entry *Node, typeNames map[int]string) *Layer {
+	data := firstPath(entry, "ptr_wrapper", "data")
+	if data == nil {
+		return nil
+	}
+	lighting := directChild(data, "lighting")
+	if lighting == nil {
+		return nil
+	}
+	l := &Layer{Enabled: true, SelectionMode: "AllLeds", StartWithProfile: true, StopAfterTimes: -1, PlayOption: "Standard"}
+	if base := directChild(data, "base"); base != nil {
+		parseExecutionHints(base, l)
+	}
+	l.Effect = childText(lighting, "polymorphic_name")
+	if l.Effect == "" {
+		l.Effect = typeNames[polymorphicTypeID(childText(lighting, "polymorphic_id"))]
+	}
+	effectData := firstPath(lighting, "ptr_wrapper", "data")
+	if effectData == nil {
+		return nil
+	}
+	l.EffectName = findFirstField(effectData, "name")
+	l.Parameters = extractParameters(effectData)
+	l.RawColorValues = authoredColorLeafValues(effectData)
+	l.AuthoredParameters = authoredParameters(effectData, l.Parameters)
+	l.ParserTrace = buildLayerParserTrace(effectData, l.Parameters)
+	if l.Effect == "" {
+		l.Effect = "UnknownLighting"
+	}
+	return l
+}
+
+func parseExecutionHints(base *Node, l *Layer) {
+	hints := directChild(base, "executionHints")
+	if hints == nil {
+		// Older/simple exports behave as profile-started continuous layers.
+		l.StartWithProfile = true
+		l.StopAfterTimes = -1
+		l.PlayOption = "Standard"
+		return
+	}
+	l.StartOnKeyPress = strings.EqualFold(childText(hints, "startOnKeyPress"), "true") || childText(hints, "startOnKeyPress") == "1"
+	l.StartWithProfile = strings.EqualFold(childText(hints, "startWithProfile"), "true") || childText(hints, "startWithProfile") == "1"
+	l.StopOnKeyPress = strings.EqualFold(childText(hints, "stopOnKeyPress"), "true") || childText(hints, "stopOnKeyPress") == "1"
+	l.StopOnKeyRelease = strings.EqualFold(childText(hints, "stopOnKeyRelease"), "true") || childText(hints, "stopOnKeyRelease") == "1"
+	l.StopAfterTimes = -1
+	if v := strings.TrimSpace(childText(hints, "stopAfterTimes")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			l.StopAfterTimes = n
+		}
+	}
+	l.PlayOption = strings.TrimSpace(childText(hints, "playOption"))
+}
+
+// authoredColorLeafValues walks every colour-bearing field on the authored
+// effect node. Unlike extractParameters it does not choose only the first
+// matching node: the editor needs the exact source leaves before any renderer
+// compilation or layer composition occurs.
+func authoredColorLeafValues(effect *Node) []string {
+	if effect == nil {
+		return nil
+	}
+	out := make([]string, 0)
+	seen := make(map[string]bool)
+	for _, key := range []string{"transitions", "colors", "color"} {
+		for _, n := range descendants(effect, key) {
+			for _, v := range collectLeafValues(n) {
+				v = strings.TrimSpace(v)
+				if v != "" && !seen[v] {
+					seen[v] = true
+					out = append(out, v)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// authoredParameters keeps both the exact leaf values serialized by iCUE and
+// the parser's interpreted value. The editor can therefore present friendly
+// controls without losing the source representation needed for a lossless
+// writer or effect calibration.
+
+// authoredEffectParameterKeys is intentionally an extraction vocabulary, not a
+// claim about renderer semantics.  It lets the editor expose values iCUE
+// actually authored across the effect families while each effect is calibrated.
+// Unknown/unverified values remain raw and are never rewritten implicitly.
+func authoredEffectParameterKeys() []string {
+	return []string{
+		"duration", "brightness", "opacity", "speed", "direction", "clockwise",
+		"random", "isRandom", "color", "colors", "transitions", "background",
+		"autoDuration", "waveSpread", "velocity", "tailLength", "isDoublesided", "angle",
+		"width", "wavelength", "phase", "offset", "tail", "falloff", "frequency",
+		"period", "spacing", "size", "step", "steps", "count", "segments",
+		"sensorId", "typeLightingBehavior",
+		"start", "end", "delay", "hold", "fade", "reverse", "center", "spread", "rotation",
+	}
+}
+
+func authoredParameters(effect *Node, interpreted map[string]any) map[string]AuthoredParameter {
+	if effect == nil {
+		return nil
+	}
+	keys := authoredEffectParameterKeys()
+	out := make(map[string]AuthoredParameter)
+	for _, key := range keys {
+		var raw []string
+		for _, n := range descendants(effect, key) {
+			vals := collectLeafValues(n)
+			if len(vals) == 0 {
+				if text := strings.TrimSpace(n.Text); text != "" {
+					vals = []string{text}
+				}
+			}
+			for _, v := range vals {
+				v = strings.TrimSpace(v)
+				if v != "" {
+					raw = append(raw, v)
+				}
+			}
+		}
+		value, hasValue := interpreted[key]
+		if len(raw) == 0 && !hasValue {
+			continue
+		}
+		out[key] = AuthoredParameter{RawValues: raw, Value: value}
+	}
+	return out
+}
+
+func extractParameters(effect *Node) map[string]any {
+	wanted := make(map[string]bool)
+	for _, key := range authoredEffectParameterKeys() {
+		wanted[key] = true
+	}
+	result := map[string]any{}
+	for key := range wanted {
+		nodes := descendants(effect, key)
+		if len(nodes) == 0 {
+			continue
+		}
+		if key == "transitions" || key == "colors" || key == "color" {
+			vals := collectLeafValues(nodes[0])
+			if len(vals) > 0 {
+				result[key] = vals
+			}
+			continue
+		}
+		vals := make([]string, 0, len(nodes))
+		for _, n := range nodes {
+			if strings.TrimSpace(n.Text) != "" {
+				vals = append(vals, strings.TrimSpace(n.Text))
+			}
+		}
+		if len(vals) == 1 {
+			result[key] = scalar(vals[0])
+		} else if len(vals) > 1 {
+			result[key] = vals
+		}
+	}
+	return result
+}
+
+func buildLayerParserTrace(effect *Node, parameters map[string]any) map[string]any {
+	trace := map[string]any{}
+	xmlFields := map[string]any{}
+	for _, key := range []string{"transitions", "colors", "color"} {
+		nodes := descendants(effect, key)
+		if len(nodes) == 0 {
+			continue
+		}
+		entries := make([]map[string]any, 0, len(nodes))
+		for _, n := range nodes {
+			entries = append(entries, map[string]any{
+				"node":   n.XMLName.Local,
+				"text":   strings.TrimSpace(n.Text),
+				"leaves": collectLeafValues(n),
+			})
+		}
+		xmlFields[key] = entries
+	}
+	trace["xmlColorFields"] = xmlFields
+	paramTypes := map[string]string{}
+	for key, value := range parameters {
+		paramTypes[key] = fmt.Sprintf("%T", value)
+	}
+	trace["parameterTypes"] = paramTypes
+	return trace
+}
+
+func scalar(s string) any {
+	// Numeric cereal fields commonly use 0/1. Parse numbers before booleans so
+	// values such as RainLighting speed=1 remain numeric diagnostics.
+	if i, err := strconv.Atoi(s); err == nil {
+		return i
+	}
+	if b, err := strconv.ParseBool(s); err == nil {
+		return b
+	}
+	if f, err := strconv.ParseFloat(s, 64); err == nil {
+		return f
+	}
+	return s
+}
+
+func collectLeafValues(n *Node) []string {
+	var out []string
+	walk(n, func(x *Node) {
+		if len(x.Children) == 0 && strings.TrimSpace(x.Text) != "" {
+			out = append(out, x.XMLName.Local+"="+strings.TrimSpace(x.Text))
+		}
+	})
+	return out
+}
+
+func buildPolymorphicTypeMap(root *Node) map[int]string {
+	out := map[int]string{}
+	walk(root, func(n *Node) {
+		idNode := directChild(n, "polymorphic_id")
+		nameNode := directChild(n, "polymorphic_name")
+		if idNode == nil || nameNode == nil || strings.TrimSpace(nameNode.Text) == "" {
+			return
+		}
+		id := polymorphicTypeID(idNode.Text)
+		if id != 0 {
+			out[id] = strings.TrimSpace(nameNode.Text)
+		}
+	})
+	return out
+}
+
+func polymorphicTypeID(s string) int {
+	v, err := strconv.ParseUint(strings.TrimSpace(s), 10, 32)
+	if err != nil {
+		return 0
+	}
+	// cereal marks a newly declared polymorphic type with bit 31. Later
+	// references use the same id without that declaration bit.
+	return int(v & 0x7fffffff)
+}
+
+func looksLikeDeviceKey(n *Node) bool {
+	return directChild(n, "deviceId") != nil && directChild(n, "modelId") != nil && directChild(n, "hidCaps") != nil
+}
+
+func parseInt(s string) int { i, _ := strconv.Atoi(strings.TrimSpace(s)); return i }
+func directChild(n *Node, name string) *Node {
+	for _, c := range n.Children {
+		if c.XMLName.Local == name {
+			return c
+		}
+	}
+	return nil
+}
+func childText(n *Node, name string) string {
+	if c := directChild(n, name); c != nil {
+		return strings.TrimSpace(c.Text)
+	}
+	return ""
+}
+func firstPath(n *Node, names ...string) *Node {
+	cur := n
+	for _, name := range names {
+		cur = directChild(cur, name)
+		if cur == nil {
+			return nil
+		}
+	}
+	return cur
+}
+func firstDescendant(n *Node, name string) *Node {
+	var found *Node
+	walk(n, func(x *Node) {
+		if found == nil && x.XMLName.Local == name {
+			found = x
+		}
+	})
+	return found
+}
+func descendants(n *Node, name string) []*Node {
+	var out []*Node
+	walk(n, func(x *Node) {
+		if x.XMLName.Local == name {
+			out = append(out, x)
+		}
+	})
+	return out
+}
+func findFirstField(n *Node, name string) string {
+	if x := firstDescendant(n, name); x != nil {
+		return strings.TrimSpace(x.Text)
+	}
+	return ""
+}
+func walk(n *Node, fn func(*Node)) {
+	fn(n)
+	for _, c := range n.Children {
+		walk(c, fn)
+	}
+}
+
+// EffectNames returns a stable sorted list useful for diagnostics and tests.
+func (p *Profile) EffectNames() []string {
+	out := make([]string, 0, len(p.Summary.Effects))
+	for k := range p.Summary.Effects {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
