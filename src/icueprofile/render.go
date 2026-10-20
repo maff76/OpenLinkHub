@@ -34,7 +34,7 @@ type LEDCommand struct {
 	Effect     string
 }
 
-// persistentLEDState is the experimental v12.4.47 physical-LED state model.
+// persistentLEDState is the physical-LED state model.
 // A rendered LED keeps its last committed RGB value until an effect issues a
 // new command for that LED. In particular, StaticLighting seeds the state when
 // a profile starts; it is not reasserted on every renderer frame.
@@ -135,7 +135,7 @@ func edgeTriggeredPatches(deviceOrdinal, ledCount int, started time.Time, layerI
 
 // rainCommandTime maps Rain's continuously fading drop state onto a canonical
 // effect timeline rather than the wall-clock instant RenderFan happened to run.
-// The 20 ms quantum is only a timestamp grid for the already-validated v12.4.38
+// The 20 ms quantum is only a timestamp grid for the validated
 // fade progression; it is not ownership and does not prevent another effect's
 // timestamped command from interrupting Rain between Rain notes.
 func rainCommandTime(elapsed float64) float64 {
@@ -183,7 +183,7 @@ func rgbCommandNear(a, b RGB, eps float64) bool {
 	return math.Abs(a.R-b.R) <= eps && math.Abs(a.G-b.G) <= eps && math.Abs(a.B-b.B) <= eps
 }
 
-// v12.4.45 patch resolver: effects generate sparse LED patches against a shared
+// Patch resolver: effects generate sparse LED patches against a shared
 // profile clock. A patch has an explicit active bit, so "no command" can never
 // be confused with RGB black. Layers are applied base-to-top using iCUE's
 // serialized top-to-bottom stack order. Authored black remains an active patch.
@@ -365,7 +365,7 @@ func selectedAt(l Layer, logicalBase, local int) bool {
 	return false
 }
 
-// v12.4.64 continuous live-performer concert sequencer.
+// Continuous live-performer concert sequencer.
 //
 // The profile is an open-ended performance: selecting a profile starts a new
 // concert at t=0 and changing/stopping the profile ends it. There is no master
@@ -397,12 +397,6 @@ type scorePlayerState struct {
 	lastElapsed       float64
 	started           bool
 	logBucket         int64
-	renderCalls       int
-	renderDeltaSum    float64
-	renderDeltaMin    float64
-	renderDeltaMax    float64
-	renderCadenceAt   float64
-	orangeAuditAt     float64
 	rainBase          [][]RGB
 	rainLast          [][]RGB
 	rainActive        [][]bool
@@ -753,7 +747,7 @@ func recordLayerTrack(l Layer, li, fanOrdinal, ledCount int, duration float64, t
 		return notes, true
 	}
 
-	// Every non-static lighting effect is a live performer in v12.4.63. The
+	// Every non-static lighting effect is a live performer. The
 	// layer keeps only its authored parameters and independent phrase period;
 	// it is evaluated directly from the shared absolute concert clock. There is
 	// no pre-recorded 20 ms command grid and no finite master score.
@@ -869,7 +863,7 @@ func visualDistance(a, b RGB) float64 {
 
 func applyLiveContinuous(state *scorePlayerState, at float64) int {
 	changed := map[int]struct{}{}
-	// v12.4.64: every performer receives the absolute concert clock. A layer's
+	// Every performer receives the absolute concert clock. A layer's
 	// authored phrase may repeat its expression/colour programme, but reaching a
 	// phrase boundary must not rewind propagation that is already travelling.
 	// renderLayer owns the effect-specific distinction: Gradient/Breathe/etc.
@@ -1397,7 +1391,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 			return c, a, true
 		}
 
-		// v12.4.38 A/B: model imported iCUE Rain as discrete short-lived drops
+		// Model imported iCUE Rain as discrete short-lived drops
 		// rather than a continuously travelling full-field waveform.  The cadence
 		// and lifetime follow OpenLinkHub's proven native Rain timing model; iCUE's
 		// authored colours, selection, direction, random flag and opacity remain in
@@ -1493,7 +1487,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		applyLayerOpacity(l, a)
 		return c, a, true
 	case "colorwavelighting":
-		// v12.4.45: ColorWave is a timed LED-command generator, not an opaque
+		// ColorWave is a timed LED-command generator, not an opaque
 		// full-layer framebuffer. Every layer runs on the shared profile clock
 		// with its own speed/direction/colours. LEDs outside the travelling active
 		// train return alpha zero (NO COMMAND), allowing lower layers/base to show.

@@ -2947,7 +2947,7 @@ func icueProfileWorkspace(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		const editorBackendVersion = "v12.4.74z7d9n-device-layer-colours"
+		const editorBackendVersion = "authored-cueprofile-v1"
 		editorModel := map[string]interface{}{
 			"version": editorBackendVersion,
 			"source":  "authored-cueprofile",
