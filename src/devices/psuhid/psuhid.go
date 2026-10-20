@@ -69,8 +69,10 @@ type DeviceProfile struct {
 }
 
 type Device struct {
-	dev             *hid.Device
-	deviceKey       string
+	dev       *hid.Device
+	deviceKey string // devices.go registration key; "<productId>-<usb port>" for a duplicate
+	// Per device, not package globals: with two PSUs, globals made both refresh
+	// goroutines share one ticker (each refreshed at about half rate) and one mutex.
 	mutex           sync.Mutex
 	timer           *time.Ticker
 	autoRefreshChan chan bool
@@ -111,11 +113,13 @@ var (
 	dataPowerOut          = byte(0xee)
 	dataInputVoltage      = byte(0x88)
 	deviceRefreshInterval = 1000
-	readTimeout           = 1000 * time.Millisecond
-	bufferSize            = 64
-	readBufferSize        = 64
-	bufferSizeWrite       = bufferSize + 1
-	temperatureChannels   = 2
+	// A PSU that never answers a request would otherwise block transfer() (and Init)
+	// forever: hid Read has no timeout.
+	readTimeout         = 1000 * time.Millisecond
+	bufferSize          = 64
+	readBufferSize      = 64
+	bufferSizeWrite     = bufferSize + 1
+	temperatureChannels = 2
 )
 
 func Init(vendorId, productId uint16, key, path string) *common.Device {
@@ -258,6 +262,9 @@ func (d *Device) getProductData() {
 
 	d.Product = product
 
+	// The serial is derived from the product name, so two identical PSUs would share it
+	// (and their profile). A second one is registered with a "<productId>-<usb port>" key;
+	// mix that port into its serial. A single PSU keeps its existing serial and profile.
 	seed := product
 	if i := strings.Index(d.deviceKey, "-"); i >= 0 {
 		seed = product + d.deviceKey[i:]
@@ -789,6 +796,11 @@ func (d *Device) transfer(buffer []byte) ([]byte, error) {
 		return bufferR, err
 	}
 
+	// Read until the response to THIS request arrives, or readTimeout passes. A read that
+	// was interrupted (EINTR: the Go runtime signals threads) or timed out leaves its
+	// response pending; it then arrives ahead of the next one. Treating that as a failed
+	// transfer left every later read one response behind ("response does not match the
+	// request" on every transfer), so stale responses are skipped instead.
 	deadline := time.Now().Add(readTimeout)
 	for {
 		remaining := time.Until(deadline)
@@ -813,5 +825,6 @@ func (d *Device) transfer(buffer []byte) ([]byte, error) {
 		if buffer[1] == bufferR[0] && buffer[2] == bufferR[1] {
 			return bufferR, nil
 		}
+		// A late response to an earlier request: discard it and keep reading.
 	}
 }
