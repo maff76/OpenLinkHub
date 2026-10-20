@@ -7,22 +7,26 @@ $(function () {
     const commonEffects=['StaticLighting','RainLighting','WaveLighting','ColorWaveLighting','RippleLighting','SpiralLighting','SpiralRainbowLighting','RainbowWaveLighting','WatercolorLighting','VisorLighting','MarqueeLighting','SequentialLighting','ColorShiftLighting','ColorPulseLighting','GradientLighting','InfinityLighting','BlinkLighting','BreatheLighting','RainbowLighting','BasicNoneLighting'];
     const field=(keys,label,type='number',display=null,extra={})=>Object.assign({keys:Array.isArray(keys)?keys:[keys],label,type,display},extra);
     const colours=(label='Colours',maxColors=0,extra={})=>field(['transitions','colors','color'],label,'colors',null,Object.assign({maxColors},extra));
-    const speed=field('speed','Speed','enum',null,{options:[['1','Slow'],['2','Medium'],['3','Fast']]});
+    const speed=field('speed','Speed','enum',null,{presentation:'slider',options:[['1','Slow'],['2','Medium'],['3','Fast']]});
     const duration=field('duration','Lighting time','number','seconds');
     const velocity=field('velocity','Velocity (lights/sec)','number','tenths');
     const tail=field(['tailLength','tail'],'Tail (lights)','number','tenths');
     const opacity=field('opacity','Opacity','number');
     const random=field(['isRandom','random'],'Random colours','bool');
     const twoSides=field('isDoublesided','Two sides','bool');
-    const directionLR=field('direction','Direction','enum',null,{options:[['1','Left'],['2','Right']]});
-    const directionInfinity=field('direction','Direction','enum',null,{options:[['2','Up / Down'],['3','Left / Right']]});
-    const directionRotary=field('direction','Direction','enum',null,{options:[['5','Clockwise'],['6','Counter-clockwise']]});
+    const directionLR=field('direction','Direction','enum',null,{presentation:'buttons',options:[['1','← Left'],['2','Right →']]});
+    const directionInfinity=field('direction','Direction','enum',null,{presentation:'buttons',options:[['2','↕ Up / Down'],['3','↔ Left / Right']]});
+    const directionRotary=field('direction','Direction','enum',null,{presentation:'buttons',options:[['5','↻ Right 90°'],['6','↺ Left 90°']]});
+    // Wave stores its two authored travel directions in the angle field. Keep the
+    // raw iCUE values behind the editor, but present the semantic choice rather
+    // than inviting arbitrary degree input.
+    const directionWave=field('angle','Direction','enum',null,{presentation:'buttons',options:[['180','← Left'],['0','Right →']]});
     // Semantic effect controls captured from iCUE.  A field is rendered only when
     // that exact authored parameter exists; no generic Speed/Velocity or Direction/Angle aliases.
     const schemas={
         staticlighting:[colours('Colour',1),opacity],
         rainlighting:[colours('Colour',2),opacity,speed,field('direction','Direction')],
-        wavelighting:[duration,velocity,tail,field('angle','Angle (degrees)'),twoSides],
+        wavelighting:[duration,velocity,tail,directionWave,twoSides],
         colorwavelighting:[colours('Colours',2),speed,directionLR],
         colorwarplighting:[speed,directionLR],
         ripplelighting:[duration,velocity,tail],
@@ -34,7 +38,7 @@ $(function () {
         watercolorspectrumlighting:[speed,directionLR],
         visorlighting:[colours('Colours',2),speed,field('direction','Direction')],
         marqueelighting:[colours('Colour',1),speed],
-        sequentiallighting:[colours('Colour',1,{hideWhenRandom:true}),random,speed,field('direction','Direction')],
+        sequentiallighting:[colours('Colour',1,{hideWhenRandom:true}),random,speed,directionLR],
         rotarystacklighting:[colours('Colours',2,{hideWhenRandom:true}),random,speed,directionRotary],
         colorshiftlighting:[colours('Colours',2),speed],
         colorpulselighting:[colours('Colours',2),speed],
@@ -128,7 +132,7 @@ $(function () {
     const friendlyEffects={
         staticlighting:{name:'Static Color',fields:[['Colour','@colors']]},
         rainlighting:{name:'Rain',fields:[['Colour mode','@random'],['Speed','speed'],['Direction','direction']]},
-        wavelighting:{name:'Wave',graph:true,fields:[['Lighting time (sec)','duration','seconds'],['Velocity (lights/sec)','velocity','tenths'],['Tail (lights)','tailLength','tenths'],['Angle (degrees)','angle'],['Two sides','isDoublesided']]},
+        wavelighting:{name:'Wave',graph:true,fields:[['Lighting time (sec)','duration','seconds'],['Velocity (lights/sec)','velocity','tenths'],['Tail (lights)','tailLength','tenths'],['Direction','angle'],['Two sides','isDoublesided']]},
         ripplelighting:{name:'Ripple',graph:true,fields:[['Lighting time (sec)','duration','seconds'],['Velocity (lights/sec)','velocity','tenths'],['Tail (lights)','tailLength','tenths']]},
         colorwavelighting:{name:'Color Wave',fields:[['Colour mode','@random'],['Colours','@colors'],['Speed','speed'],['Direction','direction']]},
         colorshiftlighting:{name:'Color Shift',fields:[['Colour mode','@random'],['Colours','@colors'],['Speed','speed'],['Direction','direction']]},
@@ -154,6 +158,14 @@ $(function () {
         if(key==='@colors'){const cs=authoredColors();return cs.length?cs.join('  ·  '):'—';}
         if(key==='@random'){const v=authoredValue('isRandom')??authoredValue('random');return v===true?'Random Colors':(v===false?'Alternating / authored':'—');}
         const v=authoredValue(key);if(v===undefined||v===null||v==='')return '—';if(typeof v==='boolean')return v?'On':'Off';if(Array.isArray(v))return v.join(' · ');
+        const effect=String(currentLayer&&currentLayer.effect||'').toLowerCase(),sv=String(v);
+        if(key==='speed')return ({'1':'Slow','2':'Medium','3':'Fast'})[sv]||sv;
+        if(key==='direction'){
+            if(effect==='infinitylighting')return ({'2':'↕ Up / Down','3':'↔ Left / Right'})[sv]||sv;
+            if(effect==='rotarystacklighting'||effect==='spiralrainbowlighting')return ({'5':'↻ Right 90°','6':'↺ Left 90°'})[sv]||sv;
+            if(['colorwavelighting','rainbowwavelighting','rainbowchannellighting','sequentiallighting','colorwarplighting','watercolorspectrumlighting'].includes(effect))return ({'1':'← Left','2':'Right →'})[sv]||sv;
+        }
+        if(key==='angle'&&effect==='wavelighting')return ({'180':'← Left','0':'Right →'})[sv]||sv;
         const n=Number(v);if(Number.isFinite(n)){if(display==='seconds')return (n/1000).toFixed(1);if(display==='tenths')return (n/10).toFixed(1);}
         return String(v);
     }
@@ -286,7 +298,16 @@ $(function () {
                 return;
             }
             if(f.type==='enum'){
-                const col=$('<div class="col-md-4"></div>');col.append($('<label class="sentence-text"></label>').text(f.label));const inp=$('<select class="form-control system-input icue-param-enum"></select>').attr('data-key',key);(f.options||[]).forEach(o=>inp.append($('<option>').val(o[0]).text(o[1])));inp.val(String(p[key]));col.append(inp);box.append(col);return;
+                const col=$('<div class="col-md-4"></div>');col.append($('<label class="sentence-text"></label>').text(f.label));
+                if(f.presentation==='slider'){
+                    const opts=f.options||[],values=opts.map(o=>Number(o[0])),min=Math.min(...values),max=Math.max(...values),current=Number(p[key]);
+                    const wrap=$('<div class="icue-enum-slider"></div>'),inp=$('<input type="range" class="form-range icue-param-enum-slider">').attr({'data-key':key,min:min,max:max,step:1}).val(current),labels=$('<div class="d-flex justify-content-between sentence-text" style="font-size:11px;opacity:.8"></div>');
+                    opts.forEach(o=>labels.append($('<span></span>').text(o[1])));wrap.append(inp,labels);col.append(wrap);box.append(col);return;
+                }
+                if(f.presentation==='buttons'){
+                    const group=$('<div class="btn-group w-100 icue-enum-buttons" role="group"></div>');(f.options||[]).forEach(o=>{const active=String(p[key])===String(o[0]);group.append($('<button type="button" class="btn btn-sm icue-param-enum-button"></button>').toggleClass('btn-primary',active).toggleClass('btn-outline-secondary',!active).attr({'data-key':key,'data-value':o[0]}).text(o[1]));});col.append(group);box.append(col);return;
+                }
+                const inp=$('<select class="form-control system-input icue-param-enum"></select>').attr('data-key',key);(f.options||[]).forEach(o=>inp.append($('<option>').val(o[0]).text(o[1])));inp.val(String(p[key]));col.append(inp);box.append(col);return;
             }
             if(f.type==='bool'){
                 const col=$('<div class="col-md-4"></div>'),wrap=$('<label class="system-toggle compact"></label>'),inp=$('<input type="checkbox" class="icue-param-bool">').attr('data-key',key).prop('checked',!!p[key]);wrap.append(inp,$('<span class="toggle-track"></span>'),$('<span class="ms-2"></span>').text(f.label));col.append(wrap);box.append(col);return;
@@ -434,7 +455,7 @@ $(function () {
         const picker=$('<input type="color" aria-label="Transition colour">').val(colors[index]).css({position:'fixed',left:'-1000px',top:'-1000px'}).appendTo(document.body);
         picker.on('input change',function(){applyTransitionStopColour(index,this.value);}).on('blur',function(){setTimeout(()=>picker.remove(),0);});picker[0].click();
     });
-    $('#icueEffectControls').on('change','.icue-param-number',function(){if(this.value!==''){const display=String($(this).data('display')||''),v=fromDisplayUnit(this.value,display);applyParam($(this).data('key'),v);}}).on('change','.icue-param-color',function(){const inputs=$('.icue-param-color'),hexes=inputs.map((_,x)=>String(x.value).toLowerCase()).get(),colors=hexes.map(hexToRGB);currentLayer.sourceColors=hexes;currentLayer.parameters=currentLayer.parameters||{};currentLayer.parameters.editorColors=colors;palettePhase=0;$('#icueParameters').val(JSON.stringify(currentLayer.parameters,null,2));applyColourParameters(colors);renderFriendlyEffect();renderLEDs();}).on('change','.icue-param-enum',function(){applyParam($(this).data('key'),Number(this.value));}).on('change','.icue-param-bool',function(){applyParam($(this).data('key'),this.checked);renderEffectControls();});
+    $('#icueEffectControls').on('change','.icue-param-number',function(){if(this.value!==''){const display=String($(this).data('display')||''),v=fromDisplayUnit(this.value,display);applyParam($(this).data('key'),v);}}).on('change','.icue-param-color',function(){const inputs=$('.icue-param-color'),hexes=inputs.map((_,x)=>String(x.value).toLowerCase()).get(),colors=hexes.map(hexToRGB);currentLayer.sourceColors=hexes;currentLayer.parameters=currentLayer.parameters||{};currentLayer.parameters.editorColors=colors;palettePhase=0;$('#icueParameters').val(JSON.stringify(currentLayer.parameters,null,2));applyColourParameters(colors);renderFriendlyEffect();renderLEDs();}).on('change','.icue-param-enum,.icue-param-enum-slider',function(){applyParam($(this).data('key'),Number(this.value));renderEffectControls();}).on('click','.icue-param-enum-button',function(){applyParam($(this).data('key'),Number($(this).data('value')));renderEffectControls();}).on('change','.icue-param-bool',function(){applyParam($(this).data('key'),this.checked);renderEffectControls();});
     $('#icueApplyParameters').on('click',function(){try{const p=JSON.parse($('#icueParameters').val()||'{}');currentLayer.parameters=p;renderEffectControls();renderFriendlyEffect();renderLEDs();apply({parameters:p});}catch(e){toast.warning('Parameters must be valid JSON');}});
     $('#icueSelectAll').on('click',()=>setDeviceSelection(true));$('#icueSelectNone').on('click',()=>setDeviceSelection(false));$('#icueTopologyProbe').on('change',function(){$('#icueProbePanel').toggle(this.checked);$('#icueSelectionActions').toggle(!this.checked);renderLEDs();applyMappingProbe();});$('#icueProbePrev').on('click',()=>{const d=selectedDevice(),n=mapperLedCount(d);probeLocal=(probeLocal+n-1)%n;renderLEDs();applyMappingProbe();});$('#icueProbeNext').on('click',()=>{const d=selectedDevice(),n=mapperLedCount(d);probeLocal=(probeLocal+1)%n;renderLEDs();applyMappingProbe();});$('#icueMapRecord').on('click',recordMappingObservation);
     $('#icueResetLive').on('click',resetLivePreview);
