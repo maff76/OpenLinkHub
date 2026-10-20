@@ -9,6 +9,7 @@ import (
 	"OpenLinkHub/src/common"
 	"OpenLinkHub/src/config"
 	"OpenLinkHub/src/dashboard"
+	"OpenLinkHub/src/icueprofile"
 	"OpenLinkHub/src/logger"
 	"OpenLinkHub/src/openrgb"
 	"OpenLinkHub/src/rgb"
@@ -44,26 +45,85 @@ type TemperatureProbe struct {
 }
 
 type Devices struct {
-	ChannelId          int     `json:"channelId"`
-	DeviceId           int     `json:"deviceId"`
-	Sku                string  `json:"sku"`
-	Size               uint8   `json:"size"`
-	MemoryType         int     `json:"memoryType"`
-	Amount             int     `json:"amount"`
-	Speed              int     `json:"speed"`
-	Latency            int     `json:"latency"`
-	LedChannels        uint8   `json:"ledChannels"`
-	ColorRegister      uint8   `json:"colorRegister"`
-	Name               string  `json:"name"`
-	Temperature        float32 `json:"temperature"`
-	TemperatureString  string  `json:"temperatureString"`
-	Label              string  `json:"label"`
-	RGB                string  `json:"rgb"`
-	HwmonPath          string  `json:"hwmonPath"`
-	HasTemps           bool    `json:"-"`
-	HasSpeed           bool
-	ContainsPump       bool
-	IsTemperatureProbe bool
+	ChannelId            int     `json:"channelId"`
+	DeviceId             int     `json:"deviceId"`
+	Sku                  string  `json:"sku"`
+	Size                 uint8   `json:"size"`
+	MemoryType           int     `json:"memoryType"`
+	Amount               int     `json:"amount"`
+	Speed                int     `json:"speed"`
+	Latency              int     `json:"latency"`
+	LedChannels          uint8   `json:"ledChannels"`
+	ColorRegister        uint8   `json:"colorRegister"`
+	Name                 string  `json:"name"`
+	Temperature          float32 `json:"temperature"`
+	TemperatureString    string  `json:"temperatureString"`
+	Label                string  `json:"label"`
+	RGB                  string  `json:"rgb"`
+	HwmonPath            string  `json:"hwmonPath"`
+	I2CAddress           string  `json:"i2cAddress"`
+	Locator              string  `json:"locator"`
+	BankLocator          string  `json:"bankLocator"`
+	Capacity             string  `json:"capacity"`
+	TotalWidth           string  `json:"totalWidth"`
+	DataWidth            string  `json:"dataWidth"`
+	FormFactor           string  `json:"formFactor"`
+	DMIType              string  `json:"dmiType"`
+	TypeDetail           string  `json:"typeDetail"`
+	Manufacturer         string  `json:"manufacturer"`
+	SerialNumber         string  `json:"serialNumber"`
+	PartNumber           string  `json:"partNumber"`
+	AssetTag             string  `json:"assetTag"`
+	Rank                 int     `json:"rank"`
+	ReportedSpeed        int     `json:"reportedSpeed"`
+	ConfiguredSpeed      int     `json:"configuredSpeed"`
+	MinimumVoltage       float64 `json:"minimumVoltage"`
+	MaximumVoltage       float64 `json:"maximumVoltage"`
+	ConfiguredVoltage    float64 `json:"configuredVoltage"`
+	MemoryTechnology     string  `json:"memoryTechnology"`
+	OperatingMode        string  `json:"operatingMode"`
+	FirmwareVersion      string  `json:"firmwareVersion"`
+	ModuleManufacturerID string  `json:"moduleManufacturerId"`
+	ModuleProductID      string  `json:"moduleProductId"`
+	VolatileSize         string  `json:"volatileSize"`
+	NonVolatileSize      string  `json:"nonVolatileSize"`
+	CacheSize            string  `json:"cacheSize"`
+	LogicalSize          string  `json:"logicalSize"`
+	SPDRevision          string  `json:"spdRevision"`
+	SPDCRCValid          bool    `json:"spdCrcValid"`
+	DRAMDeviceType       string  `json:"dramDeviceType"`
+	SPDModuleType        string  `json:"spdModuleType"`
+	DensityPerDie        string  `json:"densityPerDie"`
+	Package              string  `json:"package"`
+	DiesPerPackage       int     `json:"diesPerPackage"`
+	IOWidth              string  `json:"ioWidth"`
+	BankGroups           int     `json:"bankGroups"`
+	BanksPerBankGroup    int     `json:"banksPerBankGroup"`
+	RanksPerChannel      int     `json:"ranksPerChannel"`
+	RankMix              string  `json:"rankMix"`
+	ChannelsPerDIMM      int     `json:"channelsPerDimm"`
+	BusWidthPerChannel   int     `json:"busWidthPerChannel"`
+	JEDECDataRate        int     `json:"jedecDataRate"`
+	ModuleHeightMM       int     `json:"moduleHeightMm"`
+	DRAMManufacturer     string  `json:"dramManufacturer"`
+	ManufacturingDate    string  `json:"manufacturingDate"`
+	DRAMStepping         int     `json:"dramStepping"`
+	XMPPresent           bool    `json:"xmpPresent"`
+	XMPProfileName       string  `json:"xmpProfileName"`
+	XMPDataRate          int     `json:"xmpDataRate"`
+	XMPCASLatency        int     `json:"xmpCasLatency"`
+	XMPtrCD              int     `json:"xmpTRCD"`
+	XMPtrP               int     `json:"xmpTRP"`
+	XMPtrAS              int     `json:"xmpTRAS"`
+	XMPVDD               float64 `json:"xmpVdd"`
+	XMPVDDQ              float64 `json:"xmpVddq"`
+	XMPVPP               float64 `json:"xmpVpp"`
+	XMPCRCValid          bool    `json:"xmpCrcValid"`
+	EXPOPresent          bool    `json:"expoPresent"`
+	HasTemps             bool    `json:"-"`
+	HasSpeed             bool
+	ContainsPump         bool
+	IsTemperatureProbe   bool
 }
 
 // DeviceProfile struct contains all device profile
@@ -115,10 +175,12 @@ type Device struct {
 	RGBModes          []string
 	Path              string
 	queue             chan map[int][]byte
+	queueStop         chan struct{}
 	SkuLine           string
 	RuntimeMemoryType int
 	instance          *common.Device
 	supportedDevices  []SupportedDevice
+	stopOnce          sync.Once
 }
 
 type SupportedDevice struct {
@@ -150,14 +212,15 @@ var crcTable = [256]uint8{
 }
 
 var (
-	pwd                   = ""
-	deviceRefreshInterval = 1000
-	maximumRegisters      = 8
-	colorAddresses        = []byte{0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f} // DDR4
-	temperatureAddresses  = []string{"0018", "0019", "001a", "001b", "001c", "001d", "001e", "001f"}
-	basePath              = "/sys/bus/i2c/drivers"
-	rgbProfileUpgrade     = []string{"led", "nebula", "marquee", "spiralrainbow", "gradient", "pastelrainbow", "pastelspiralrainbow"}
-	rgbModes              = []string{
+	mappingProbeLoggedGeneration sync.Map
+	pwd                          = ""
+	deviceRefreshInterval        = 1000
+	maximumRegisters             = 8
+	colorAddresses               = []byte{0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f} // DDR4
+	temperatureAddresses         = []string{"0018", "0019", "001a", "001b", "001c", "001d", "001e", "001f"}
+	basePath                     = "/sys/bus/i2c/drivers"
+	rgbProfileUpgrade            = []string{"led", "nebula", "marquee", "spiralrainbow", "openrgbrainbowwave", "gradient", "pastelrainbow", "pastelspiralrainbow"}
+	rgbModes                     = []string{
 		"circle",
 		"circleshift",
 		"colorpulse",
@@ -172,6 +235,7 @@ var (
 		"nebula",
 		"off",
 		"rainbow",
+		"openrgbrainbowwave",
 		"pastelrainbow",
 		"rotator",
 		"spinner",
@@ -227,6 +291,7 @@ func Init(_, _ uint16, _, path string) *common.Device {
 	d.getDebugMode()       // Debug mode
 	d.loadDeviceMetadata() // Metadata
 	d.loadRgb()            // Load RGB
+	d.loadICUEProfiles()   // Imported iCUE profiles
 	d.loadDeviceProfiles() // Load all device profiles
 	count := d.getDevices()
 	if count == 0 {
@@ -272,7 +337,7 @@ func (d *Device) GetRgbProfiles() interface{} {
 	// Filter unsupported modes out
 	profiles := make(map[string]rgb.Profile, len(tmp.Profiles))
 	for key, value := range tmp.Profiles {
-		if slices.Contains(rgbModes, key) {
+		if slices.Contains(d.RGBModes, key) {
 			profiles[key] = value
 		}
 	}
@@ -292,92 +357,123 @@ func (d *Device) getLedProfileColor(channelId, deviceIndex int) map[int]rgb.Colo
 
 // Stop will stop all device operations and switch a device back to hardware mode
 func (d *Device) Stop() {
-	d.Exit = true
-	logger.Log(logger.Fields{"serial": d.Serial, "product": d.Product}).Info("Stopping device...")
-	if d.activeRgb != nil {
-		d.activeRgb.Stop()
-	}
-
-	d.timer.Stop()
-	var once sync.Once
-	go func() {
-		once.Do(func() {
-			if d.autoRefreshChan != nil {
-				close(d.autoRefreshChan)
-			}
-			if d.queue != nil {
-				close(d.queue)
-			}
-		})
-	}()
-
-	lightChannels := 0
-	keys := make([]int, 0)
-	for k := range d.Devices {
-		lightChannels += int(d.Devices[k].LedChannels)
-		if d.Devices[k].LedChannels > 0 {
-			keys = append(keys, k)
+	d.stopOnce.Do(func() {
+		d.Exit = true
+		logger.Log(logger.Fields{"serial": d.Serial, "product": d.Product}).Info("Stopping device...")
+		if d.activeRgb != nil {
+			d.activeRgb.Stop()
 		}
-	}
-	sort.Ints(keys)
-	if lightChannels > 0 {
-		for _, k := range keys {
-			static := map[int][]byte{}
-			for i := 0; i < int(d.Devices[k].LedChannels); i++ {
-				static[i] = []byte{0, 0, 0}
-			}
-			buffer := rgb.SetColor(static)
-			d.transfer(buffer, colorAddresses[k], d.Devices[k].LedChannels, d.Devices[k].ColorRegister)
+
+		d.timer.Stop()
+		// Signal workers before performing final SMBus writes and closing the
+		// interface. Channel closure is non-blocking, so a helper goroutine only
+		// made shutdown ordering nondeterministic.
+		if d.autoRefreshChan != nil {
+			close(d.autoRefreshChan)
 		}
-	}
+		if d.queueStop != nil {
+			close(d.queueStop)
+		}
 
-	err := d.dev.File.Close()
-	if err != nil {
-		logger.Log(logger.Fields{"error": err, "serial": d.Serial}).Warn("Unable to close SMBUS interface")
-		return
-	}
+		lightChannels := 0
+		keys := make([]int, 0)
+		for k := range d.Devices {
+			lightChannels += int(d.Devices[k].LedChannels)
+			if d.Devices[k].LedChannels > 0 {
+				keys = append(keys, k)
+			}
+		}
+		sort.Ints(keys)
+		if lightChannels > 0 {
+			for _, k := range keys {
+				static := map[int][]byte{}
+				for i := 0; i < int(d.Devices[k].LedChannels); i++ {
+					static[i] = []byte{0, 0, 0}
+				}
+				buffer := rgb.SetColor(static)
+				d.transfer(buffer, colorAddresses[k], d.Devices[k].LedChannels, d.Devices[k].ColorRegister)
+			}
+		}
 
-	logger.Log(logger.Fields{"serial": d.Serial, "product": d.Product}).Info("Device stopped")
+		err := d.dev.File.Close()
+		if err != nil {
+			logger.Log(logger.Fields{"error": err, "serial": d.Serial}).Warn("Unable to close SMBUS interface")
+			return
+		}
+
+		logger.Log(logger.Fields{"serial": d.Serial, "product": d.Product}).Info("Device stopped")
+	})
 }
 
-// getHwMonTemperatureFile will get hwmon
-func (d *Device) getHwMonTemperatureFile(baseId int, driver string) string {
-	basePath := filepath.Join(basePath, driver)
+// getHwMonTemperatureFiles returns all SPD5118 hwmon temperature files on the configured I2C bus.
+func (d *Device) getHwMonTemperatureFiles(driver string) []string {
+	driverPath := filepath.Join(basePath, driver)
 
-	entries, err := os.ReadDir(basePath)
+	entries, err := os.ReadDir(driverPath)
 	if err != nil {
-		return ""
+		logger.Log(logger.Fields{"driver": driver, "error": err}).Warn("Unable to read hwmon driver directory")
+		return nil
 	}
+
+	busPrefix := fmt.Sprintf("%d-", d.getI2cSensor())
+	type hwmonSensor struct {
+		device string
+		path   string
+	}
+	sensors := make([]hwmonSensor, 0)
 
 	for _, entry := range entries {
-		devicePath := filepath.Join(basePath, entry.Name())
-		namePath := filepath.Join(devicePath, "name")
-
-		data, err := os.ReadFile(namePath)
-		if err != nil {
+		if !strings.HasPrefix(entry.Name(), busPrefix) {
 			continue
 		}
 
-		name := strings.TrimSpace(string(data))
-		if name != driver {
-			continue
-		}
-
-		if !strings.Contains(entry.Name(), strconv.Itoa(baseId)) {
-			continue
-		}
-
-		hwmonRoot := filepath.Join(devicePath, "hwmon")
-		hwmonFolders, _ := filepath.Glob(filepath.Join(hwmonRoot, "hwmon*"))
-
+		devicePath := filepath.Join(driverPath, entry.Name())
+		hwmonFolders, _ := filepath.Glob(filepath.Join(devicePath, "hwmon", "hwmon*"))
 		for _, hwmonFolder := range hwmonFolders {
 			temps, _ := filepath.Glob(filepath.Join(hwmonFolder, "temp*_input"))
-			if len(temps) > 0 {
-				return temps[0]
+			if len(temps) == 0 {
+				continue
 			}
+			sort.Strings(temps)
+			sensors = append(sensors, hwmonSensor{device: entry.Name(), path: temps[0]})
+			break
 		}
 	}
-	return ""
+
+	// Device names contain the I2C address (for example 0-0050, 0-0051),
+	// so sorting by device name preserves physical SPD address order.
+	sort.Slice(sensors, func(i, j int) bool {
+		return sensors[i].device < sensors[j].device
+	})
+
+	files := make([]string, 0, len(sensors))
+	for _, sensor := range sensors {
+		files = append(files, sensor.path)
+		if d.Debug {
+			logger.Log(logger.Fields{"device": sensor.device, "path": sensor.path}).Info("Found memory hwmon temperature sensor")
+		}
+	}
+
+	return files
+}
+
+// loadICUEProfiles exposes validated imported iCUE profiles to memory RGB.
+// The same imported profile key can therefore be selected on LINK hardware
+// and RGB DIMMs without converting the Corsair profile into native effects.
+func (d *Device) loadICUEProfiles() {
+	if d.Rgb == nil {
+		return
+	}
+	modes := icueprofile.Modes(pwd)
+	for key, label := range modes {
+		if !slices.Contains(d.RGBModes, key) {
+			d.RGBModes = append(d.RGBModes, key)
+		}
+		if _, ok := d.Rgb.Profiles[key]; !ok {
+			d.Rgb.Profiles[key] = rgb.Profile{ProfileName: label, Speed: 1, Brightness: 1, Version: 1}
+		}
+	}
+	sort.Strings(d.RGBModes)
 }
 
 // loadRgb will load RGB file if found, or create the default.
@@ -499,6 +595,7 @@ func (d *Device) loadDeviceMetadata() {
 		file, err := os.Open(deviceMetadata)
 		if err != nil {
 			logger.Log(logger.Fields{"error": err, "serial": d.Serial, "location": deviceMetadata}).Error("Unable to load devices metadata")
+			return
 		}
 		if err = json.NewDecoder(file).Decode(&d.supportedDevices); err != nil {
 			logger.Log(logger.Fields{"error": err, "serial": d.Serial, "location": deviceMetadata}).Error("Unable to decode devices metadata")
@@ -595,33 +692,129 @@ func (d *Device) getTemperature(filePath string) (float32, error) {
 
 }
 
+// memorySlotFromAddress maps a DDR5 SPD/I2C address (0x50..0x57) to a
+// physical memory slot index.
+func memorySlotFromAddress(address string) (int, bool) {
+	value, err := strconv.ParseUint(strings.TrimPrefix(strings.ToLower(strings.TrimSpace(address)), "0x"), 16, 8)
+	if err != nil || value < 0x50 || value > 0x57 {
+		return 0, false
+	}
+	return int(value - 0x50), true
+}
+
+// memorySlotFromConfiguredAddress accepts both the physical SPD address
+// (0x50..0x57) and the Corsair DDR5 RGB-controller address (0x18..0x1f).
+func memorySlotFromConfiguredAddress(address byte) (int, bool) {
+	if address >= 0x50 && address <= 0x57 {
+		return int(address - 0x50), true
+	}
+	if address >= 0x18 && address <= 0x1f {
+		return int(address - 0x18), true
+	}
+	return 0, false
+}
+
+func configuredMemorySlotContains(addresses config.ByteArray, slot int) bool {
+	// Preserve legacy direct register configuration for both DDR4 and DDR5.
+	if slot >= 0 && slot < len(colorAddresses) && slices.Contains(addresses, colorAddresses[slot]) {
+		return true
+	}
+	for _, address := range addresses {
+		if configuredSlot, ok := memorySlotFromConfiguredAddress(address); ok && configuredSlot == slot {
+			return true
+		}
+	}
+	return false
+}
+
 // getDevices will get a list of DIMMs
 func (d *Device) getDevices() int {
 	var devices = make(map[int]*Devices)
 	var modules []RAMModule
-	baseDevice := 51
+	var hwmonTemperatureFiles []string
+	dmiDevices := getDIMIMemoryDevices()
+	dmiIndex := 0
+	if d.Debug {
+		logger.Log(logger.Fields{"count": len(dmiDevices)}).Info("Detected populated SMBIOS memory devices")
+	}
 
 	// DDR5
 	if d.RuntimeMemoryType == 5 {
-		modules = NewMemoryModules()
+		modules = NewMemoryModules(d.getI2cSensor())
+		if config.GetConfig().RamTempViaHwmon {
+			hwmonTemperatureFiles = d.getHwMonTemperatureFiles("spd5118")
+			if d.Debug {
+				logger.Log(logger.Fields{"count": len(hwmonTemperatureFiles), "paths": hwmonTemperatureFiles}).Info("Detected DDR5 hwmon temperature sensors")
+			}
+		}
+	}
+
+	// DDR5 + SPD5118 discovery is slot-address driven. A decoded SPD address
+	// identifies the physical slot (0x50..0x57), which maps to the Corsair RGB
+	// controller register at the same slot offset (0x18..0x1f). This preserves
+	// sparse population such as 0x50 + 0x52 instead of assuming the first N slots.
+	moduleBySlot := make(map[int]RAMModule)
+	hwmonBySlot := make(map[int]string)
+	discoverySlots := make(map[int]bool)
+	if d.RuntimeMemoryType == 5 && config.GetConfig().RamTempViaHwmon {
+		for _, module := range modules {
+			if slot, ok := memorySlotFromAddress(module.SPDAddress); ok {
+				moduleBySlot[slot] = module
+			}
+		}
+	}
+	// Only switch away from legacy probing when at least one decoded module has
+	// a usable physical SPD address. If address decoding ever fails, retain the
+	// established full-register scan rather than accidentally hiding memory.
+	addressDrivenDDR5 := d.RuntimeMemoryType == 5 && config.GetConfig().RamTempViaHwmon && len(moduleBySlot) > 0
+	if addressDrivenDDR5 {
+		for slot := range moduleBySlot {
+			discoverySlots[slot] = true
+		}
+		for _, path := range hwmonTemperatureFiles {
+			if slot, ok := memorySlotFromAddress(i2cAddressFromPath(path)); ok {
+				hwmonBySlot[slot] = path
+			}
+		}
+		// Keep explicit configuration additive. Accept either the physical SPD
+		// address (0x50..0x57, as documented for enhancement kits) or the
+		// corresponding RGB controller address (0x18..0x1f).
+		for _, address := range config.GetConfig().EnhancementKits {
+			if slot, ok := memorySlotFromConfiguredAddress(address); ok {
+				discoverySlots[slot] = true
+				d.setEnhancementKit(colorAddresses[slot])
+			}
+		}
+		for _, address := range config.GetConfig().MemoryRegisterOverride {
+			if slot, ok := memorySlotFromConfiguredAddress(address); ok {
+				discoverySlots[slot] = true
+			}
+		}
 	}
 
 	for i := 0; i < maximumRegisters; i++ {
+		if addressDrivenDDR5 && !discoverySlots[i] {
+			continue
+		}
 		if d.Debug {
 			logger.Log(logger.Fields{"address": colorAddresses[i]}).Info("Probing address")
 		}
 
-		if slices.Contains(config.GetConfig().EnhancementKits, colorAddresses[i]) {
+		if configuredMemorySlotContains(config.GetConfig().EnhancementKits, i) {
 			d.setEnhancementKit(colorAddresses[i])
 		}
 
 		// Probe for register
 		_, err := smbus.ReadRegister(d.dev.File, colorAddresses[i], 0x00)
 		if err != nil {
-			if !slices.Contains(config.GetConfig().EnhancementKits, colorAddresses[i]) {
-				if !slices.Contains(config.GetConfig().MemoryRegisterOverride, colorAddresses[i]) {
-					logger.Log(logger.Fields{"register": colorAddresses[i], "err": err}).Info("No such register found. Skipping...")
-					continue
+			if !configuredMemorySlotContains(config.GetConfig().EnhancementKits, i) {
+				if !configuredMemorySlotContains(config.GetConfig().MemoryRegisterOverride, i) {
+					if addressDrivenDDR5 {
+						logger.Log(logger.Fields{"register": colorAddresses[i]}).Info("No RGB controller found, continuing for hwmon temperature monitoring")
+					} else {
+						logger.Log(logger.Fields{"register": colorAddresses[i], "err": err}).Info("No such register found. Skipping...")
+						continue
+					}
 				}
 			} else {
 				logger.Log(logger.Fields{"register": colorAddresses[i]}).Info("Found Light Enhancement Kit in configuration")
@@ -634,17 +827,26 @@ func (d *Device) getDevices() int {
 		}
 
 		memorySku := ""
-		if modules == nil || len(modules) == 0 {
-			logger.Log(logger.Fields{"register": colorAddresses[i]}).Warn("No decoded memory SKU available")
-		} else {
-			// If modules are available, use decoded memory SKU from SPD data.
-			memorySku = strings.TrimSpace(modules[0].SKU)
-			if len(memorySku) < 1 {
-				logger.Log(logger.Fields{"register": colorAddresses[i]}).Warn("Decoded memory SKU is empty")
+		module, hasModule := moduleBySlot[i]
+		if addressDrivenDDR5 && hasModule {
+			// Use the SKU decoded from the SPD belonging to this physical slot.
+			memorySku = strings.TrimSpace(module.SKU)
+		} else if !addressDrivenDDR5 && i < len(modules) {
+			// Legacy fallback when SPD-address-driven discovery is not active.
+			module = modules[i]
+			hasModule = true
+			memorySku = strings.TrimSpace(module.SKU)
+		}
+		if len(memorySku) < 1 && dmiIndex < len(dmiDevices) && !d.getEnhancementKit(colorAddresses[i]) {
+			// SMBIOS part number is a useful per-DIMM fallback when EEPROM decoding is unavailable.
+			// Enhancement kits are not physical memory and must never consume DMI metadata.
+			memorySku = strings.TrimSpace(dmiDevices[dmiIndex].PartNumber)
+			if len(memorySku) > 0 && d.Debug {
+				logger.Log(logger.Fields{"register": colorAddresses[i], "sku": memorySku}).Info("Using SMBIOS memory part number fallback")
 			}
 		}
 
-		// Fallback to configured memory SKU for setups where decoded SKU is unavailable.
+		// Final fallback to the globally configured memory SKU.
 		if len(memorySku) < 1 {
 			memorySku = strings.TrimSpace(config.GetConfig().MemorySku)
 			if len(memorySku) > 0 {
@@ -732,7 +934,74 @@ func (d *Device) getDevices() int {
 						Label:             label,
 						RGB:               rgbProfile,
 					}
+					if hasModule {
+						device.I2CAddress = module.SPDAddress
+						device.SPDRevision = module.SPDRevision
+						device.SPDCRCValid = module.SPDCRCValid
+						device.DRAMDeviceType = module.DRAMDeviceType
+						device.SPDModuleType = module.ModuleType
+						device.DensityPerDie = module.DensityPerDie
+						device.Package = module.Package
+						device.DiesPerPackage = module.DiesPerPackage
+						device.IOWidth = module.IOWidth
+						device.BankGroups = module.BankGroups
+						device.BanksPerBankGroup = module.BanksPerBankGroup
+						device.RanksPerChannel = module.RanksPerChannel
+						device.RankMix = module.RankMix
+						device.ChannelsPerDIMM = module.ChannelsPerDIMM
+						device.BusWidthPerChannel = module.BusWidthPerChannel
+						device.JEDECDataRate = module.JEDECDataRate
+						device.ModuleHeightMM = module.ModuleHeightMM
+						device.DRAMManufacturer = module.DRAMManufacturer
+						device.ManufacturingDate = module.ManufacturingDate
+						device.DRAMStepping = module.DRAMStepping
+						device.XMPPresent = module.XMPPresent
+						device.XMPProfileName = module.XMPProfileName
+						device.XMPDataRate = module.XMPDataRate
+						device.XMPCASLatency = module.XMPCASLatency
+						device.XMPtrCD = module.XMPtrCD
+						device.XMPtrP = module.XMPtrP
+						device.XMPtrAS = module.XMPtrAS
+						device.XMPVDD = module.XMPVDD
+						device.XMPVDDQ = module.XMPVDDQ
+						device.XMPVPP = module.XMPVPP
+						device.XMPCRCValid = module.XMPCRCValid
+						device.EXPOPresent = module.EXPOPresent
+					}
 
+					// Enrich the discovered DIMM with SMBIOS Type 17 metadata.
+					// DMI ordering is used only for metadata association; it never controls discovery.
+					if dmiIndex < len(dmiDevices) && !d.getEnhancementKit(colorAddresses[i]) {
+						dmi := dmiDevices[dmiIndex]
+						device.Locator = dmi.Locator
+						device.BankLocator = dmi.BankLocator
+						device.Capacity = dmi.Size
+						device.TotalWidth = dmi.TotalWidth
+						device.DataWidth = dmi.DataWidth
+						device.FormFactor = dmi.FormFactor
+						device.DMIType = dmi.Type
+						device.TypeDetail = dmi.TypeDetail
+						device.Manufacturer = dmi.Manufacturer
+						device.SerialNumber = dmi.SerialNumber
+						device.PartNumber = dmi.PartNumber
+						device.AssetTag = dmi.AssetTag
+						device.Rank = dmi.Rank
+						device.ReportedSpeed = dmi.Speed
+						device.ConfiguredSpeed = dmi.ConfiguredMemorySpeed
+						device.MinimumVoltage = dmi.MinimumVoltage
+						device.MaximumVoltage = dmi.MaximumVoltage
+						device.ConfiguredVoltage = dmi.ConfiguredVoltage
+						device.MemoryTechnology = dmi.MemoryTechnology
+						device.OperatingMode = dmi.OperatingMode
+						device.FirmwareVersion = dmi.FirmwareVersion
+						device.ModuleManufacturerID = dmi.ModuleManufacturerID
+						device.ModuleProductID = dmi.ModuleProductID
+						device.VolatileSize = dmi.VolatileSize
+						device.NonVolatileSize = dmi.NonVolatileSize
+						device.CacheSize = dmi.CacheSize
+						device.LogicalSize = dmi.LogicalSize
+						dmiIndex++
+					}
 					if len(d.SkuLine) < 1 {
 						d.SkuLine = metadata.Name
 					}
@@ -748,17 +1017,27 @@ func (d *Device) getDevices() int {
 					if config.GetConfig().RamTempViaHwmon {
 						if !d.getEnhancementKit(colorAddresses[i]) {
 							if d.RuntimeMemoryType == 5 {
-								hwmonTemperatureFile := d.getHwMonTemperatureFile(baseDevice, "spd5118")
-								if len(hwmonTemperatureFile) > 0 {
+								hwmonTemperatureFile, ok := hwmonBySlot[i]
+								if !addressDrivenDDR5 && i < len(hwmonTemperatureFiles) {
+									hwmonTemperatureFile = hwmonTemperatureFiles[i]
+									ok = true
+								}
+								if ok {
 									device.HwmonPath = hwmonTemperatureFile
+									if address := i2cAddressFromPath(hwmonTemperatureFile); len(address) > 0 {
+										device.I2CAddress = address
+									}
 									hwmonTemp, err := d.getTemperature(hwmonTemperatureFile)
 									if err == nil {
 										device.Temperature = hwmonTemp
 										device.TemperatureString = dashboard.GetDashboard().TemperatureToString(hwmonTemp)
 										device.HasTemps = true
+									} else {
+										logger.Log(logger.Fields{"channel": i, "path": hwmonTemperatureFile, "error": err}).Warn("Unable to read memory hwmon temperature")
 									}
+								} else {
+									logger.Log(logger.Fields{"channel": i}).Warn("No hwmon temperature sensor available for memory device")
 								}
-								baseDevice += i + 1
 							} else {
 								device.HwmonPath = fmt.Sprintf(
 									"/sys/bus/i2c/drivers/jc42/%d-%s/hwmon",
@@ -1175,6 +1454,24 @@ func (d *Device) ControlDeviceRgb(value bool) {
 	d.setDeviceColor()
 }
 
+// rgbModuleOrdinal returns the zero-based RGB DIMM order used by iCUE's
+// software-DRAM canvas. Non-RGB DIMMs do not consume canvas positions.
+func (d *Device) rgbModuleOrdinal(channel int) int {
+	keys := make([]int, 0)
+	for k, dev := range d.Devices {
+		if dev.LedChannels > 0 {
+			keys = append(keys, k)
+		}
+	}
+	sort.Ints(keys)
+	for i, k := range keys {
+		if k == channel {
+			return i
+		}
+	}
+	return -1
+}
+
 // setDeviceColor will activate and set device RGB
 func (d *Device) setDeviceColor() {
 	// Release existing queue
@@ -1270,22 +1567,71 @@ func (d *Device) setDeviceColor() {
 		return
 	}
 
-	go func(lightChannels int) {
-		startTime := time.Now()
-		d.activeRgb = rgb.Exit()
+	activeRgb := rgb.Exit()
+	activeRgb.RGBStartColor = rgb.GenerateRandomColor(1)
+	activeRgb.RGBEndColor = rgb.GenerateRandomColor(1)
+	d.activeRgb = activeRgb
 
-		// Generate random colors
-		d.activeRgb.RGBStartColor = rgb.GenerateRandomColor(1)
-		d.activeRgb.RGBEndColor = rgb.GenerateRandomColor(1)
+	go func(lightChannels int, active *rgb.ActiveRGB) {
+		startTime := time.Now()
 
 		for {
 			select {
-			case <-d.activeRgb.Exit:
+			case <-active.Exit:
 				return
 			default:
 				buff := make([]byte, 0)
 				for _, k := range keys {
 					rgbCustomColor := true
+					if strings.HasPrefix(d.Devices[k].RGB, "icue-") {
+						imported, _, err := icueprofile.LoadByKey(pwd, d.Devices[k].RGB)
+						if err != nil {
+							logger.Log(logger.Fields{"error": err, "profile": d.Devices[k].RGB}).Warn("Unable to load imported iCUE memory profile")
+							for i := 0; i < int(d.Devices[k].LedChannels); i++ {
+								buff = append(buff, 0, 0, 0)
+							}
+							continue
+						}
+						brightness := rgb.GetBrightnessValueFloat(*d.DeviceProfile.BrightnessSlider)
+						if d.GlobalBrightness != 0 {
+							brightness = d.GlobalBrightness
+						}
+						moduleOrdinal := d.rgbModuleOrdinal(k)
+						output, unsupported := imported.RenderDRAM(moduleOrdinal, int(d.Devices[k].LedChannels), d.Devices[k].Name, startTime, brightness)
+
+						// Final raw DIMM byte-frame override. Memory topology is intentionally
+						// not required here because this probe is what measures that topology.
+						if mapped, applied, probe := icueprofile.ApplyMappingProbe(output, "memory", moduleOrdinal, int(d.Devices[k].LedChannels)); applied {
+							output = mapped
+							logKey := fmt.Sprintf("memory:%d", moduleOrdinal)
+							if previous, ok := mappingProbeLoggedGeneration.Load(logKey); !ok || previous.(uint64) != probe.Generation {
+								mappingProbeLoggedGeneration.Store(logKey, probe.Generation)
+								logger.Log(logger.Fields{
+									"device": d.Devices[k].Name, "locator": d.Devices[k].Locator, "deviceOrdinal": moduleOrdinal,
+									"localLed": probe.LocalLED, "ledCount": d.Devices[k].LedChannels, "generation": probe.Generation,
+								}).Info("iCUE LED mapper hardware override applied")
+							}
+						}
+						if len(unsupported) > 0 {
+							logger.Log(logger.Fields{"profile": imported.Name, "effects": unsupported}).Debug("Skipped unsupported iCUE memory lighting effects")
+						}
+
+						// Imported iCUE profiles bypass the native effect switch below.
+						// Write this DIMM's rendered frame before continuing; otherwise
+						// setDeviceColor() only sends the initial black reset frame.
+						expected := int(d.Devices[k].LedChannels) * 3
+						if len(output) != expected {
+							logger.Log(logger.Fields{
+								"profile":  imported.Name,
+								"device":   k,
+								"expected": expected,
+								"actual":   len(output),
+							}).Warn("Imported iCUE memory frame has invalid length")
+							continue
+						}
+						d.writeColor(output, k)
+						continue
+					}
 					profile := d.GetRgbProfile(d.Devices[k].RGB)
 					if profile == nil {
 						for i := 0; i < int(d.Devices[k].LedChannels); i++ {
@@ -1382,6 +1728,13 @@ func (d *Device) setDeviceColor() {
 					case "rainbow":
 						{
 							r.Rainbow(startTime)
+							buff = r.Output
+						}
+					case "openrgbrainbowwave":
+						{
+							r.Frequency = profile.Frequency
+							r.RgbDirection = profile.RgbDirection
+							r.RainbowWave(startTime)
 							buff = r.Output
 						}
 					case "pastelrainbow":
@@ -1495,7 +1848,7 @@ func (d *Device) setDeviceColor() {
 				time.Sleep(20 * time.Millisecond)
 			}
 		}
-	}(lightChannels)
+	}(lightChannels, activeRgb)
 }
 
 // writeColor will write color data to the device
@@ -1886,6 +2239,8 @@ func (d *Device) UpdateRgbProfileData(profileName string, profile rgb.Profile) u
 	pf.EndColor = profile.EndColor
 	pf.MiddleColor = profile.MiddleColor
 	pf.Speed = profile.Speed
+	pf.RgbDirection = profile.RgbDirection
+	pf.Frequency = profile.Frequency
 	pf.Gradients = profile.Gradients
 
 	d.Rgb.Profiles[profileName] = *pf
@@ -1900,6 +2255,9 @@ func (d *Device) UpdateRgbProfileData(profileName string, profile rgb.Profile) u
 
 // UpdateRgbProfile will update device RGB profile
 func (d *Device) UpdateRgbProfile(channelId int, profile string) uint8 {
+	d.rgbMutex.Lock()
+	defer d.rgbMutex.Unlock()
+
 	if d.DeviceProfile == nil {
 		return 0
 	}
@@ -2111,32 +2469,12 @@ func (d *Device) SaveUserProfile(profileName string) uint8 {
 	if d.DeviceProfile != nil {
 		profilePath := pwd + "/database/profiles/" + d.Serial + "-" + profileName + ".json"
 
-		newProfile := d.DeviceProfile
+		newProfile := *d.DeviceProfile
 		newProfile.Path = profilePath
 		newProfile.Active = false
 
-		buffer, err := json.Marshal(newProfile)
-		if err != nil {
-			logger.Log(logger.Fields{"error": err}).Error("Unable to convert to json format")
-			return 0
-		}
-
-		// Create profile filename
-		file, err := os.Create(profilePath)
-		if err != nil {
-			logger.Log(logger.Fields{"error": err, "location": newProfile.Path}).Error("Unable to create new device profile")
-			return 0
-		}
-
-		_, err = file.Write(buffer)
-		if err != nil {
-			logger.Log(logger.Fields{"error": err, "location": newProfile.Path}).Error("Unable to write data")
-			return 0
-		}
-
-		err = file.Close()
-		if err != nil {
-			logger.Log(logger.Fields{"error": err, "location": newProfile.Path}).Error("Unable to close file handle")
+		if err := common.SaveJsonData(profilePath, newProfile); err != nil {
+			logger.Log(logger.Fields{"error": err, "location": newProfile.Path}).Error("Unable to save new device profile")
 			return 0
 		}
 		d.loadDeviceProfiles()
