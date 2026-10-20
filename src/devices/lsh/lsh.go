@@ -10,6 +10,7 @@ import (
 	"OpenLinkHub/src/config"
 	"OpenLinkHub/src/dashboard"
 	"OpenLinkHub/src/devices/lcd"
+	"OpenLinkHub/src/icueprofile"
 	"OpenLinkHub/src/led"
 	"OpenLinkHub/src/logger"
 	"OpenLinkHub/src/metrics"
@@ -40,6 +41,10 @@ type V2DeviceModel struct {
 	Name        string
 	LedChannels uint8
 }
+
+// mappingProbeLoggedGeneration suppresses per-frame mapper logs while still
+// confirming each newly selected raw LED at the final LINK output boundary.
+var mappingProbeLoggedGeneration sync.Map
 
 type RGBOverride struct {
 	Enabled        bool
@@ -255,6 +260,7 @@ type Device struct {
 	pumpInnerLedStartIndex int
 	queue                  chan []byte
 	instance               *common.Device
+	stopOnce               sync.Once
 	Psu                    bool
 }
 
@@ -338,6 +344,7 @@ var (
 		"probe-temperature",
 		"rain",
 		"rainbow",
+		"icuerainbowwave",
 		"pastelrainbow",
 		"rotarystack",
 		"rotator",
@@ -356,6 +363,7 @@ var (
 		"nebula",
 		"marquee",
 		"rain",
+		"icuerainbowwave",
 		"rotarystack",
 		"sequential",
 		"spiralrainbow",
@@ -439,19 +447,33 @@ func Init(vendorId, productId uint16, serial, path string) *common.Device {
 	}
 
 	// Bootstrap
-	d.getDebugMode()         // Debug mode
-	d.getManufacturer()      // Manufacturer
-	d.getProduct()           // Product
-	d.getSerial()            // Serial
-	d.loadDeviceMetadata()   // Device metadata
-	d.loadExternalDevices()  // External metadata
-	d.loadRgb()              // Load RGB
-	d.loadDeviceProfiles()   // Load all device profiles
-	d.getDeviceLcd()         // Check for LCDs
-	d.getDeviceFirmware()    // Firmware
-	d.setSoftwareMode()      // Activate software mode
-	d.getLedDeviceTypes()    // Device led types
-	d.getDevices()           // Get devices connected to a hub
+	d.getDebugMode()        // Debug mode
+	d.getManufacturer()     // Manufacturer
+	d.getProduct()          // Product
+	d.getSerial()           // Serial
+	d.loadDeviceMetadata()  // Device metadata
+	d.loadExternalDevices() // External metadata
+	d.loadRgb()             // Load RGB
+	d.loadICUEProfiles()    // Imported iCUE profiles
+	d.loadDeviceProfiles()  // Load all device profiles
+	d.getDeviceLcd()        // Check for LCDs
+	d.getDeviceFirmware()   // Firmware
+	d.setSoftwareMode()     // Activate software mode
+	d.getLedDeviceTypes()   // Device led types
+	deviceCount := d.getDevices()
+	// LINK enumeration can occasionally receive a stale or incomplete HID response
+	// immediately after switching the hub into software mode.  The known-good
+	// parser is intentionally left unchanged; retry the complete discovery pair
+	// instead of accepting an empty device map for the lifetime of the process.
+	for attempt := 2; deviceCount == 0 && attempt <= 3; attempt++ {
+		logger.Log(logger.Fields{
+			"serial":  d.Serial,
+			"attempt": attempt,
+		}).Warn("LINK device discovery returned no devices; retrying")
+		time.Sleep(150 * time.Millisecond)
+		d.getLedDeviceTypes()
+		deviceCount = d.getDevices()
+	}
 	d.getLedDevices()        // Get connected LED devices
 	d.setColorEndpoint()     // Set device color endpoint
 	d.setDeviceProtection()  // Protect device
@@ -633,7 +655,7 @@ func (d *Device) GetRgbProfiles() interface{} {
 	// Filter unsupported modes out
 	profiles := make(map[string]rgb.Profile, len(tmp.Profiles))
 	for key, value := range tmp.Profiles {
-		if slices.Contains(rgbModes, key) {
+		if slices.Contains(d.RGBModes, key) {
 			profiles[key] = value
 		}
 	}
@@ -643,129 +665,94 @@ func (d *Device) GetRgbProfiles() interface{} {
 
 // Stop will stop all device operations and switch a device back to hardware mode
 func (d *Device) Stop() {
-	d.Exit = true
-	logger.Log(logger.Fields{"serial": d.Serial, "product": d.Product}).Info("Stopping device...")
-	if d.activeRgb != nil {
-		d.activeRgb.Stop()
-	}
-
-	d.timer.Stop()
-	var once sync.Once
-	go func() {
-		once.Do(func() {
-			if d.HasLCD {
-				close(d.lcdRefreshChan)
-				close(d.lcdImageChan)
-				d.lcdTimer.Stop()
-			}
-
-			if !config.GetConfig().Manual {
-				d.timerSpeed.Stop()
-				if d.speedRefreshChan != nil {
-					close(d.speedRefreshChan)
-					d.speedRefreshChan = nil
-				}
-			}
-			if d.autoRefreshChan != nil {
-				close(d.autoRefreshChan)
-				d.autoRefreshChan = nil
-
-			}
-			if d.queue != nil {
-				close(d.queue)
-				d.queue = nil
-			}
-		})
-	}()
-
-	if d.HasLCD {
-		for _, lcdHidDevice := range d.lcdDevices {
-			if lcdHidDevice.Lcd != nil {
-				lcdReports := map[int][]byte{
-					0: {0x03, 0x1e, 0x01, 0x01},
-					1: {0x03, 0x1d, 0x00, 0x01},
-					2: {0x03, 0x0b, 0x64, 0x01},
-				}
-				for i := 0; i <= 2; i++ {
-					_, e := lcdHidDevice.Lcd.SendFeatureReport(lcdReports[i])
-					if e != nil {
-						logger.Log(logger.Fields{"error": e}).Error("Unable to send report to LCD HID device")
-					}
-				}
-				err := lcdHidDevice.Lcd.Close()
-				if err != nil {
-					logger.Log(logger.Fields{"error": err}).Error("Unable to close LCD HID device")
-				}
-			}
-		}
-	}
-
-	d.setHardwareMode()
-	if d.dev != nil {
-		err := d.dev.Close()
-		if err != nil {
-			logger.Log(logger.Fields{"error": err}).Error("Unable to close HID device")
-		}
-	}
-	logger.Log(logger.Fields{"serial": d.Serial, "product": d.Product}).Info("Device stopped")
+	d.stop(false)
 }
 
 // StopDirty will stop device in a dirty way
 func (d *Device) StopDirty() uint8 {
-	d.Exit = true
-	logger.Log(logger.Fields{"serial": d.Serial, "product": d.Product}).Info("Stopping device (dirty)...")
-	if d.activeRgb != nil {
-		d.activeRgb.Stop()
-	}
+	d.stop(true)
+	return 2
+}
 
-	d.timer.Stop()
-	var once sync.Once
-	go func() {
-		once.Do(func() {
-			if d.HasLCD {
+// stop performs device shutdown exactly once. Stop and StopDirty can be reached
+// from different lifecycle paths (application shutdown and USB removal), so the
+// shutdown guard must belong to the device rather than to an individual call.
+func (d *Device) stop(dirty bool) {
+	d.stopOnce.Do(func() {
+		d.Exit = true
+		if dirty {
+			logger.Log(logger.Fields{"serial": d.Serial, "product": d.Product}).Info("Stopping device (dirty)...")
+		} else {
+			logger.Log(logger.Fields{"serial": d.Serial, "product": d.Product}).Info("Stopping device...")
+		}
+
+		if d.activeRgb != nil {
+			d.activeRgb.Stop()
+		}
+
+		d.timer.Stop()
+		if d.HasLCD {
+			if d.lcdRefreshChan != nil {
 				close(d.lcdRefreshChan)
+				d.lcdRefreshChan = nil
+			}
+			if d.lcdImageChan != nil {
 				close(d.lcdImageChan)
-				d.lcdTimer.Stop()
+				d.lcdImageChan = nil
 			}
+			d.lcdTimer.Stop()
+		}
 
-			if !config.GetConfig().Manual {
-				d.timerSpeed.Stop()
-				if d.speedRefreshChan != nil {
-					close(d.speedRefreshChan)
-					d.speedRefreshChan = nil
+		if !config.GetConfig().Manual {
+			d.timerSpeed.Stop()
+			if d.speedRefreshChan != nil {
+				close(d.speedRefreshChan)
+				d.speedRefreshChan = nil
+			}
+		}
+		if d.autoRefreshChan != nil {
+			close(d.autoRefreshChan)
+			d.autoRefreshChan = nil
+		}
+		if d.queue != nil {
+			close(d.queue)
+			d.queue = nil
+		}
+
+		if d.HasLCD {
+			for _, lcdHidDevice := range d.lcdDevices {
+				if lcdHidDevice.Lcd == nil {
+					continue
 				}
-			}
-			if d.autoRefreshChan != nil {
-				close(d.autoRefreshChan)
-				d.autoRefreshChan = nil
 
-			}
-			if d.queue != nil {
-				close(d.queue)
-				d.queue = nil
-			}
-		})
-	}()
-
-	if d.HasLCD {
-		for _, lcdHidDevice := range d.lcdDevices {
-			if lcdHidDevice.Lcd != nil {
-				lcdReports := map[int][]byte{0: {0x03, 0x1e, 0x01, 0x01}, 1: {0x03, 0x1d, 0x00, 0x01}}
-				for i := 0; i <= 1; i++ {
-					_, e := lcdHidDevice.Lcd.SendFeatureReport(lcdReports[i])
-					if e != nil {
-						logger.Log(logger.Fields{"error": e}).Error("Unable to send report to LCD HID device")
+				lcdReports := map[int][]byte{
+					0: {0x03, 0x1e, 0x01, 0x01},
+					1: {0x03, 0x1d, 0x00, 0x01},
+				}
+				if !dirty {
+					lcdReports[2] = []byte{0x03, 0x0b, 0x64, 0x01}
+				}
+				for i := 0; i < len(lcdReports); i++ {
+					if _, err := lcdHidDevice.Lcd.SendFeatureReport(lcdReports[i]); err != nil {
+						logger.Log(logger.Fields{"error": err}).Error("Unable to send report to LCD HID device")
 					}
 				}
-				err := lcdHidDevice.Lcd.Close()
-				if err != nil {
+				if err := lcdHidDevice.Lcd.Close(); err != nil {
 					logger.Log(logger.Fields{"error": err}).Error("Unable to close LCD HID device")
 				}
 			}
 		}
-	}
-	logger.Log(logger.Fields{"serial": d.Serial, "product": d.Product}).Info("Device stopped")
-	return 2
+
+		if !dirty {
+			d.setHardwareMode()
+		}
+		if d.dev != nil {
+			if err := d.dev.Close(); err != nil {
+				logger.Log(logger.Fields{"error": err}).Error("Unable to close HID device")
+			}
+		}
+		logger.Log(logger.Fields{"serial": d.Serial, "product": d.Product}).Info("Device stopped")
+	})
 }
 
 // loadDeviceMetadata will load device meta data
@@ -840,6 +827,44 @@ func (d *Device) getLcdImages() {
 			}
 		}
 	}
+}
+
+// loadICUEProfiles exposes validated imported profiles as LINK RGB modes. The
+// actual profile remains in database/rgb/icue and is rendered directly from
+// the Corsair layer data; the placeholder only lets the existing profile UI
+// and device-profile persistence select it normally.
+func (d *Device) loadICUEProfiles() {
+	if d.Rgb == nil {
+		return
+	}
+	modes := icueprofile.Modes(pwd)
+	for key, label := range modes {
+		if !slices.Contains(d.RGBModes, key) {
+			d.RGBModes = append(d.RGBModes, key)
+		}
+		if _, ok := d.Rgb.Profiles[key]; !ok {
+			d.Rgb.Profiles[key] = rgb.Profile{ProfileName: label, Speed: 1, Brightness: 1, Version: 1}
+		}
+	}
+	sort.Strings(d.RGBModes)
+}
+
+// qxOrdinal maps the current LINK QX ordering onto the 42-id stride observed
+// in iCUE captures. Only QX devices participate in this logical canvas.
+func (d *Device) qxOrdinal(channelID int) int {
+	keys := make([]int, 0)
+	for k, dev := range d.Devices {
+		if strings.Contains(strings.ToLower(dev.Name), "qx") && dev.LedChannels > 0 {
+			keys = append(keys, k)
+		}
+	}
+	sort.Ints(keys)
+	for i, k := range keys {
+		if k == channelID {
+			return i
+		}
+	}
+	return -1
 }
 
 // loadRgb will load RGB file if found, or create the default.
@@ -2660,6 +2685,9 @@ func (d *Device) UpdateRgbProfileData(profileName string, profile rgb.Profile) u
 
 // UpdateRgbProfile will update device RGB profile
 func (d *Device) UpdateRgbProfile(channelId int, profile string) uint8 {
+	d.rgbMutex.Lock()
+	defer d.rgbMutex.Unlock()
+
 	if d.DeviceProfile == nil {
 		return 0
 	}
@@ -3707,7 +3735,11 @@ func (d *Device) getDeviceData() {
 			if status == 0x00 {
 				if _, ok := d.Devices[i]; ok {
 					rpm := int16(binary.LittleEndian.Uint16(currentSensor[1:3]))
-					if rpm > 1 {
+					// A valid 0 RPM reading is meaningful for devices using a
+					// Zero RPM cooling profile. Keep filtering the anomalous
+					// 1 RPM value, but allow 0 so stopped fans do not retain
+					// their last non-zero RPM reading.
+					if rpm == 0 || rpm > 1 {
 						d.Devices[i].Rpm = rpm
 					}
 
@@ -3960,14 +3992,55 @@ func (d *Device) getDevices() int {
 		logger.Log(logger.Fields{"serial": d.Serial, "data": fmt.Sprintf("% 2x", response)}).Info("getDevices()")
 	}
 
+	// A valid get-devices response must contain the protocol header through the
+	// channel-count byte. Never index response[6] unless it is present.
+	if len(response) < 7 {
+		logger.Log(logger.Fields{
+			"serial":      d.Serial,
+			"responseLen": len(response),
+		}).Error("getDevices() - Response too short")
+		return 0
+	}
+
 	channels := response[6]
 	data := response[7:]
 	position := 0
 	duoPort := 1
 	for i := 1; i <= int(channels); i++ {
-		deviceIdLen := data[position+7]
+		// Each device record begins with an 8-byte header. Validate that header
+		// before reading the variable device-ID length at offset +7.
+		if position < 0 || position+8 > len(data) {
+			logger.Log(logger.Fields{
+				"serial":   d.Serial,
+				"channel":  i,
+				"channels": channels,
+				"position": position,
+				"dataLen":  len(data),
+			}).Warn("getDevices() - Device record header exceeds response length")
+			break
+		}
+
+		deviceIdLen := int(data[position+7])
+		recordLen := 8 + deviceIdLen
+
+		// Validate the complete variable-length record before slicing either the
+		// fixed header or device ID. This also gives us enough diagnostics to
+		// distinguish malformed data from a response truncated at the HID limit.
+		if recordLen < 8 || position+recordLen > len(data) {
+			logger.Log(logger.Fields{
+				"serial":      d.Serial,
+				"channel":     i,
+				"channels":    channels,
+				"position":    position,
+				"deviceIdLen": deviceIdLen,
+				"recordLen":   recordLen,
+				"dataLen":     len(data),
+			}).Warn("getDevices() - Device record exceeds response length")
+			break
+		}
+
 		if deviceIdLen == 0 {
-			position += 8
+			position += recordLen
 			continue
 		}
 		deviceTypeModel := data[position : position+8]
@@ -3977,14 +4050,24 @@ func (d *Device) getDevices() int {
 			lcdAvailable = true
 		}
 
-		deviceId := data[position+8 : position+8+int(deviceIdLen)]
+		deviceId := data[position+8 : position+recordLen]
 
 		// Get device definition
 		deviceMeta := d.getSupportedDevice(deviceTypeModel[2], deviceTypeModel[3])
+		if deviceMeta != nil {
+			logger.Log(logger.Fields{
+				"serial":          d.Serial,
+				"channel":         i,
+				"type":            deviceTypeModel[2],
+				"model":           deviceTypeModel[3],
+				"name":            deviceMeta.Name,
+				"timewarpCapable": deviceMeta.Timewarp,
+			}).Info("LINK device metadata match")
+		}
 		if deviceMeta == nil {
 			logger.Log(logger.Fields{"serial": d.Serial, "type": deviceTypeModel[2], "model": deviceTypeModel[3]}).Warn("getDevices() - Device not found in metadata")
 			if deviceIdLen > 0 {
-				position += 8 + int(deviceIdLen)
+				position += recordLen
 			} else {
 				position += 8
 			}
@@ -4008,7 +4091,7 @@ func (d *Device) getDevices() int {
 					logger.Log(logger.Fields{"serial": d.Serial, "profile": sp}).Warn("Tried to apply non-existing profile")
 				}
 			} else {
-				logger.Log(logger.Fields{"serial": d.Serial, "profile": sp}).Warn("Tried to apply non-existing channel")
+				logger.Log(logger.Fields{"serial": d.Serial, "channel": i}).Debug("Speed profile channel is not present; using default profile")
 			}
 
 			// Device label
@@ -4052,24 +4135,19 @@ func (d *Device) getDevices() int {
 					logger.Log(logger.Fields{"serial": d.Serial, "profile": rp}).Warn("Tried to apply non-existing rgb profile")
 				}
 			} else {
-				logger.Log(logger.Fields{"serial": d.Serial, "profile": rp}).Warn("Tried to apply rgb profile to the non-existing channel")
+				logger.Log(logger.Fields{"serial": d.Serial, "channel": i}).Debug("RGB profile channel is not present; using default profile")
 			}
 		} else {
 			logger.Log(logger.Fields{"serial": d.Serial}).Warn("DeviceProfile is not set, probably first startup")
 		}
 
 		lcdSerial := ""
-		if d.DeviceProfile != nil {
-			// Profile is set
-			if ls, ok := d.DeviceProfile.LCDDevices[i]; ok {
-				if len(ls) > 0 {
-					lcdSerial = ls
-				}
-			} else {
-				logger.Log(logger.Fields{"serial": d.Serial, "lcdSerial": ls}).Warn("Tried to apply rgb profile to the non-existing channel")
+		// LCD profile state is meaningful only for pump/AIO devices. A missing
+		// LCDDevices entry is valid (for example, an AIO without an LCD cap).
+		if d.DeviceProfile != nil && (deviceMeta.ContainsPump || deviceMeta.AIO) {
+			if ls, ok := d.DeviceProfile.LCDDevices[i]; ok && len(ls) > 0 {
+				lcdSerial = ls
 			}
-		} else {
-			logger.Log(logger.Fields{"serial": d.Serial}).Warn("DeviceProfile is not set, probably first startup")
 		}
 
 		var ledChannels uint8 = 0
@@ -4870,16 +4948,18 @@ func (d *Device) setDeviceColor() {
 		return
 	}
 
-	go func() {
+	activeRgb := rgb.Exit()
+	activeRgb.RGBStartColor = rgb.GenerateRandomColor(1)
+	activeRgb.RGBEndColor = rgb.GenerateRandomColor(1)
+	d.activeRgb = activeRgb
+
+	go func(active *rgb.ActiveRGB) {
 		startTime := time.Now()
-		d.activeRgb = rgb.Exit()
-		d.activeRgb.RGBStartColor = rgb.GenerateRandomColor(1)
-		d.activeRgb.RGBEndColor = rgb.GenerateRandomColor(1)
 		rand.New(rand.NewSource(time.Now().UnixNano()))
 
 		for {
 			select {
-			case <-d.activeRgb.Exit:
+			case <-active.Exit:
 				return
 			default:
 				buff := make([]byte, 0)
@@ -4928,12 +5008,70 @@ func (d *Device) setDeviceColor() {
 				time.Sleep(20 * time.Millisecond)
 			}
 		}
-	}()
+	}(activeRgb)
 }
 
 // generateRgbEffect will generate RGB effect for given device index
 func (d *Device) generateRgbEffect(k int, channels uint8, startTime *time.Time, rgbProfile string, subDeviceId int) []byte {
 	buff := make([]byte, 0)
+	if strings.HasPrefix(rgbProfile, "icue-") {
+		profile, _, err := icueprofile.LoadByKey(pwd, rgbProfile)
+		if err != nil {
+			logger.Log(logger.Fields{"error": err, "profile": rgbProfile}).Warn("Unable to load imported iCUE profile")
+			return make([]byte, int(channels)*3)
+		}
+		ordinal := d.qxOrdinal(k)
+		topology := icueprofile.TopologyForDevice(d.Devices[k].Name, int(channels))
+		brightness := rgb.GetBrightnessValueFloat(*d.DeviceProfile.BrightnessSlider)
+		if d.GlobalBrightness != 0 {
+			brightness = d.GlobalBrightness
+		}
+		var output []byte
+		var unsupported []string
+		if topology != nil {
+			// QX uses its verified fan ordinal for the 42-id ConcreteLeds stride.
+			// Other verified topologies (currently TITAN 280) can render spatial
+			// AllLeds effects even when their ConcreteLeds base is not yet known.
+			renderOrdinal := ordinal
+			if renderOrdinal < 0 {
+				renderOrdinal = 0
+			}
+			output, unsupported = profile.RenderFan(topology, renderOrdinal, int(channels), *startTime, brightness)
+		} else {
+			// Unknown LINK hardware gets portable AllLeds layers only. Concrete
+			// selections remain skipped until a trustworthy topology is captured.
+			output, unsupported = profile.RenderLINKDevice(-1, k, int(channels), *startTime, brightness)
+		}
+		if len(unsupported) > 0 {
+			logger.Log(logger.Fields{"profile": profile.Name, "effects": unsupported}).Debug("Skipped unsupported iCUE lighting effects")
+		}
+
+		// Apply the mapper at the final LINK byte-frame boundary. This deliberately
+		// does not depend on LEDTopology: the mapper exists to discover raw physical
+		// LED order, so topology must never be a prerequisite for probing it.
+		kind := "link"
+		mapperOrdinal := k
+		name := strings.ToLower(d.Devices[k].Name)
+		if strings.Contains(name, "qx") && int(channels) == 34 {
+			kind = "qx"
+			mapperOrdinal = ordinal
+		} else if strings.Contains(name, "titan") && int(channels) == 20 {
+			kind = "titan"
+			mapperOrdinal = 0
+		}
+		if mapped, applied, probe := icueprofile.ApplyMappingProbe(output, kind, mapperOrdinal, int(channels)); applied {
+			output = mapped
+			logKey := fmt.Sprintf("%s:%d", kind, mapperOrdinal)
+			if previous, ok := mappingProbeLoggedGeneration.Load(logKey); !ok || previous.(uint64) != probe.Generation {
+				mappingProbeLoggedGeneration.Store(logKey, probe.Generation)
+				logger.Log(logger.Fields{
+					"device": d.Devices[k].Name, "kind": kind, "deviceOrdinal": mapperOrdinal,
+					"localLed": probe.LocalLED, "ledCount": channels, "generation": probe.Generation,
+				}).Info("iCUE LED mapper hardware override applied")
+			}
+		}
+		return output
+	}
 	rgbCustomColor := true
 
 	profile := d.GetRgbProfile(rgbProfile)
@@ -5044,6 +5182,12 @@ func (d *Device) generateRgbEffect(k int, channels uint8, startTime *time.Time, 
 	case "rainbow":
 		{
 			r.Rainbow(*startTime)
+			buff = r.Output
+		}
+	case "icuerainbowwave":
+		{
+			r.RgbDirection = profile.RgbDirection
+			r.ICUERainbowWave(*startTime)
 			buff = r.Output
 		}
 	case "pastelrainbow":
@@ -5235,18 +5379,35 @@ func (d *Device) setSoftwareMode() {
 // getLedDevices will get all connected LED data
 func (d *Device) getLedDevices() {
 	buf := d.read(modeGetLeds, nil, false, v2)
-	channels := buf[6]
+	if len(buf) < 7 {
+		logger.Log(logger.Fields{"serial": d.Serial, "responseLen": len(buf)}).Warn("getLedDevices() - Response too short")
+		return
+	}
+
+	channels := int(buf[6])
 	data := buf[7:]
 
 	if d.Debug {
 		logger.Log(logger.Fields{"led-data": fmt.Sprintf("% 2x", data), "channels": channels}).Info("LED DEBUG DATA")
 	}
 
-	for i := 1; i <= int(channels); i++ {
-		var numLEDs uint16 = 0
-		connected := binary.LittleEndian.Uint16(data[i*4:i*4+2]) == 2
+	for i := 1; i <= channels; i++ {
+		offset := i * 4
+		if offset+4 > len(data) {
+			logger.Log(logger.Fields{
+				"serial":             d.Serial,
+				"channel":            i,
+				"advertisedChannels": channels,
+				"dataLen":            len(data),
+				"requiredEnd":        offset + 4,
+			}).Warn("getLedDevices() - LED channel record exceeds response length")
+			break
+		}
+
+		var numLEDs uint16
+		connected := binary.LittleEndian.Uint16(data[offset:offset+2]) == 2
 		if connected {
-			numLEDs = binary.LittleEndian.Uint16(data[i*4+2 : i*4+2+2])
+			numLEDs = binary.LittleEndian.Uint16(data[offset+2 : offset+4])
 			if numLEDs > 50 {
 				numLEDs = 50
 			}
@@ -5272,28 +5433,48 @@ func (d *Device) getLedDevices() {
 // getLedDeviceTypes will fetch each connected device command code for LED activation
 func (d *Device) getLedDeviceTypes() {
 	buffer := d.readDeviceData(cmdDeviceCommandCodes)
-	d.LedDeviceTypes = buffer[7:]
-	d.LedDeviceTypeLength = buffer[6]
+	if len(buffer) < 7 {
+		logger.Log(logger.Fields{"serial": d.Serial, "responseLen": len(buffer)}).Warn("getLedDeviceTypes() - Command-code response too short")
+		d.LedDeviceTypes = nil
+		d.LedDeviceTypeLength = 0
+	} else {
+		d.LedDeviceTypes = buffer[7:]
+		d.LedDeviceTypeLength = buffer[6]
+	}
 
 	buffer = d.readDeviceData(cmdDeviceCommandLeds)
 	var leds []byte
-
-	// We have data
-	if buffer[2] == 0x08 {
-		leds = append(leds, buffer[6:8]...)
-		data := buffer[8:]
-
-		packetLen := (buffer[6] * 2) - 1
-		for i := 0; i < int(packetLen); i++ {
-			leds = append(leds, data[i])
-		}
+	if len(buffer) < 3 || buffer[2] != 0x08 {
+		d.LedDeviceTypeLed = leds
+		return
 	}
+	if len(buffer) < 8 {
+		logger.Log(logger.Fields{"serial": d.Serial, "responseLen": len(buffer)}).Warn("getLedDeviceTypes() - LED response too short")
+		d.LedDeviceTypeLed = leds
+		return
+	}
+
+	leds = append(leds, buffer[6:8]...)
+	data := buffer[8:]
+	packetLen := int(buffer[6])*2 - 1
+	if packetLen < 0 {
+		packetLen = 0
+	}
+	if packetLen > len(data) {
+		logger.Log(logger.Fields{
+			"serial":       d.Serial,
+			"packetLen":    packetLen,
+			"availableLen": len(data),
+		}).Warn("getLedDeviceTypes() - LED payload shorter than advertised")
+		packetLen = len(data)
+	}
+	leds = append(leds, data[:packetLen]...)
 	d.LedDeviceTypeLed = leds
 }
 
 func (d *Device) updateAdapterLedsAmount(adapterIndex int, newValue byte) bool {
 	idx := (adapterIndex * 2) + 1
-	if idx > len(d.LedDeviceTypeLed) {
+	if idx < 0 || idx >= len(d.LedDeviceTypeLed) {
 		return false
 	}
 	d.LedDeviceTypeLed[idx] = newValue
@@ -5371,12 +5552,13 @@ func (d *Device) read(endpoint, bufferType []byte, psu bool, v2 byte) []byte {
 		logger.Log(logger.Fields{"error": err}).Error("Unable to read endpoint")
 	}
 
-	if responseMatch(buffer, bufferType) {
+	if responseMatchSafe(buffer, bufferType) {
 		next, e := d.transfer(cmdRead, endpoint, psu, v2)
 		if e != nil {
 			logger.Log(logger.Fields{"error": e}).Error("Unable to read endpoint")
+		} else if len(next) >= 4 {
+			buffer = append(buffer, next[4:]...)
 		}
-		buffer = append(buffer, next[4:]...)
 	}
 
 	_, err = d.transfer(cmdCloseEndpoint, endpoint, psu, v2)
@@ -5640,19 +5822,19 @@ func (d *Device) setupLCD() {
 										arcType := 0
 										sensor := 0
 										switch lcd.GetArc().Sensor {
-										case 0: // CPU temperature
+										case 0:
 											val = int(temperatures.GetCpuTemperature())
 											break
-										case 1: // GPU temperature
+										case 1:
 											val = int(temperatures.GetGpuTemperature())
 											arcType = 1
 											break
-										case 2: // Liquid temperature
+										case 2:
 											val = int(d.getLiquidTemperature())
 											arcType = 2
 											sensor = 2
 											break
-										case 3: // CPU utilization
+										case 3:
 											val = int(systeminfo.GetCpuUtilization())
 											sensor = 3
 											break
@@ -6042,6 +6224,15 @@ func (d *Device) transfer(endpoint, buffer []byte, psu bool, v2 byte) ([]byte, e
 
 // responseMatch will check if two byte arrays match
 func responseMatch(response, expected []byte) bool {
-	responseBuffer := response[4:6]
-	return bytes.Equal(responseBuffer, expected)
+	return responseMatchSafe(response, expected)
+}
+
+// responseMatchSafe validates the response header before comparing the
+// two-byte data type.  A short HID read must never be allowed to panic while
+// the device is being enumerated.
+func responseMatchSafe(response, expected []byte) bool {
+	if len(response) < 6 || len(expected) != 2 {
+		return false
+	}
+	return bytes.Equal(response[4:6], expected)
 }
