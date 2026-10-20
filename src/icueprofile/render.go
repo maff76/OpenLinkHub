@@ -679,11 +679,11 @@ func waveTrackRepeat(l Layer, topology LEDTopology, fanOrdinal, ledCount int) fl
 	}
 	// Defensive fallback for profiles with no captured phrase time: use one natural
 	// spatial pass rather than inventing a global/master duration.
-	velocity := math.Abs(number(l.Parameters["velocity"], 100))
+	velocity := math.Abs(number(l.Parameters["velocity"], 100)) / 10.0
 	if velocity <= 0.000001 {
-		velocity = 100
+		velocity = 10
 	}
-	tail := number(l.Parameters["tailLength"], 4)
+	tail := number(l.Parameters["tailLength"], 40) / 10.0
 	if tail <= 0 {
 		tail = 1
 	}
@@ -1481,11 +1481,11 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 	case "ripplelighting":
 		// Ripple uses the shared normalized phase. Velocity scales spatial travel
 		// while tailLength shapes the falloff; neither creates a second clock.
-		velocity := math.Abs(number(l.Parameters["velocity"], 100))
+		velocity := math.Abs(number(l.Parameters["velocity"], 100)) / 10.0
 		if velocity <= 0.000001 {
-			velocity = 100
+			velocity = 10
 		}
-		tail := number(l.Parameters["tailLength"], 4)
+		tail := number(l.Parameters["tailLength"], 40) / 10.0
 		if tail <= 0 {
 			tail = 1
 		}
@@ -1511,10 +1511,9 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 			}
 		}
 		span := maxC - minC + 1
-		// Normalize authored velocity around 100: at velocity=100 the ripple
-		// traverses one complete route+tail during one shared effect window.
-		velocityScale := velocity / 100.0
-		radius := wrapPeriodic(clockElapsed*velocityScale*(span+tail), span+tail)
+		// Velocity is serialized in tenths of a light/sec.  Propagation is spatial
+		// and independent of the graph/duration clock: distance = lights/sec * seconds.
+		radius := wrapPeriodic(elapsed*velocity, span+tail)
 		for i, x := range coords {
 			dist := math.Abs(x - minC)
 			d := radius - dist
@@ -1530,20 +1529,16 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		applyLayerOpacity(l, a)
 		return c, a, true
 	case "wavelighting":
-		// Wave captures velocity, tailLength and isDoublesided. Do not assign a
-		// physical unit to velocity here: the profile proves the value, not its unit.
+		// Wave captures velocity, tailLength and isDoublesided. Captured UI values
+		// establish velocity and tail as tenths of lights/sec and lights respectively.
 		// Captured profiles also carry an authored transition
 		// curve. Render that curve along the moving tail. Angle is retained by the
 		// parser but is intentionally not interpreted on the 1-D LINK topology.
-		velocity := number(l.Parameters["velocity"], 100)
-		if velocity == 0 {
-			velocity = 100
+		velocity := math.Abs(number(l.Parameters["velocity"], 100)) / 10.0
+		if velocity <= 0.000001 {
+			velocity = 10
 		}
-		// The shared 0..1 phase is the timebase. Treat authored velocity=100 as
-		// one complete route traversal per effective duration; other velocity
-		// values scale that spatial travel without creating a second clock.
-		velocityScale := math.Abs(velocity) / 100.0
-		tail := number(l.Parameters["tailLength"], 4)
+		tail := number(l.Parameters["tailLength"], 40) / 10.0
 		if tail <= 0 {
 			tail = 1
 		}
@@ -1569,7 +1564,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 			}
 		}
 		span := maxC - minC + 1
-		head := wrapPeriodic(clockElapsed*velocityScale*(span+tail), span+tail)
+		head := wrapPeriodic(elapsed*velocity, span+tail)
 		for i, x := range coords {
 			d := head - (x - minC)
 			for d < 0 {
@@ -1929,17 +1924,9 @@ type transitionStop struct {
 }
 
 func transitionStops(l Layer) []transitionStop {
-	// Live editor colour overrides are normalized and deliberately independent
-	// of the source .cueprofile serialization. Dynamic effects can therefore
-	// be recoloured without rewriting packed colors or transition XML.
-	if cs := editorOverrideColors(l); len(cs) > 0 {
-		out := make([]transitionStop, 0, len(cs))
-		denom := math.Max(1, float64(len(cs)-1))
-		for i, c := range cs {
-			out = append(out, transitionStop{T: float64(i) / denom, C: c, A: 1})
-		}
-		return out
-	}
+	// Parse the authored transition geometry first. iCUE stores each stop time as
+	// a normalized position inside the layer duration (0..1). Live colour edits
+	// must never replace that timing with evenly-spaced synthetic stops.
 	v, ok := l.Parameters["transitions"]
 	if !ok {
 		return nil
@@ -1970,9 +1957,15 @@ func transitionStops(l Layer) []transitionStop {
 			}
 		}
 	}
-	// iCUE serializes Gradient transition times as authored normalized positions
+	// iCUE serializes graph transition times as authored normalized positions
 	// within the layer duration. Preserve those timestamps exactly: re-scaling
 	// them against the final stop can alter deliberately authored timing.
+	// Editor colours are an overlay on those stops, not a replacement geometry.
+	if cs := editorOverrideColors(l); len(cs) > 0 && len(out) > 0 {
+		for i := range out {
+			out[i].C = cs[i%len(cs)]
+		}
+	}
 	return out
 }
 

@@ -5,36 +5,47 @@ $(function () {
     // 756..775 in local output order, matching the verified Go topology.
     const titan280Zones=[6,7,8,9,10,11,12,13,14,15,16,1,2,3,4,5,17,18,19,20];
     const commonEffects=['StaticLighting','RainLighting','WaveLighting','ColorWaveLighting','RippleLighting','SpiralLighting','SpiralRainbowLighting','RainbowWaveLighting','WatercolorLighting','VisorLighting','MarqueeLighting','SequentialLighting','ColorShiftLighting','ColorPulseLighting','GradientLighting','InfinityLighting','BlinkLighting','BreatheLighting','RainbowLighting','BasicNoneLighting'];
-    const field=(keys,label,type='number',display=null)=>({keys:Array.isArray(keys)?keys:[keys],label,type,display});
-    const colours=field(['transitions','colors','color'],'Colours','colors');
-    const speed=field(['speed','velocity'],'Speed / velocity');
-    const direction=field(['direction','angle'],'Direction / angle');
-    const duration=field(['duration','autoDuration'],'Duration','seconds');
-    const width=field(['width','waveSpread','spread','size'],'Width / spread');
-    const tail=field(['tailLength','tail','falloff'],'Tail / falloff','tenths');
-    const phase=field(['phase','offset'],'Phase / offset');
-    // Effect-specific live controls. Keep this deliberately strict: the raw/advanced
-    // parameter box below remains the escape hatch for authored fields that are not yet
-    // confirmed as visible controls in iCUE. Do not fill the live bench with generic blanks.
+    const field=(keys,label,type='number',display=null,extra={})=>Object.assign({keys:Array.isArray(keys)?keys:[keys],label,type,display},extra);
+    const colours=(label='Colours',maxColors=0,extra={})=>field(['transitions','colors','color'],label,'colors',null,Object.assign({maxColors},extra));
+    const speed=field('speed','Speed','enum',null,{options:[['1','Slow'],['2','Medium'],['3','Fast']]});
+    const duration=field('duration','Lighting time','number','seconds');
+    const velocity=field('velocity','Velocity (lights/sec)','number','tenths');
+    const tail=field(['tailLength','tail'],'Tail (lights)','number','tenths');
+    const opacity=field('opacity','Opacity','number');
+    const random=field(['isRandom','random'],'Random colours','bool');
+    const twoSides=field('isDoublesided','Two sides','bool');
+    const directionLR=field('direction','Direction','enum',null,{options:[['1','Left'],['2','Right']]});
+    const directionInfinity=field('direction','Direction','enum',null,{options:[['2','Up / Down'],['3','Left / Right']]});
+    const directionRotary=field('direction','Direction','enum',null,{options:[['5','Clockwise'],['6','Counter-clockwise']]});
+    // Semantic effect controls captured from iCUE.  A field is rendered only when
+    // that exact authored parameter exists; no generic Speed/Velocity or Direction/Angle aliases.
     const schemas={
-        staticlighting:[colours],
-        rainlighting:[colours,speed,direction],
-        wavelighting:[duration,field('velocity','Velocity','number','tenths'),tail,field('isDoublesided','Two sides','bool')],
-        colorwavelighting:[colours,speed,direction],
-        ripplelighting:[duration,field('velocity','Velocity','number','tenths'),tail],
-        spirallighting:[colours,speed,direction],
-        spiralrainbowlighting:[speed],
-        rainbowwavelighting:[speed,direction],
-        watercolorlighting:[colours,speed],
-        visorlighting:[colours,speed,direction],
-        marqueelighting:[colours,speed,direction],
-        sequentiallighting:[colours,speed,direction],
-        colorshiftlighting:[colours,speed],
-        colorpulselighting:[colours,speed],
-        gradientlighting:[],
-        infinitylighting:[colours,speed,direction],
-        blinklighting:[colours],
-        breathelighting:[colours],
+        staticlighting:[colours('Colour',1),opacity],
+        rainlighting:[colours('Colour',2),opacity,speed,field('direction','Direction')],
+        wavelighting:[duration,velocity,tail,field('angle','Angle (degrees)'),twoSides],
+        colorwavelighting:[colours('Colours',2),speed,directionLR],
+        colorwarplighting:[speed,directionLR],
+        ripplelighting:[duration,velocity,tail],
+        spirallighting:[colours('Colours',2),speed,field('direction','Direction')],
+        spiralrainbowlighting:[speed,directionRotary],
+        rainbowwavelighting:[speed,directionLR],
+        rainbowchannellighting:[speed,directionLR],
+        watercolorlighting:[colours('Colours',2),speed,random],
+        watercolorspectrumlighting:[speed,directionLR],
+        visorlighting:[colours('Colours',2),speed,field('direction','Direction')],
+        marqueelighting:[colours('Colour',1),speed],
+        sequentiallighting:[colours('Colour',1,{hideWhenRandom:true}),random,speed,field('direction','Direction')],
+        rotarystacklighting:[colours('Colours',2,{hideWhenRandom:true}),random,speed,directionRotary],
+        colorshiftlighting:[colours('Colours',2),speed],
+        colorpulselighting:[colours('Colours',2),speed],
+        gradientlighting:[duration],
+        solidlighting:[duration],
+        typelighting:[colours('Colours',2,{hideWhenRandom:true}),field(['random','isRandom'],'Random colours','bool'),opacity,speed],
+        temperaturelighting:[],
+        infinitylighting:[colours('Colours',2,{hideWhenRandom:true}),random,speed,directionInfinity],
+        strobinglighting:[colours('Colours',2,{hideWhenRandom:true}),random,speed],
+        blinklighting:[colours('Colour',1),duration],
+        breathelighting:[colours('Colour',1),duration],
         rainbowlighting:[speed],
         basicnonelighting:[]
     };
@@ -117,16 +128,20 @@ $(function () {
     const friendlyEffects={
         staticlighting:{name:'Static Color',fields:[['Colour','@colors']]},
         rainlighting:{name:'Rain',fields:[['Colour mode','@random'],['Speed','speed'],['Direction','direction']]},
-        wavelighting:{name:'Wave',graph:true,fields:[['Lighting time (sec)','duration','seconds'],['Velocity (lights/sec)','velocity','tenths'],['Tail (lights)','tailLength','tenths'],['Two sides','isDoublesided']]},
+        wavelighting:{name:'Wave',graph:true,fields:[['Lighting time (sec)','duration','seconds'],['Velocity (lights/sec)','velocity','tenths'],['Tail (lights)','tailLength','tenths'],['Angle (degrees)','angle'],['Two sides','isDoublesided']]},
         ripplelighting:{name:'Ripple',graph:true,fields:[['Lighting time (sec)','duration','seconds'],['Velocity (lights/sec)','velocity','tenths'],['Tail (lights)','tailLength','tenths']]},
         colorwavelighting:{name:'Color Wave',fields:[['Colour mode','@random'],['Colours','@colors'],['Speed','speed'],['Direction','direction']]},
         colorshiftlighting:{name:'Color Shift',fields:[['Colour mode','@random'],['Colours','@colors'],['Speed','speed'],['Direction','direction']]},
         colorpulselighting:{name:'Color Pulse',fields:[['Colour mode','@random'],['Colours','@colors'],['Speed','speed']]},
         infinitylighting:{name:'Infinity',fields:[['Colour mode','@random'],['Colours','@colors'],['Speed','speed'],['Direction','direction']]},
         visorlighting:{name:'Visor',fields:[['Colour mode','@random'],['Colours','@colors'],['Speed','speed'],['Direction','direction']]},
-        marqueelighting:{name:'Marquee',fields:[['Colour','@colors'],['Speed','speed'],['Direction','direction']]},
+        marqueelighting:{name:'Marquee',fields:[['Colour','@colors'],['Speed','speed']]},
         sequentiallighting:{name:'Sequential',fields:[['Colour mode','@random'],['Colour','@colors'],['Speed','speed'],['Direction','direction']]},
-        gradientlighting:{name:'Gradient',graph:true,fields:[]},
+        gradientlighting:{name:'Gradient',graph:true,fields:[['Lighting time (sec)','duration','seconds']]},
+        solidlighting:{name:'Solid',graph:true,fields:[['Lighting time (sec)','duration','seconds']]},
+        rotarystacklighting:{name:'Rotary Stack',fields:[['Colour mode','@random'],['Colours','@colors'],['Speed','speed'],['Direction','direction']]},
+        typelighting:{name:'Type Lighting',fields:[['Colour mode','@random'],['Colours','@colors'],['Speed','speed']]},
+        strobinglighting:{name:'Strobing',fields:[['Colour mode','@random'],['Colours','@colors'],['Speed','speed']]},
         watercolorlighting:{name:'Watercolor',fields:[['Colours','@colors'],['Speed','speed']]},
         spirallighting:{name:'Spiral',fields:[['Colours','@colors'],['Speed','speed'],['Direction','direction']]},
         spiralrainbowlighting:{name:'Spiral Rainbow',fields:[['Speed','speed'],['Direction','direction']]},
@@ -157,21 +172,34 @@ $(function () {
         const cs=authoredColors();stops.forEach((x,i)=>{if(!x.color)x.color=cs[i%Math.max(1,cs.length)]||'#ffffff';x.level=Math.max(0,Math.min(100,Number.isFinite(x.level)?x.level:100));});
         return stops.filter(x=>Number.isFinite(x.time));
     }
+    function graphDurationMs(){
+        const raw=Number(authoredValue('duration')??((currentLayer&&currentLayer.parameters)||{}).duration);
+        return Number.isFinite(raw)&&raw>0?raw:1000;
+    }
     function renderTransitionGraph(){
         const panel=$('#icueTransitionPanel'),graph=$('#icueTransitionGraph').empty(),stops=transitionStops();
         const cfg=friendlyEffects[String(currentLayer&&currentLayer.effect||'').toLowerCase()]||{};
         if(!cfg.graph||!stops.length){panel.hide();return;}
-        panel.show();const min=Math.min(...stops.map(x=>x.time)),max=Math.max(...stops.map(x=>x.time)),span=(max-min)||1;
-        // The line/fill and HTML control points share the same percentage X and
-        // pixel Y coordinates. This keeps the joins centred on the dots while the
-        // dots themselves stay circular at any responsive graph width.
-        const pts=stops.map(x=>({x:(x.time-min)/span*100,y:4+(100-x.level)*0.72,color:x.color,time:x.time,level:x.level}));
+        panel.show();
+        // iCUE graph timestamps are normalized positions inside the layer's total
+        // Lighting Time.  Never re-scale them against the first/last point: a stop
+        // at 0.5 is halfway through the authored duration even when no stop exists
+        // at 0 or 1.
+        const durationMs=graphDurationMs(),durationSec=durationMs/1000;
+        const pts=stops.map(x=>{
+            const t=Math.max(0,Math.min(1,Number(x.time)));
+            return {x:t*100,y:4+(100-x.level)*0.72,color:x.color,time:t,seconds:t*durationSec,level:x.level};
+        });
         const esc=s=>String(s||'#ffffff').replace(/[^#0-9a-fA-F]/g,'');
-        const gradStops=pts.map((pt,i)=>'<stop offset="'+(pts.length===1?0:(i/(pts.length-1)*100))+'%" stop-color="'+esc(pt.color)+'"/>').join('');
-        const points=pts.map(pt=>pt.x.toFixed(3)+','+pt.y.toFixed(2)).join(' '),area=points+' 100,76 0,76';
+        const gradStops=pts.map(pt=>'<stop offset="'+pt.x.toFixed(3)+'%" stop-color="'+esc(pt.color)+'"/>').join('');
+        const points=pts.map(pt=>pt.x.toFixed(3)+','+pt.y.toFixed(2)).join(' '),area=points+' '+pts[pts.length-1].x.toFixed(3)+',76 '+pts[0].x.toFixed(3)+',76';
         graph.html('<svg class="icue-transition-svg" viewBox="0 0 100 80" preserveAspectRatio="none"><defs><linearGradient id="icueTransitionColour" x1="0%" x2="100%">'+gradStops+'</linearGradient><linearGradient id="icueTransitionFade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="white" stop-opacity=".72"/><stop offset="1" stop-color="white" stop-opacity=".08"/></linearGradient><mask id="icueTransitionMask"><rect width="100" height="80" fill="url(#icueTransitionFade)"/></mask></defs><polygon points="'+area+'" fill="url(#icueTransitionColour)" opacity=".55" mask="url(#icueTransitionMask)"/><polyline points="'+points+'" fill="none" stroke="url(#icueTransitionColour)" stroke-width=".65" vector-effect="non-scaling-stroke"/></svg>');
-        pts.forEach((pt,i)=>{const dot=$('<button type="button" class="icue-transition-stop" aria-label="Edit transition colour"></button>').css({left:pt.x+'%',top:pt.y+'px',background:pt.color}).attr('title','Click to edit colour · time '+pt.time+' · '+Math.round(pt.level)+'% · '+pt.color).attr('data-stop',i);graph.append(dot);});
-        $('#icueTransitionSummary').text(stops.length+' stops · '+min+' → '+max);
+        pts.forEach((pt,i)=>{
+            const when=pt.seconds.toFixed(3).replace(/0+$/,'').replace(/\.$/,'');
+            const dot=$('<button type="button" class="icue-transition-stop" aria-label="Edit transition colour"></button>').css({left:pt.x+'%',top:pt.y+'px',background:pt.color}).attr('title','Click to edit colour · '+when+' s of '+durationSec.toFixed(3).replace(/0+$/,'').replace(/\.$/,'')+' s · '+Math.round(pt.level)+'% · '+pt.color).attr('data-stop',i);
+            graph.append(dot);
+        });
+        $('#icueTransitionSummary').text(stops.length+' stops · total '+durationSec.toFixed(3).replace(/0+$/,'').replace(/\.$/,'')+' s');
     }
     function renderFriendlyEffect(){
         if(!currentLayer)return;const key=String(currentLayer.effect||'').toLowerCase(),cfg=friendlyEffects[key]||{name:currentLayer.effect||'Effect',fields:[]};
@@ -252,17 +280,19 @@ $(function () {
             if(!hasValue)return;
             const key=firstPresentKey(f.keys,p);used.add(key);
             if(f.type==='colors'){
-                const dc=authoredColors(),count=dc.length,cs=dc.slice();
+                const randomOn=!!(p.isRandom??p.random);if(f.hideWhenRandom&&randomOn)return;
+                const dc=authoredColors(),limit=f.maxColors>0?f.maxColors:dc.length,cs=dc.slice(0,limit),count=cs.length;
                 cs.forEach((c,n)=>{const col=$('<div class="col-md-6"></div>');col.append($('<label class="sentence-text"></label>').text(f.label+(count>1?' '+(n+1):'')));const inp=$('<input type="color" class="form-control form-control-color icue-param-color">').attr('data-key',key).attr('data-n',n).val(c);col.append(inp);box.append(col);});
                 return;
+            }
+            if(f.type==='enum'){
+                const col=$('<div class="col-md-4"></div>');col.append($('<label class="sentence-text"></label>').text(f.label));const inp=$('<select class="form-control system-input icue-param-enum"></select>').attr('data-key',key);(f.options||[]).forEach(o=>inp.append($('<option>').val(o[0]).text(o[1])));inp.val(String(p[key]));col.append(inp);box.append(col);return;
             }
             if(f.type==='bool'){
                 const col=$('<div class="col-md-4"></div>'),wrap=$('<label class="system-toggle compact"></label>'),inp=$('<input type="checkbox" class="icue-param-bool">').attr('data-key',key).prop('checked',!!p[key]);wrap.append(inp,$('<span class="toggle-track"></span>'),$('<span class="ms-2"></span>').text(f.label));col.append(wrap);box.append(col);return;
             }
             const col=$('<div class="col-md-4"></div>');col.append($('<label class="sentence-text"></label>').text(f.label));const inp=$('<input type="number" class="form-control system-input icue-param-number">').attr('step',displayStep(f.display)).attr('data-key',key).attr('data-display',f.display||'');if(p[key]!==undefined&&!Array.isArray(p[key])){const shown=toDisplayUnit(p[key],f.display);inp.val(shown);}const raw=auth[key]&&auth[key].rawValues;if(raw&&raw.length)inp.attr('title','Authored raw: '+raw.join(' · '));col.append(inp);box.append(col);
         });
-        const randomKey=Object.prototype.hasOwnProperty.call(auth,'isRandom')?'isRandom':'random';
-        if(Object.prototype.hasOwnProperty.call(auth,randomKey)&&!used.has(randomKey)){const col=$('<div class="col-12"></div>'),wrap=$('<label class="system-toggle compact"></label>'),inp=$('<input type="checkbox" class="icue-param-bool">').attr('data-key',randomKey).prop('checked',!!p[randomKey]);wrap.append(inp,$('<span class="toggle-track"></span>'),$('<span class="ms-2">Random</span>'));col.append(wrap);box.append(col);}
     }
     function selectedGroupKind(){const v=String($('#icueDeviceCanvas').val()||'');return v.startsWith('group:')?v.slice(6):'';}
     function selectedDevices(){const kind=selectedGroupKind();if(kind)return detectedDevices.filter(d=>d.kind===kind);const i=parseInt($('#icueDeviceCanvas').val(),10);return Number.isFinite(i)&&detectedDevices[i]?[detectedDevices[i]]:[];}
@@ -404,7 +434,7 @@ $(function () {
         const picker=$('<input type="color" aria-label="Transition colour">').val(colors[index]).css({position:'fixed',left:'-1000px',top:'-1000px'}).appendTo(document.body);
         picker.on('input change',function(){applyTransitionStopColour(index,this.value);}).on('blur',function(){setTimeout(()=>picker.remove(),0);});picker[0].click();
     });
-    $('#icueEffectControls').on('change','.icue-param-number',function(){if(this.value!==''){const display=String($(this).data('display')||''),v=fromDisplayUnit(this.value,display);applyParam($(this).data('key'),v);}}).on('change','.icue-param-color',function(){const inputs=$('.icue-param-color'),hexes=inputs.map((_,x)=>String(x.value).toLowerCase()).get(),colors=hexes.map(hexToRGB);currentLayer.sourceColors=hexes;currentLayer.parameters=currentLayer.parameters||{};currentLayer.parameters.editorColors=colors;palettePhase=0;$('#icueParameters').val(JSON.stringify(currentLayer.parameters,null,2));applyColourParameters(colors);renderFriendlyEffect();renderLEDs();}).on('change','.icue-param-bool',function(){applyParam($(this).data('key'),this.checked);});
+    $('#icueEffectControls').on('change','.icue-param-number',function(){if(this.value!==''){const display=String($(this).data('display')||''),v=fromDisplayUnit(this.value,display);applyParam($(this).data('key'),v);}}).on('change','.icue-param-color',function(){const inputs=$('.icue-param-color'),hexes=inputs.map((_,x)=>String(x.value).toLowerCase()).get(),colors=hexes.map(hexToRGB);currentLayer.sourceColors=hexes;currentLayer.parameters=currentLayer.parameters||{};currentLayer.parameters.editorColors=colors;palettePhase=0;$('#icueParameters').val(JSON.stringify(currentLayer.parameters,null,2));applyColourParameters(colors);renderFriendlyEffect();renderLEDs();}).on('change','.icue-param-enum',function(){applyParam($(this).data('key'),Number(this.value));}).on('change','.icue-param-bool',function(){applyParam($(this).data('key'),this.checked);renderEffectControls();});
     $('#icueApplyParameters').on('click',function(){try{const p=JSON.parse($('#icueParameters').val()||'{}');currentLayer.parameters=p;renderEffectControls();renderFriendlyEffect();renderLEDs();apply({parameters:p});}catch(e){toast.warning('Parameters must be valid JSON');}});
     $('#icueSelectAll').on('click',()=>setDeviceSelection(true));$('#icueSelectNone').on('click',()=>setDeviceSelection(false));$('#icueTopologyProbe').on('change',function(){$('#icueProbePanel').toggle(this.checked);$('#icueSelectionActions').toggle(!this.checked);renderLEDs();applyMappingProbe();});$('#icueProbePrev').on('click',()=>{const d=selectedDevice(),n=mapperLedCount(d);probeLocal=(probeLocal+n-1)%n;renderLEDs();applyMappingProbe();});$('#icueProbeNext').on('click',()=>{const d=selectedDevice(),n=mapperLedCount(d);probeLocal=(probeLocal+1)%n;renderLEDs();applyMappingProbe();});$('#icueMapRecord').on('click',recordMappingObservation);
     $('#icueResetLive').on('click',resetLivePreview);
