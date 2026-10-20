@@ -59,7 +59,8 @@ type DefaultTemp struct {
 }
 
 var (
-	mu             sync.RWMutex
+	mu sync.RWMutex
+
 	productMetrics = make(map[string]Header)      // key: serial
 	deviceMetrics  = make(map[string]Header)      // key: serial:channel
 	storageMetrics = make(map[string]StorageTemp) // key: hwmonDevice
@@ -235,10 +236,9 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		)
 
 		if p.HasWatts {
-			if p.MainPSU {
-				continue
+			if !p.MainPSU {
+				power.WriteString(fmt.Sprintf("openlinkhub_psu_power_watts{%s} %.2f\n", labels, p.Watts))
 			}
-			power.WriteString(fmt.Sprintf("openlinkhub_psu_power_watts{%s} %.2f\n", labels, p.Watts))
 		}
 		if hasVoltage {
 			voltage.WriteString(fmt.Sprintf("openlinkhub_psu_voltage_volts{%s} %.2f\n", labels, p.Volts))
@@ -257,19 +257,15 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	b.WriteString("# HELP openlinkhub_psu_power_watts PSU power (input, total output or per rail).\n")
 	b.WriteString("# TYPE openlinkhub_psu_power_watts gauge\n")
 	b.WriteString(power.String())
-
 	b.WriteString("# HELP openlinkhub_psu_voltage_volts PSU rail voltage.\n")
 	b.WriteString("# TYPE openlinkhub_psu_voltage_volts gauge\n")
 	b.WriteString(voltage.String())
-
 	b.WriteString("# HELP openlinkhub_psu_current_amps PSU rail current.\n")
 	b.WriteString("# TYPE openlinkhub_psu_current_amps gauge\n")
 	b.WriteString(current.String())
-
 	b.WriteString("# HELP openlinkhub_psu_temperature_celsius PSU temperature sensor.\n")
 	b.WriteString("# TYPE openlinkhub_psu_temperature_celsius gauge\n")
 	b.WriteString(temperature.String())
-
 	b.WriteString("# HELP openlinkhub_psu_fan_rpm PSU fan speed (0 while the fan is stopped).\n")
 	b.WriteString("# TYPE openlinkhub_psu_fan_rpm gauge\n")
 	b.WriteString(speed.String())

@@ -44,6 +44,12 @@ func Init() {
 		}
 	}
 
+	if logFilename != "-" {
+		if err := cleanupArchivedLogs(logFilename, config.GetConfig().LogRetentionDays); err != nil {
+			fmt.Println("failed to clean up archived log files", err)
+		}
+	}
+
 	var output *os.File
 	var err error
 
@@ -132,9 +138,41 @@ func archiveLog(logFilename string) error {
 	return os.Remove(logFilename)
 }
 
+// cleanupArchivedLogs removes archived logs older than retentionDays. A value of
+// zero keeps archives indefinitely. Only archives belonging to logFilename are touched.
+func cleanupArchivedLogs(logFilename string, retentionDays int) error {
+	if retentionDays <= 0 {
+		return nil
+	}
+
+	matches, err := filepath.Glob(logFilename + ".*.tar.gz")
+	if err != nil {
+		return err
+	}
+
+	cutoff := time.Now().AddDate(0, 0, -retentionDays)
+	for _, archive := range matches {
+		info, err := os.Stat(archive)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return err
+		}
+		if info.ModTime().Before(cutoff) {
+			if err := os.Remove(archive); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // levelFromString will convert string level to integer
 func levelFromString(level string) common.LogLevel {
 	switch strings.ToLower(level) {
+	case "debug":
+		return common.LogDebug
 	case "info":
 		return common.LogInfo
 	case "warn":
@@ -190,6 +228,11 @@ func (e *Entry) logWithLevel(level, msg string) {
 	}
 
 	logger.Println(string(data))
+}
+
+// Debug will log diagnostic information when the configured log level is debug.
+func (e *Entry) Debug(msg string) {
+	e.logWithLevel("debug", msg)
 }
 
 // Error will log error

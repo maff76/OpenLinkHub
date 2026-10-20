@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -55,7 +56,7 @@ type USBInfo struct {
 	Serial    string
 }
 
-var sleep bool
+var sleeping atomic.Bool
 
 func Init() {
 	go func() {
@@ -85,7 +86,7 @@ func Init() {
 		for signal := range ch {
 			if len(signal.Body) > 0 {
 				if isSleeping, ok := signal.Body[0].(bool); ok {
-					sleep = isSleeping
+					sleeping.Store(isSleeping)
 					if isSleeping {
 						logger.Log(logger.Fields{}).Info("Suspend detected. Sending Stop() to all devices")
 
@@ -110,7 +111,7 @@ func Init() {
 						os.Exit(1)
 					}
 				} else {
-					sleep = false
+					sleeping.Store(false)
 				}
 			}
 		}
@@ -180,7 +181,7 @@ func Init() {
 			switch action {
 			case "add":
 				{
-					if sleep {
+					if sleeping.Load() {
 						break
 					}
 					basePath := sysRoot + devPath
@@ -212,7 +213,7 @@ func Init() {
 				break
 			case "remove":
 				{
-					if !sleep {
+					if !sleeping.Load() {
 						time.Sleep(100 * time.Millisecond)
 						info, ok := cache[devPath]
 						if !ok {

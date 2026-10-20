@@ -70,6 +70,7 @@ type TemperatureProfileData struct {
 	Points             map[uint8][]Point    `json:"points"`
 	Device             string               `json:"device"`
 	HwmonDevice        string               `json:"hwmonDevice"`
+	HwmonPersistentID  string               `json:"hwmonPersistentId,omitempty"`
 	TemperatureInputId string               `json:"temperatureInputId"`
 	ChannelId          int                  `json:"channelId"`
 	Linear             bool                 `json:"linear"`
@@ -90,12 +91,16 @@ type MemoryTemperatures struct {
 }
 
 type HwMonSensor struct {
-	HwmonName  string
-	SensorName string
-	InputName  string
-	Label      string
-	TempC      float64
-	Path       string
+	ID           string
+	Category     string
+	HwmonName    string
+	SensorName   string
+	InputName    string
+	Label        string
+	Model        string
+	PersistentID string
+	TempC        float64
+	Path         string
 }
 
 type NewTemperatureProfile struct {
@@ -107,6 +112,7 @@ type NewTemperatureProfile struct {
 	Sensor             uint8
 	ChannelId          int
 	HwmonDevice        string
+	HwmonPersistentID  string
 	TemperatureInputId string
 	GpuIndex           uint8
 }
@@ -513,6 +519,7 @@ func AddTemperatureProfile(newTemperatureProfile *NewTemperatureProfile) bool {
 
 		if len(newTemperatureProfile.HwmonDevice) > 0 {
 			pf.HwmonDevice = newTemperatureProfile.HwmonDevice
+			pf.HwmonPersistentID = newTemperatureProfile.HwmonPersistentID
 			pf.TemperatureInputId = newTemperatureProfile.TemperatureInputId
 		}
 
@@ -722,11 +729,22 @@ func LoadUserProfiles(profiles map[string]TemperatureProfileData) {
 			logger.Log(logger.Fields{"error": fe, "location": profileLocation, "caller": "LoadUserProfiles()"}).Fatal("Unable to read temperature profile")
 		}
 
-		// Recalculate hwmon dynamic path
-		if len(profile.HwmonDevice) > 0 && len(profile.TemperatureInputId) > 0 {
+		// Recalculate the dynamic hwmon path. New profiles use a stable
+		// hardware-backed identity so duplicate driver names (for example
+		// several spd5118 or drivetemp devices) cannot bind to the wrong
+		// hwmonX directory after a reboot. Keep the name-based lookup for
+		// profiles created by older OpenLinkHub versions.
+		if len(profile.HwmonPersistentID) > 0 && len(profile.TemperatureInputId) > 0 {
+			if deviceId := resolveHwMonPersistentID(profile.HwmonPersistentID, profile.TemperatureInputId); deviceId != "" {
+				profile.Device = deviceId
+			} else {
+				logger.Log(logger.Fields{"profile": profileName, "hwmonPersistentId": profile.HwmonPersistentID}).Warn("Unable to resolve persistent hwmon sensor identity")
+			}
+		} else if len(profile.HwmonDevice) > 0 && len(profile.TemperatureInputId) > 0 {
 			path := getHwMonDirectoryByDeviceName(profile.HwmonDevice)
-			deviceId := fmt.Sprintf("%s/%s", path, profile.TemperatureInputId)
-			profile.Device = deviceId
+			if path != "" {
+				profile.Device = filepath.Join(path, profile.TemperatureInputId)
+			}
 		}
 		profiles[profileName] = profile
 	}
@@ -846,6 +864,102 @@ func getHwMonTemperature(hwmonDir string, entry os.DirEntry) float32 {
 		temperature = temperature + float32(temperatureOffset)
 	}
 	return temperature
+}
+
+// CpuSensorInfo describes the CPU hwmon source OpenLinkHub can use and the
+// source currently resolved by automatic/manual selection.
+type CpuSensorInfo struct {
+	Candidates    []string `json:"candidates"`
+	Configured    string   `json:"configured"`
+	ResolvedChip  string   `json:"resolvedChip"`
+	ResolvedFile  string   `json:"resolvedFile"`
+	ResolvedLabel string   `json:"resolvedLabel"`
+}
+
+func isCpuSensorChip(name string) bool {
+	for _, chip := range cpuPackages {
+		if chip == name {
+			return true
+		}
+	}
+	return false
+}
+
+func cpuTemperatureFile() string {
+	if configured := strings.TrimSpace(config.GetConfig().CpuTempFile); configured != "" {
+		return configured
+	}
+	return defaultTempFile
+}
+
+func cpuSensorLabel(hwmonPath, inputFile string) string {
+	if !strings.HasSuffix(inputFile, "_input") {
+		return ""
+	}
+	labelFile := strings.TrimSuffix(inputFile, "_input") + "_label"
+	label, err := os.ReadFile(filepath.Join(hwmonPath, labelFile))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(label))
+}
+
+// GetCpuSensorInfo returns only known CPU hwmon drivers and reports the source
+// OpenLinkHub will actually use. This keeps motherboard, DIMM, NVMe and other
+// unrelated hwmon chips out of the CPU selector.
+func GetCpuSensorInfo() CpuSensorInfo {
+	info := CpuSensorInfo{
+		Candidates: make([]string, 0),
+		Configured: strings.TrimSpace(config.GetConfig().CPUSensorChip),
+	}
+
+	hwmonDir := "/sys/class/hwmon"
+	entries, err := os.ReadDir(hwmonDir)
+	if err != nil {
+		return info
+	}
+
+	tempFile := cpuTemperatureFile()
+	seen := make(map[string]bool)
+	for _, entry := range entries {
+		nameBytes, err := os.ReadFile(filepath.Join(hwmonDir, entry.Name(), "name"))
+		if err != nil {
+			continue
+		}
+		name := strings.TrimSpace(string(nameBytes))
+		if !isCpuSensorChip(name) {
+			continue
+		}
+		hwmonPath := filepath.Join(hwmonDir, entry.Name())
+		if _, err := os.Stat(filepath.Join(hwmonPath, tempFile)); err != nil {
+			continue
+		}
+		if !seen[name] {
+			seen[name] = true
+			info.Candidates = append(info.Candidates, name)
+		}
+
+		matchesSelection := info.Configured == name
+		if info.Configured == "" {
+			matchesSelection = isCpuSensorChip(name)
+		}
+		if info.ResolvedChip == "" && matchesSelection {
+			// Match GetCpuTemperature(): only report a source as resolved when
+			// its configured input can actually be read as a non-zero value.
+			if getHwMonTemperature(hwmonDir, entry) != 0 {
+				info.ResolvedChip = name
+				info.ResolvedFile = tempFile
+				info.ResolvedLabel = cpuSensorLabel(hwmonPath, tempFile)
+			}
+		}
+	}
+	sort.Strings(info.Candidates)
+	return info
+}
+
+// GetCpuSensorChips is retained for callers that only need the filtered list.
+func GetCpuSensorChips() []string {
+	return GetCpuSensorInfo().Candidates
 }
 
 // GetCpuTemperature will return CPU temperature
@@ -1032,6 +1146,179 @@ func Interpolate(points []Point, inputTemp float32) float32 {
 }
 
 // GetExternalHwMonSensors will parse and return all external hwmon sensors available in the system.
+// hwMonCategory provides a stable, generic grouping for API consumers such as Home Assistant.
+// Keep this based on kernel driver names rather than hwmonX indexes, which can change after reboot.
+func hwMonCategory(sensorName string) string {
+	name := strings.ToLower(sensorName)
+	switch {
+	case name == "coretemp" || name == "k10temp" || name == "zenpower":
+		return "cpu"
+	case name == "nvme" || name == "drivetemp":
+		return "storage"
+	case name == "spd5118":
+		return "memory"
+	case strings.Contains(name, "amdgpu") || strings.Contains(name, "nvidia"):
+		return "gpu"
+	default:
+		return "motherboard"
+	}
+}
+
+// hwMonHardwareKey extracts a stable hardware identifier from sysfs.
+// It never uses hwmonX because those indexes can change after reboot.
+//
+// drivetemp needs special handling: multiple SATA disks sit behind the same PCI
+// controller, so the controller BDF is not unique. Prefer the kernel-cached
+// SCSI/ATA WWID when available, then the SCSI H:C:T:L address as a fallback.
+// Reading these sysfs attributes does not invoke smartctl or issue a SMART query.
+func hwMonHardwareKey(hwmonPath, sensorName string) string {
+	if strings.EqualFold(sensorName, "drivetemp") {
+		wwidPaths := []string{
+			filepath.Join(hwmonPath, "device", "wwid"),
+			filepath.Join(hwmonPath, "device", "device", "wwid"),
+		}
+		for _, wwidPath := range wwidPaths {
+			if data, err := os.ReadFile(wwidPath); err == nil {
+				if wwid := strings.TrimSpace(string(data)); wwid != "" {
+					return wwid
+				}
+			}
+		}
+	}
+
+	resolved, err := filepath.EvalSymlinks(hwmonPath)
+	if err != nil {
+		resolved = hwmonPath
+	}
+	parts := strings.Split(filepath.Clean(resolved), string(os.PathSeparator))
+
+	// For drivetemp, prefer the SCSI address (H:C:T:L) over the shared SATA
+	// controller BDF when no WWID was exposed.
+	if strings.EqualFold(sensorName, "drivetemp") {
+		for i := len(parts) - 1; i >= 0; i-- {
+			part := parts[i]
+			fields := strings.Split(part, ":")
+			if len(fields) != 4 {
+				continue
+			}
+			valid := true
+			for _, field := range fields {
+				if _, err := strconv.Atoi(field); err != nil {
+					valid = false
+					break
+				}
+			}
+			if valid {
+				return "scsi-" + part
+			}
+		}
+	}
+
+	for i := len(parts) - 1; i >= 0; i-- {
+		part := parts[i]
+		if strings.HasPrefix(part, "hwmon") {
+			continue
+		}
+		// PCI BDF, e.g. 0000:00:1f.4.
+		if strings.Count(part, ":") == 2 && strings.Contains(part, ".") {
+			return part
+		}
+		// I2C device, e.g. 0-0050.
+		if dash := strings.IndexByte(part, '-'); dash > 0 && dash < len(part)-1 {
+			left, right := part[:dash], part[dash+1:]
+			if _, errLeft := strconv.Atoi(left); errLeft == nil {
+				if _, errRight := strconv.ParseUint(right, 16, 32); errRight == nil {
+					return part
+				}
+			}
+		}
+	}
+	return sensorName
+}
+
+func hwMonIDPart(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var b strings.Builder
+	lastUnderscore := false
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			lastUnderscore = false
+		} else if !lastUnderscore && b.Len() > 0 {
+			b.WriteByte('_')
+			lastUnderscore = true
+		}
+	}
+	return strings.Trim(b.String(), "_")
+}
+
+// hwMonPersistentID identifies the physical sensor independently of its
+// transient hwmonX directory and display label. The existing API ID remains
+// unchanged because consumers may already use it as a persistent entity ID.
+func hwMonPersistentID(sensorName, hardwareKey, inputName string) string {
+	return strings.Join([]string{
+		hwMonIDPart(sensorName),
+		hwMonIDPart(hardwareKey),
+		hwMonIDPart(strings.TrimSuffix(inputName, "_input")),
+	}, "_")
+}
+
+func resolveHwMonPersistentID(persistentID, inputName string) string {
+	entries, err := os.ReadDir("/sys/class/hwmon")
+	if err != nil {
+		return ""
+	}
+	for _, entry := range entries {
+		hwmonPath := filepath.Join("/sys/class/hwmon", entry.Name())
+		nameBytes, err := os.ReadFile(filepath.Join(hwmonPath, "name"))
+		if err != nil {
+			continue
+		}
+		sensorName := strings.TrimSpace(string(nameBytes))
+		hardwareKey := hwMonHardwareKey(hwmonPath, sensorName)
+		if hwMonPersistentID(sensorName, hardwareKey, inputName) != persistentID {
+			continue
+		}
+		path := filepath.Join(hwmonPath, inputName)
+		if common.FileExists(path) {
+			return path
+		}
+	}
+	return ""
+}
+
+func hwMonStableID(sensorName, hardwareKey, label, inputName string) string {
+	channel := label
+	if strings.TrimSpace(channel) == "" {
+		channel = strings.TrimSuffix(inputName, "_input")
+	}
+	return strings.Join([]string{
+		hwMonIDPart(sensorName),
+		hwMonIDPart(hardwareKey),
+		hwMonIDPart(channel),
+	}, "_")
+}
+
+// hwMonModel returns the kernel-exposed model for storage devices.
+// This reads sysfs only; it does not invoke smartctl or wake disks for SMART data.
+func hwMonModel(hwmonPath, category string) string {
+	if category != "storage" {
+		return ""
+	}
+	modelPaths := []string{
+		filepath.Join(hwmonPath, "device", "model"),
+		filepath.Join(hwmonPath, "device", "device", "model"),
+	}
+	for _, modelPath := range modelPaths {
+		if data, err := os.ReadFile(modelPath); err == nil {
+			if model := strings.TrimSpace(string(data)); model != "" {
+				return model
+			}
+		}
+	}
+	return ""
+}
+
 func GetExternalHwMonSensors() interface{} {
 	basePath := "/sys/class/hwmon/"
 	hwmonEntries, err := os.ReadDir(basePath)
@@ -1064,6 +1351,10 @@ func GetExternalHwMonSensors() interface{} {
 		if sensorName == "corsairpsu" || sensorName == "corsair_psu" || sensorName == "corsair-psu" {
 			continue
 		}
+
+		hardwareKey := hwMonHardwareKey(hwmonPath, sensorName)
+		category := hwMonCategory(sensorName)
+		model := hwMonModel(hwmonPath, category)
 
 		files, err := os.ReadDir(hwmonPath)
 		if err != nil {
@@ -1099,12 +1390,16 @@ func GetExternalHwMonSensors() interface{} {
 
 				sensors = append(sensors,
 					HwMonSensor{
-						HwmonName:  hwmonDirName,
-						SensorName: sensorName,
-						InputName:  fileName,
-						Label:      label,
-						TempC:      tempC,
-						Path:       fullPath,
+						ID:           hwMonStableID(sensorName, hardwareKey, label, fileName),
+						Category:     category,
+						HwmonName:    hwmonDirName,
+						SensorName:   sensorName,
+						InputName:    fileName,
+						Label:        label,
+						Model:        model,
+						PersistentID: hwMonPersistentID(sensorName, hardwareKey, fileName),
+						TempC:        tempC,
+						Path:         fullPath,
 					},
 				)
 			}
