@@ -108,6 +108,7 @@ type Device struct {
 	Exit              bool
 	deviceLock        sync.Mutex
 	instance          *common.Device
+	stopOnce          sync.Once
 }
 
 // Init will initialize a new device
@@ -171,58 +172,44 @@ func (d *Device) createDevice() {
 	}
 }
 
+// stop shuts down motherboard background work exactly once. Closing the stop
+// channels synchronously ensures the workers are signalled before BIOS mode is
+// restored, rather than racing the final hardware writes during teardown.
+func (d *Device) stop(dirty bool) {
+	d.stopOnce.Do(func() {
+		d.Exit = true
+		message := "Stopping device..."
+		if dirty {
+			message = "Stopping device (dirty)..."
+		}
+		logger.Log(logger.Fields{"serial": d.Serial, "product": d.Product}).Info(message)
+
+		d.timer.Stop()
+		if !config.GetConfig().Manual {
+			d.timerSpeed.Stop()
+			if d.speedRefreshChan != nil {
+				close(d.speedRefreshChan)
+			}
+		}
+		if d.autoRefreshChan != nil {
+			close(d.autoRefreshChan)
+		}
+
+		if config.GetConfig().MotherboardBiosOnExit {
+			d.setBiosMode()
+		}
+		logger.Log(logger.Fields{"serial": d.Serial, "product": d.Product}).Info("Device stopped")
+	})
+}
+
 // Stop will stop all device operations and switch a device back to hardware mode
 func (d *Device) Stop() {
-	d.Exit = true
-	logger.Log(logger.Fields{"serial": d.Serial, "product": d.Product}).Info("Stopping device...")
-
-	d.timer.Stop()
-	var once sync.Once
-	go func() {
-		once.Do(func() {
-			if !config.GetConfig().Manual {
-				d.timerSpeed.Stop()
-				if d.speedRefreshChan != nil {
-					close(d.speedRefreshChan)
-				}
-			}
-			if d.autoRefreshChan != nil {
-				close(d.autoRefreshChan)
-			}
-		})
-	}()
-
-	if config.GetConfig().MotherboardBiosOnExit {
-		d.setBiosMode()
-	}
-	logger.Log(logger.Fields{"serial": d.Serial, "product": d.Product}).Info("Device stopped")
+	d.stop(false)
 }
 
 // StopDirty will stop device in a dirty way
 func (d *Device) StopDirty() uint8 {
-	d.Exit = true
-	logger.Log(logger.Fields{"serial": d.Serial, "product": d.Product}).Info("Stopping device (dirty)...")
-
-	d.timer.Stop()
-	var once sync.Once
-	go func() {
-		once.Do(func() {
-			if !config.GetConfig().Manual {
-				d.timerSpeed.Stop()
-				if d.speedRefreshChan != nil {
-					close(d.speedRefreshChan)
-				}
-			}
-			if d.autoRefreshChan != nil {
-				close(d.autoRefreshChan)
-			}
-		})
-	}()
-
-	if config.GetConfig().MotherboardBiosOnExit {
-		d.setBiosMode()
-	}
-	logger.Log(logger.Fields{"serial": d.Serial, "product": d.Product}).Info("Device stopped")
+	d.stop(true)
 	return 1
 }
 
@@ -457,7 +444,9 @@ func (d *Device) UpdateSpeedProfile(channelId int, profile string) uint8 {
 	}
 
 	if motherboards.GetMotherboardHeaderMode(channelId) == d.getBiosOperatingMode(channelId) {
-		return 0
+		// The profile exists, but OpenLinkHub must not silently take a header
+		// away from firmware/BIOS control.
+		return 7
 	}
 
 	// If the profile is liquid temperature, check for the presence of AIOs
@@ -509,6 +498,12 @@ func (d *Device) UpdateSpeedProfileBulk(channelIds []int, profile string) uint8 
 	profiles := temperatures.GetTemperatureProfile(profile)
 	if profiles == nil {
 		return 0
+	}
+
+	for _, channelId := range channelIds {
+		if motherboards.GetMotherboardHeaderMode(channelId) == d.getBiosOperatingMode(channelId) {
+			return 7
+		}
 	}
 
 	// If the profile is liquid temperature, check for the presence of AIOs
@@ -985,31 +980,12 @@ func (d *Device) SaveUserProfile(profileName string) uint8 {
 	if d.DeviceProfile != nil {
 		profilePath := pwd + "/database/profiles/" + d.Serial + "-" + profileName + ".json"
 
-		newProfile := d.DeviceProfile
+		newProfile := *d.DeviceProfile
 		newProfile.Path = profilePath
 		newProfile.Active = false
 
-		buffer, err := json.Marshal(newProfile)
-		if err != nil {
-			logger.Log(logger.Fields{"error": err}).Error("Unable to convert to json format")
-			return 0
-		}
-
-		file, err := os.Create(profilePath)
-		if err != nil {
-			logger.Log(logger.Fields{"error": err, "location": newProfile.Path}).Error("Unable to create new device profile")
-			return 0
-		}
-
-		_, err = file.Write(buffer)
-		if err != nil {
-			logger.Log(logger.Fields{"error": err, "location": newProfile.Path}).Error("Unable to write data")
-			return 0
-		}
-
-		err = file.Close()
-		if err != nil {
-			logger.Log(logger.Fields{"error": err, "location": newProfile.Path}).Error("Unable to close file handle")
+		if err := common.SaveJsonData(profilePath, newProfile); err != nil {
+			logger.Log(logger.Fields{"error": err, "location": newProfile.Path}).Error("Unable to save new device profile")
 			return 0
 		}
 		d.loadDeviceProfiles()
