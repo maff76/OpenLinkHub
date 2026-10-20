@@ -219,7 +219,7 @@ var (
 	colorAddresses               = []byte{0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f} // DDR4
 	temperatureAddresses         = []string{"0018", "0019", "001a", "001b", "001c", "001d", "001e", "001f"}
 	basePath                     = "/sys/bus/i2c/drivers"
-	rgbProfileUpgrade            = []string{"led", "nebula", "marquee", "spiralrainbow", "openrgbrainbowwave", "gradient", "pastelrainbow", "pastelspiralrainbow"}
+	rgbProfileUpgrade            = []string{"led", "nebula", "marquee", "spiralrainbow", "gradient", "pastelrainbow", "pastelspiralrainbow"}
 	rgbModes                     = []string{
 		"circle",
 		"circleshift",
@@ -235,7 +235,6 @@ var (
 		"nebula",
 		"off",
 		"rainbow",
-		"openrgbrainbowwave",
 		"pastelrainbow",
 		"rotator",
 		"spinner",
@@ -1730,13 +1729,6 @@ func (d *Device) setDeviceColor() {
 							r.Rainbow(startTime)
 							buff = r.Output
 						}
-					case "openrgbrainbowwave":
-						{
-							r.Frequency = profile.Frequency
-							r.RgbDirection = profile.RgbDirection
-							r.RainbowWave(startTime)
-							buff = r.Output
-						}
 					case "pastelrainbow":
 						{
 							r.PastelRainbow(startTime)
@@ -2240,7 +2232,6 @@ func (d *Device) UpdateRgbProfileData(profileName string, profile rgb.Profile) u
 	pf.MiddleColor = profile.MiddleColor
 	pf.Speed = profile.Speed
 	pf.RgbDirection = profile.RgbDirection
-	pf.Frequency = profile.Frequency
 	pf.Gradients = profile.Gradients
 
 	d.Rgb.Profiles[profileName] = *pf

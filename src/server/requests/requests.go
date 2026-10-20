@@ -61,7 +61,6 @@ type Payload struct {
 	Static                        bool                  `json:"static"`
 	AlternateColors               bool                  `json:"alternateColors"`
 	RgbDirection                  byte                  `json:"rgbDirection"`
-	Frequency                     float64               `json:"frequency"`
 	Sensor                        uint8                 `json:"sensor"`
 	HardwareLight                 int                   `json:"hardwareLight"`
 	ZeroRpm                       bool                  `json:"zeroRpm"`
@@ -741,7 +740,6 @@ func ProcessUpdateRgbProfile(r *http.Request) *Payload {
 		MaxTemp:         req.RgbMaxTemp,
 		AlternateColors: req.AlternateColors,
 		RgbDirection:    req.RgbDirection,
-		Frequency:       req.Frequency,
 		Gradients:       req.ColorZones,
 	}
 
