@@ -1,6 +1,7 @@
 package icueprofile
 
 import (
+	"OpenLinkHub/src/stats"
 	"OpenLinkHub/src/temperatures"
 	"fmt"
 	"math"
@@ -2059,38 +2060,53 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 // hardware/sensor package. Runtime editors/integrations may inject either key.
 func runtimeTemperature(l Layer) (float64, bool) {
 	// Explicit runtime injection remains the highest-priority source. This keeps
-	// the renderer testable and leaves room for future device-specific mappings
-	// (coolant probes, PSU channels, DIMMs, external hwmon, etc.).
+	// the renderer testable and also allows a device integration to supply a
+	// value that is more specific than an imported iCUE sensorId.
 	for _, key := range []string{"runtimeTemperature", "currentTemperature"} {
-		if v, ok := l.Parameters[key]; ok {
-			switch x := v.(type) {
-			case float64:
-				return x, true
-			case float32:
-				return float64(x), true
-			case int:
-				return float64(x), true
-			case string:
-				if f, err := strconv.ParseFloat(strings.TrimSpace(x), 64); err == nil {
-					return f, true
-				}
+		if v, ok := parameterFloat(l, key); ok {
+			return v, true
+		}
+	}
+
+	// OpenLinkHub-native source descriptors. These are deliberately generic:
+	// profile/import code can resolve an iCUE sensor to an OLH source once and
+	// leave the renderer to read that source on every frame.
+	if path := strings.TrimSpace(parameterString(l, "runtimeHwmonPath")); path != "" {
+		if temp := float64(temperatures.GetHwMonTemperature(path)); temp > 0 {
+			return temp, true
+		}
+	}
+	if channel, ok := parameterInt(l, "runtimeMemoryChannel"); ok {
+		if temp := float64(temperatures.GetMemoryTemperature(channel)); temp > 0 {
+			return temp, true
+		}
+	}
+	if device := strings.TrimSpace(parameterString(l, "runtimeSensorDevice")); device != "" {
+		channel, _ := parameterInt(l, "runtimeSensorChannel")
+		if strings.HasPrefix(strings.ToLower(device), "i2c") {
+			if temp := float64(temperatures.GetMemoryTemperature(channel)); temp > 0 {
+				return temp, true
 			}
+		} else if temp := float64(stats.GetDeviceTemperature(device, channel)); temp > 0 {
+			return temp, true
 		}
 	}
 
 	// Imported iCUE profiles preserve Corsair's authored sensorId, for example:
+	//   ...senstype<TemperaturePackage>sensindex<0>
 	//   ...senstype<TemperatureCore>sensindex<9>
-	// OpenLinkHub already owns CPU/GPU discovery in src/temperatures, so resolve
-	// those iCUE sensor families onto OLH's live values rather than probing the
-	// host a second time. A per-core iCUE source currently maps to OLH's CPU
-	// package temperature because OLH exposes a package-level getter here.
+	// OLH owns discovery, so map families onto its live sensor subsystem instead
+	// of probing hardware independently. Per-core iCUE sources currently map to
+	// OLH's CPU/package getter because OLH does not expose an equivalent per-core
+	// getter through this API.
 	sensorID := strings.ToLower(strings.TrimSpace(parameterString(l, "sensorId")))
 	if sensorID == "" {
 		return 0, false
 	}
 
 	switch {
-	case strings.Contains(sensorID, "temperaturecore"),
+	case strings.Contains(sensorID, "temperaturepackage"),
+		strings.Contains(sensorID, "temperaturecore"),
 		strings.Contains(sensorID, "temperaturecpu"),
 		strings.Contains(sensorID, "cputemperature"),
 		strings.Contains(sensorID, "senstype<cpu>"):
@@ -2103,9 +2119,93 @@ func runtimeTemperature(l Layer) (float64, bool) {
 		if temp := float64(temperatures.GetGpuTemperature()); temp > 0 {
 			return temp, true
 		}
+	case strings.Contains(sensorID, "temperaturememory"),
+		strings.Contains(sensorID, "temperaturedimm"),
+		strings.Contains(sensorID, "memorytemperature"),
+		strings.Contains(sensorID, "dimmtemperature"):
+		if channel, ok := sensorIndex(sensorID); ok {
+			if temp := float64(temperatures.GetMemoryTemperature(channel)); temp > 0 {
+				return temp, true
+			}
+		}
+	}
+
+	// Last, try matching a descriptive iCUE id against OLH's external hwmon
+	// inventory. This is intentionally conservative: a match must include a
+	// non-trivial sensor name/label/input token, so numeric Corsair VID/PID data
+	// cannot accidentally bind to an unrelated hwmon source.
+	if sensors, ok := temperatures.GetExternalHwMonSensors().([]temperatures.HwMonSensor); ok {
+		normID := normalizeSensorToken(sensorID)
+		for _, sensor := range sensors {
+			for _, candidate := range []string{sensor.Label, sensor.SensorName, sensor.InputName, sensor.HwmonName} {
+				token := normalizeSensorToken(candidate)
+				if len(token) >= 4 && strings.Contains(normID, token) && sensor.TempC > 0 {
+					return sensor.TempC, true
+				}
+			}
+		}
 	}
 
 	return 0, false
+}
+
+func parameterFloat(l Layer, key string) (float64, bool) {
+	v, ok := l.Parameters[key]
+	if !ok || v == nil {
+		return 0, false
+	}
+	switch x := v.(type) {
+	case float64:
+		return x, true
+	case float32:
+		return float64(x), true
+	case int:
+		return float64(x), true
+	case int32:
+		return float64(x), true
+	case int64:
+		return float64(x), true
+	case string:
+		f, err := strconv.ParseFloat(strings.TrimSpace(x), 64)
+		return f, err == nil
+	default:
+		f, err := strconv.ParseFloat(strings.TrimSpace(fmt.Sprint(v)), 64)
+		return f, err == nil
+	}
+}
+
+func parameterInt(l Layer, key string) (int, bool) {
+	v, ok := parameterFloat(l, key)
+	if !ok {
+		return 0, false
+	}
+	return int(v), true
+}
+
+func sensorIndex(sensorID string) (int, bool) {
+	const marker = "sensindex<"
+	pos := strings.Index(sensorID, marker)
+	if pos < 0 {
+		return 0, false
+	}
+	rest := sensorID[pos+len(marker):]
+	end := strings.IndexByte(rest, '>')
+	if end < 0 {
+		return 0, false
+	}
+	v, err := strconv.Atoi(strings.TrimSpace(rest[:end]))
+	return v, err == nil
+}
+
+func normalizeSensorToken(v string) string {
+	v = strings.ToLower(v)
+	var b strings.Builder
+	for _, r := range v {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 func parameterString(l Layer, key string) string {
