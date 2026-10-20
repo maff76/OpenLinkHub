@@ -1,11 +1,30 @@
-OpenLinkHub v12.4.74z7d9p — pinned conceptual layer workspace
+OpenLinkHub v12.4.74z7d9q — Profile Editor v2 UI foundation
+
+UI-only pass based on the current z7d9p conceptual-layer editor.
+No Go/parser/renderer/effect-maths/playback changes.
 
 Changed files:
+- web/icue-profiles.html
 - static/js/icue-profiles.js
 
-Fix:
-- Device/canvas selection no longer rebuilds the visible Lighting Layers list.
-- The currently selected conceptual Lighting Link layer stays selected when switching between QX/TITAN/Memory.
-- Only the selected layer's hardware compatibility target is re-resolved for the newly selected device family.
-- DRAM implementation layers (for example Master Chief Rain 1 + Rain 2) remain internal compatibility targets and are not exposed as extra editor layers.
-- No renderer maths, parser, topology, activation, timing, or source .cueprofile changes.
+Changes:
+- Removes the System Temperatures bar from the iCUE Profiles page only, giving the profile workspace the full page height.
+- Adds an always-visible Devices & Lighting Zones strip for all detected QX, TITAN and Memory devices while retaining the existing device dropdown and group shortcuts.
+- Keeps the conceptual layer list pinned; selecting hardware is still a backing-target/LED inspection action and does not replace the conceptual layer collection.
+- Adds an iCUE-style effect workbench above the existing live controls.
+- Wave, Ripple and Gradient use a transition-graph view when authored transition stops are available.
+- Graph X is authored transition time/position. Graph Y consumes an authored per-stop opacity/level if one is exposed; otherwise it deliberately displays 100% rather than inventing a value.
+- Friendly effect summaries added for Static, Rain, Wave, Ripple, Color Wave, Color Shift, Color Pulse, Infinity, Visor, Marquee, Sequential, Gradient, Watercolor, Spiral, Spiral Rainbow, Rainbow Wave, Rainbow, Blink and Breathe.
+- Adds missing discovered effect names InfinityLighting, BlinkLighting, BreatheLighting, RainbowLighting and BasicNoneLighting to the editor effect list.
+- Existing Effect Controls, Advanced/parsed parameters, Authored source values, Profile Output, Effect Clock, timing calibration and Rain A/B controls remain intact.
+- Transition + / x buttons are intentionally disabled in this UI-only pass; the graph is observational until profile stop editing semantics are fully verified.
+
+Cross-reference used:
+- iCUE screenshots supplied for Color Wave, Wave, Rain, Color Pulse, Marquee, Infinity, Color Shift, Visor, Ripple, Rotary Stack and Sequential.
+- Supplied wave.cueprofile, ripple.cueprofile, visor.cueprofile, infinity.cueprofile, color wave profile, Cobalt, Master Chief, Electricity and Sci-fi Dark fixtures.
+- Wave fixture confirms duration + transitions(time,color) + velocity + tailLength + isDoublesided + angle.
+- Ripple fixture confirms duration + transitions(time,color) + velocity + tailLength + autoDuration + waveSpread + colors.
+
+Still useful later (not required for this build):
+- A saved iCUE profile with one transition dot moved vertically from 100% would prove exactly how iCUE serializes the graph Y percentage.
+- Dedicated authored fixtures for Rotary Stack/Sequential/Marquee would let us mirror every hidden field rather than relying on the screenshots for their friendly layout.
