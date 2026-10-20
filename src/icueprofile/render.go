@@ -199,89 +199,75 @@ func (p *Profile) LinkDevice() *Device {
 	return nil
 }
 
-// dramCanvasMaxLED returns the highest concrete LED id referenced by a DRAM
-// compatibility entry. iCUE exports several DramSoftware layouts for different
-// module families/counts, so canvas size is part of selecting the correct entry.
-func dramCanvasMaxLED(d *Device) int {
-	if d == nil {
-		return -1
+// DRAMLightingTypeForHardware maps OpenLinkHub's measured physical DIMM type
+// onto the compatibility canvas names authored by iCUE.  The compatibility
+// canvas is semantic: it must not be guessed from the highest LED selected by
+// an effect because ConcreteLeds can intentionally leave the last canvas LED
+// unused (Cobalt and Electricity both prove that assumption false).
+func DRAMLightingTypeForHardware(name string, ledCount int) string {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	switch {
+	case strings.Contains(lower, "dominator platinum") && ledCount == 12:
+		return "Dominator"
+	case ledCount == 6:
+		// VENGEANCE RGB RS uses the six-LED Dram1030 compatibility canvas.
+		return "Dram1030"
+	case ledCount == 10:
+		// VENGEANCE RGB / PRO family uses the ten-LED Dram1031 canvas.
+		return "Dram1031"
+	default:
+		return "Default"
 	}
-	maxID := -1
-	for _, ch := range d.Channels {
-		for _, l := range ch.Layers {
-			for _, key := range l.LEDs {
-				m := ledNumber.FindStringSubmatch(strings.TrimSpace(key))
-				if len(m) != 2 {
-					continue
-				}
-				n, _ := strconv.Atoi(m[1])
-				if n > maxID {
-					maxID = n
-				}
+}
+
+// DRAMDeviceForType resolves an iCUE software-DRAM compatibility entry by its
+// authored deviceLightingType.  This is deliberately independent of layer LED
+// selections: selections describe effects, not the dimensions/type of a canvas.
+func (p *Profile) DRAMDeviceForType(deviceLightingType string) *Device {
+	want := strings.TrimSpace(deviceLightingType)
+	if want != "" {
+		for i := range p.Devices {
+			d := &p.Devices[i]
+			if strings.EqualFold(d.HIDCaps, "DramSoftware") && len(d.Channels) > 0 && strings.EqualFold(d.DeviceLightingType, want) {
+				return d
 			}
 		}
 	}
-	return maxID
-}
-
-// DRAMDeviceForLayout chooses the smallest software-DRAM compatibility canvas
-// that can represent the RGB memory actually installed. The previous global
-// "smallest canvas" rule could select a one-DIMM/10-LED compatibility entry for
-// a two-DIMM six-LED kit, causing ConcreteLeds and effect layers to disappear on
-// the second DIMM (and sometimes selecting the wrong family for both DIMMs).
-func (p *Profile) DRAMDeviceForLayout(moduleCount, ledCount int) *Device {
-	if moduleCount < 1 {
-		moduleCount = 1
-	}
-	if ledCount < 1 {
-		ledCount = 1
-	}
-	required := moduleCount * ledCount
-	var best *Device
-	bestSpan := int(^uint(0) >> 1)
-	var fallback *Device
-	fallbackSpan := int(^uint(0) >> 1)
+	// Default is iCUE's generic DRAM compatibility canvas and is a safer
+	// fallback than inferring a family from whichever effect happens to select
+	// the largest LED id.
 	for i := range p.Devices {
 		d := &p.Devices[i]
-		if !strings.EqualFold(d.HIDCaps, "DramSoftware") || len(d.Channels) == 0 {
-			continue
-		}
-		maxID := dramCanvasMaxLED(d)
-		if maxID < 0 {
-			continue
-		}
-		span := maxID + 1
-		if span >= required && span < fallbackSpan {
-			fallback, fallbackSpan = d, span
-		}
-		// Prefer a canvas whose module stride exactly matches the physical DIMM.
-		if span >= required && span%ledCount == 0 && span < bestSpan {
-			best, bestSpan = d, span
+		if strings.EqualFold(d.HIDCaps, "DramSoftware") && len(d.Channels) > 0 && strings.EqualFold(d.DeviceLightingType, "Default") {
+			return d
 		}
 	}
-	if best != nil {
-		return best
+	for i := range p.Devices {
+		d := &p.Devices[i]
+		if strings.EqualFold(d.HIDCaps, "DramSoftware") && len(d.Channels) > 0 {
+			return d
+		}
 	}
-	return fallback
+	return nil
 }
 
-// DRAMDevice retains the diagnostic/default lookup for callers that do not know
-// the installed layout. Runtime playback should use DRAMDeviceForLayout.
+// DRAMDeviceForHardware chooses the compatibility canvas from the physical
+// memory family known by OpenLinkHub.
+func (p *Profile) DRAMDeviceForHardware(name string, ledCount int) *Device {
+	return p.DRAMDeviceForType(DRAMLightingTypeForHardware(name, ledCount))
+}
+
+// DRAMDevice retains a generic diagnostic lookup for callers without physical
+// hardware context. Runtime playback should use DRAMDeviceForHardware.
 func (p *Profile) DRAMDevice() *Device {
-	return p.DRAMDeviceForLayout(1, 1)
+	return p.DRAMDeviceForType("Default")
 }
 
-// RenderDRAM renders one physical DIMM against the imported software-DRAM
-// canvas. OpenLinkHub reports VENGEANCE RGB RS DDR5 as six LEDs per DIMM.
-// Halo's compact DRAM compatibility entry spans 0..17 in six-LED groups, so
-// moduleOrdinal*ledCount is the proven selection mapping for this kit.
-//
-// Keep rendering on the established canvas path for now. The v10 experiment
-// moved DRAM through spatial topology rendering and caused the physical RGB
-// output to go black; that path is intentionally removed until its behaviour
-// can be isolated independently from the logical LED mapping.
-func (p *Profile) RenderDRAM(moduleOrdinal, moduleCount, ledCount int, started time.Time, brightness float64) ([]byte, []string) {
-	d := p.DRAMDeviceForLayout(moduleCount, ledCount)
+// RenderDRAM renders one physical DIMM using the layer stack authored by iCUE
+// for that DIMM family.  Each compatibility canvas owns its effects, colours
+// and ConcreteLeds selections; LINK layers are not projected onto DRAM.
+func (p *Profile) RenderDRAM(moduleOrdinal, ledCount int, hardwareName string, started time.Time, brightness float64) ([]byte, []string) {
+	d := p.DRAMDeviceForHardware(hardwareName, ledCount)
 	if d == nil || len(d.Channels) == 0 {
 		return make([]byte, ledCount*3), []string{"DRAM device entry missing"}
 	}

@@ -1,30 +1,53 @@
-OpenLinkHub v12.4.74z7d9i - effect + profile mapping audit fixes
+OpenLinkHub v12.4.74z7d9j — effect-family profile mapping fix
 
-Baseline: current z7d9h behaviour plus today's renderer/topology/editor work.
-Changed complete files only; no patch/diff files.
+Scope
+- Fixes imported iCUE compatibility-canvas selection for DRAM across all effects.
+- Makes the profile editor use the same hardware-family canvas as runtime playback.
+- Does not change the working z7d9h profile activation/lifecycle path.
+- Does not change effect timing/maths in this build.
 
-Confirmed audit fixes:
-1. DRAM compatibility canvas selection now uses the installed RGB DIMM layout.
-   The previous global "smallest DramSoftware canvas" rule could choose a one-DIMM
-   or wrong-LED-count compatibility entry. Runtime now chooses the smallest canvas
-   that covers moduleCount * ledCount and prefers an exact physical LED stride.
-2. RenderDRAM receives the actual RGB module count from memory.go, so two 6-LED
-   DIMMs resolve against a canvas that can represent at least 12 logical LEDs.
-3. Editor colours now consume Go-decoded sourceColors first. This supports packed
-   first=/second= Corsair ARGB values used by Rain/Wave/ColorWave instead of showing
-   black/missing colours when the browser cannot parse those leaves itself.
-4. Compatibility reporting is synchronized with renderer support for Breathe,
-   Ripple, Spiral, Visor, Marquee and Sequential.
+Root cause
+- iCUE profiles author separate compatibility canvases (LINK, Dram1030, Dram1031,
+  Dominator, Default). Their layer stacks, colours and ConcreteLeds selections can
+  differ substantially.
+- Canvas type must not be inferred from the highest LED touched by an effect.
+  Cobalt and Electricity prove that an authored effect may intentionally leave the
+  final canvas LEDs untouched.
+- Six-LED VENGEANCE RGB RS must consume Dram1030 directly; ten-LED VENGEANCE uses
+  Dram1031; 12-LED DOMINATOR PLATINUM RGB uses Dominator; unknown layouts fall
+  back to Default.
 
-Deliberately unchanged:
-- z7d9h profile activation / activeRgb lifecycle fix
-- LINK discovery/bounds hardening
-- measured QX/TITAN/Memory topology and raw mapper
-- live reset/group editing lifecycle
-- z7d9 maths/effect behaviour work
-- imported .cueprofile files remain immutable
+Runtime changes
+- Added DRAMLightingTypeForHardware / DRAMDeviceForType / DRAMDeviceForHardware.
+- RenderDRAM now selects the authored compatibility family from physical hardware
+  identity and renders that family's complete layer stack.
+- Memory playback passes the detected DIMM name and physical LED count into the
+  resolver.
+- Lighting Link wrappers inside a DRAM canvas still expand through the shared
+  profile LightingLinkProperty.
 
-Validation:
-- gofmt applied to changed Go files
-- node --check passes for icue-profiles.js
-- full Go compile not run: local Go 1.23.2 cannot download required Go 1.25 toolchain in this environment
+Editor changes
+- Selecting All Memory or a memory DIMM now changes the layer list to the matching
+  DRAM compatibility canvas instead of continuing to display LINK layers.
+- Six-LED memory therefore shows Dram1030's real layers/selections (for example
+  Master Chief: Visor + Rain 1 + Rain 2 + Green).
+- QX/TITAN continue to use the LINK workspace.
+- Live edits target the actual selected compatibility layer.
+
+Verification
+- gofmt: PASS on changed Go files.
+- node --check static/js/icue-profiles.js: PASS.
+- Standalone Go 1.23 icueprofile package test: PASS using the four supplied real
+  profiles: Master Chief, Cobalt, Electricity and Sci-fi Dark.
+- All four resolved six-LED VENGEANCE RGB RS to Dram1030 and produced non-black
+  six-LED frames with no unsupported effects at the sampled time.
+- Master Chief Dram1030 resolves four authored layers and rendered the expected
+  orange Visor colour on selected DRAM LEDs in the test frame.
+- Full OpenLinkHub compile not run: repository go.mod requires Go 1.25 while the
+  available environment is Go 1.23.2.
+
+Changed complete files only
+- src/icueprofile/render.go
+- src/devices/memory/memory.go
+- static/js/icue-profiles.js
+- BUILD-NOTES.txt
