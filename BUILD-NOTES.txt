@@ -1,20 +1,11 @@
-OpenLinkHub v12.4.74z7d9o — conceptual layer workspace
+OpenLinkHub v12.4.74z7d9p — pinned conceptual layer workspace
 
 Changed files:
 - static/js/icue-profiles.js
 
-Purpose:
-- Keep the editor layer list on the shared/conceptual LightingLink layer stack.
-- Do not expose DRAM compatibility implementation layers as extra user-facing layers.
-- Resolve the selected hardware's compatibility layers behind each conceptual layer.
-- For memory, combine matching compatibility LED selections for the diagram.
-- Mirror editor colour overrides to matching direct compatibility layers so Live Preview can use the edited colours on memory as well as LINK hardware.
-- Preserve the existing LightingLink wrapper selection behavior for QX/TITAN.
-
-Expected Master Chief workspace:
-- Halo FX Visor
-- Halo FX Rain
-- Halo FX Green
-
-The two Dram1030 Rain implementation layers remain in the parsed profile and renderer; they are not deleted or merged.
-No renderer maths, Rain timing, topology, parser, profile activation, or source .cueprofile changes.
+Fix:
+- Device/canvas selection no longer rebuilds the visible Lighting Layers list.
+- The currently selected conceptual Lighting Link layer stays selected when switching between QX/TITAN/Memory.
+- Only the selected layer's hardware compatibility target is re-resolved for the newly selected device family.
+- DRAM implementation layers (for example Master Chief Rain 1 + Rain 2) remain internal compatibility targets and are not exposed as extra editor layers.
+- No renderer maths, parser, topology, activation, timing, or source .cueprofile changes.
