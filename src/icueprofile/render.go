@@ -1849,10 +1849,17 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		applyLayerOpacity(l, a)
 		return c, a, true
 	case "rainbowlighting":
-		// Rainbow is a whole-selection hue cycle (no direction field in captures).
-		col := hsv(phase, 1, 1)
-		for i := range c {
-			c[i] = col
+		// OpenLinkHub's native Rainbow distributes the spectrum across the LED
+		// route and advances that spectrum as a time phase. Keep iCUE's captured
+		// speed semantics in the shared clock, but use the better spatial model.
+		for i := 0; i < n; i++ {
+			coord := float64(i)
+			span := float64(maxInt(n, 1))
+			if len(spatial) == n {
+				coord = spatial[i]
+				span = 17.0
+			}
+			c[i] = hsv(wrapPeriodic(coord/span+phase, 1), 1, 1)
 		}
 		applyLayerOpacity(l, a)
 		return c, a, true
@@ -1896,11 +1903,19 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		applyLayerOpacity(l, a)
 		return c, a, true
 	case "spiralrainbowlighting":
+		// Use OpenLinkHub's denser spatial rainbow idea, while retaining iCUE's
+		// rotary direction semantics. Captured Rotary/Spiral direction values use
+		// 5/6; keep the older clockwise flag as a fallback for legacy imports.
 		effectPhase := phase
-		clockwise := boolParam(l.Parameters["clockwise"], true)
-		if !clockwise {
+		direction := int(number(l.Parameters["direction"], 0))
+		reverse := direction == 6
+		if direction == 0 {
+			reverse = !boolParam(l.Parameters["clockwise"], true)
+		}
+		if reverse {
 			effectPhase = -effectPhase
 		}
+		const spiralDensity = 3.0
 		for i := 0; i < n; i++ {
 			coord := float64(i)
 			span := float64(maxInt(n, 1))
@@ -1908,10 +1923,7 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 				coord = spatial[i]
 				span = 17.0
 			}
-			hue := math.Mod(coord/span+effectPhase, 1)
-			if hue < 0 {
-				hue += 1
-			}
+			hue := wrapPeriodic((coord/span)*spiralDensity+effectPhase, 1)
 			c[i] = hsv(hue, 1, 1)
 		}
 		applyLayerOpacity(l, a)
