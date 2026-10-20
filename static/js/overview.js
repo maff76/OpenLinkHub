@@ -748,6 +748,10 @@ $(document).ready(function () {
                                     url = '/api/macro/';
                                 }
                                 break;
+                                case 21: {
+                                    url = '/api/device/profiles/' + deviceId;
+                                }
+                                break;
                             }
 
                             $.ajax({
@@ -760,7 +764,11 @@ $(document).ready(function () {
                                         if (mouseDevice) {
                                             $(keyAssignmentValue).append($('<option>', { value: index, text: value, selected: parseInt(index) === parseInt(data.deviceId) }));
                                         } else {
-                                            $(keyAssignmentValue).append($('<option>', { value: index, text: displayName, selected: parseInt(index) === parseInt(data.actionCommand) }));
+                                            if (data.actionType === 21) {
+                                                $(keyAssignmentValue).append($('<option>', { value: value, text: value, selected: value === data.deviceId }));
+                                            } else {
+                                                $(keyAssignmentValue).append($('<option>', { value: index, text: displayName, selected: parseInt(index) === parseInt(data.actionCommand) }));
+                                            }
                                         }
                                     });
                                 }
@@ -861,6 +869,19 @@ $(document).ready(function () {
                                             $(keyAssignmentValue).empty();
                                             $.each(result.data, function( index, value ) {
                                                 $(keyAssignmentValue).append($('<option>', { value: index, text: value.name }));
+                                            });
+                                        }
+                                    });
+                                }
+                                break;
+                                case 21: { // Change Profile
+                                    $.ajax({
+                                        url:'/api/device/profiles/' + deviceId,
+                                        type:'get',
+                                        success:function(result){
+                                            $(keyAssignmentValue).empty();
+                                            $.each(result.data, function(index, value) {
+                                                $(keyAssignmentValue).append($('<option>', { value: value, text: value }));
                                             });
                                         }
                                     });
@@ -971,7 +992,8 @@ $(document).ready(function () {
                                 if (
                                     parseInt(keyAssignmentType) === 8 ||
                                     parseInt(keyAssignmentType) === 2 ||
-                                    parseInt(keyAssignmentType) === 4
+                                    parseInt(keyAssignmentType) === 4 ||
+                                    parseInt(keyAssignmentType) === 21
                                 ) {
                                     pf["keyAssignmentValueString"] = keyAssignmentValue;
                                 } else {
@@ -1442,10 +1464,6 @@ $(document).ready(function () {
                                     url = '/api/macro/';
                                 }
                                 break;
-                                case 21: {
-                                    url = '/api/device/profiles/' + deviceId;
-                                }
-                                break;
                             }
 
                             $.ajax({
@@ -1458,11 +1476,7 @@ $(document).ready(function () {
                                         if (mouseDevice) {
                                             $(keyAssignmentValue).append($('<option>', { value: index, text: value, selected: parseInt(index) === parseInt(data.deviceId) }));
                                         } else {
-                                            if (data.actionType === 21) {
-                                                $(keyAssignmentValue).append($('<option>', { value: value, text: value, selected: value === data.deviceId }));
-                                            } else {
-                                                $(keyAssignmentValue).append($('<option>', { value: index, text: displayName, selected: parseInt(index) === parseInt(data.actionCommand) }));
-                                            }
+                                            $(keyAssignmentValue).append($('<option>', { value: index, text: displayName, selected: parseInt(index) === parseInt(data.actionCommand) }));
                                         }
                                     });
                                 }
@@ -1563,19 +1577,6 @@ $(document).ready(function () {
                                             $(keyAssignmentValue).empty();
                                             $.each(result.data, function( index, value ) {
                                                 $(keyAssignmentValue).append($('<option>', { value: index, text: value.name }));
-                                            });
-                                        }
-                                    });
-                                }
-                                break;
-                                case 21: { // Change Profile
-                                    $.ajax({
-                                        url:'/api/device/profiles/' + deviceId,
-                                        type:'get',
-                                        success:function(result){
-                                            $(keyAssignmentValue).empty();
-                                            $.each(result.data, function( index, value ) {
-                                                $(keyAssignmentValue).append($('<option>', { value: value, text: value }));
                                             });
                                         }
                                     });
@@ -2657,6 +2658,38 @@ $(document).ready(function () {
                 } catch (err) {
                     toast.warning(response.message);
                 }
+            }
+        });
+    });
+
+    $('.rgbPowerHub').on('click', function () {
+        const deviceId = $("#deviceId").val();
+        const enabled = $(this).data('enabled') === 1;
+        const buttons = $('.rgbPowerHub');
+        buttons.prop('disabled', true);
+
+        $.ajax({
+            url: '/api/color/power',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({
+                deviceId: deviceId,
+                enabled: enabled
+            }),
+            cache: false,
+            success: function (response) {
+                if (response?.status === 1) {
+                    $('.rgbPowerHub[data-enabled="1"]').prop('disabled', enabled);
+                    $('.rgbPowerHub[data-enabled="0"]').prop('disabled', !enabled);
+                    toast.success(response.message);
+                } else {
+                    buttons.prop('disabled', false);
+                    toast.warning(response?.message || 'Operation failed');
+                }
+            },
+            error: function () {
+                buttons.prop('disabled', false);
+                toast.warning('Request failed');
             }
         });
     });
@@ -5273,7 +5306,7 @@ $(document).ready(function () {
                             }
                             break;
                         }
-                        const modal = $(modalElement).modal('toggle');
+                                                const modal = $(modalElement).modal('toggle');
 
                         modal.on('hidden.bs.modal', function () {
                             modal.data('bs.modal', null);
@@ -5529,7 +5562,7 @@ $(document).ready(function () {
             data: json,
             cache: false,
             success: function(response) {
-                try {
+                                try {
                     if (response.status === 1) {
                         toast.success(response.message);
                     } else {

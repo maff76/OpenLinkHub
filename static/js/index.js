@@ -76,277 +76,241 @@ $(document).ready(function () {
         });
     }
 
-    function renderDevice(dev) {
-        let html = `<div class="row g-4 mb-4 align-items-start">`;
-        const label = showLabels && dev.device.DeviceProfile?.Label
-            ? dev.device.DeviceProfile.Label
-            : "";
+    function dashboardValue(value, fallback = "—") {
+        if (value === undefined || value === null || value === "") {
+            return fallback;
+        }
+        return value;
+    }
 
-        // Single device
-        if (dev.device.devices === null) {
-            if (dev.device.HasLCD) {
-                html += `
-                <div class="col-md-2">
-                    <div class="card system-card">
-                        <div class="card-header header-split">
-                            <span class="header-left">${dev.device.product}</span>
-                            <span class="header-right">${label}</span>
-                        </div>
-                        <div class="card-body">
-                            <div class="settings-list">
-                `;
+    function renderStatusPill(label, value, cssClass = "") {
+        if (value === undefined || value === null || value === "") {
+            return "";
+        }
+        return `
+            <span class="dashboard-status ${cssClass}">
+                <span class="dashboard-status-label">${label}</span>
+                <span class="dashboard-status-value">${value}</span>
+            </span>
+        `;
+    }
 
-                if (dev.device.Temperature > 0) {
-                    let tempString = i18n.t('txtTemperature');
-                    if (dev.device.AIO || dev.device.IsCpuBlock) {
-                        tempString = i18n.t('txtLiquidTemp');
-                    }
-                    html += `
-                                <div class="settings-row">
-                                    <span class="settings-label text-ellipsis">${tempString}</span>
-                                    <span class="meta-value" id="temperature-0">${dev.device.temperatureString}</span>
-                                </div>
-                            `;
-                }
-            }
-            html += `
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            `;
-        } else if (dev.device.IsPSU) {
-            $.each(dev.device.devices, function (_, device) {
-                if (device.IsTemperatureProbe || device.HasSpeed || device.Output) {
-                    return
-                }
+    function renderCompactChannel(parent, device) {
+        const rawLabel = typeof device?.label === "string" ? device.label.trim() : "";
+        const hasCustomLabel = showLabels && rawLabel !== "" && rawLabel.toLowerCase() !== "set label";
+        const label = hasCustomLabel ? rawLabel : "";
+        const baseName = device.name || device.description || parent.product || "Device";
+        const channelSuffix = Number(device.channelId) > 0 ? ` · Ch ${device.channelId}` : "";
+        const displayName = label || `${baseName}${channelSuffix}`;
+        const hasTemperature = Number(device.temperature) > 0;
+        const hasSpeed = device.HasSpeed === true || device.hasSpeed === true;
+        const hasProfile = hasSpeed && typeof device.profile === "string" && device.profile.length > 0;
+        const hasRgb = typeof device.rgb === "string" && device.rgb.length > 0;
+        const serial = parent.serial;
 
-                const label = showLabels && device?.label
-                    ? device?.label
-                    : "";
-
-                html += `
-                <div class="col-md-2">
-                    <div class="card system-card">
-                        <div class="card-header header-split">
-                            <span class="header-left">${device.name}</span>
-                            <span class="header-right">${label}</span>
-                        </div>
-                        <div class="card-body">
-                            <div class="settings-list">
-                `;
-
-                if (device.MainPSU) {
-                    html += `
-                                <div class="settings-row">
-                                    <span class="settings-label text-ellipsis">${i18n.t('txtSpeed')}</span>
-                                    <span class="meta-value" id="speed-${dev.device.serial}-${device.channelId}">${device.rpm} RPM</span>
-                                </div>
-                                <div class="settings-row">
-                                    <span class="settings-label text-ellipsis">${i18n.t('txtVrmTemperature')}</span>
-                                    <span class="meta-value" id="vrm-temp-${dev.device.serial}-${device.channelId}">${device.vrmTemperatureString}</span>
-                                </div>
-                                <div class="settings-row">
-                                    <span class="settings-label text-ellipsis">${i18n.t('txtPsuTemperature')}</span>
-                                    <span class="meta-value" id="psu-temp-${dev.device.serial}-${device.channelId}">${device.psuTemperatureString}</span>
-                                </div>
-                            `;
-                }
-
-
-                if (device.HasWatts) {
-                    html += `
-                                <div class="settings-row">
-                                    <span class="settings-label text-ellipsis">${i18n.t('txtWatts')}</span>
-                                    <span class="meta-value" id="watts-${dev.device.serial}-${device.channelId}">${device.watts} W</span>
-                                </div>
-                            `;
-                }
-
-                if (device.HasAmps) {
-                    html += `
-                                <div class="settings-row">
-                                    <span class="settings-label text-ellipsis">${i18n.t('txtAmps')}</span>
-                                    <span class="meta-value" id="amps-${dev.device.serial}-${device.channelId}">${device.amps} A</span>
-                                </div>
-                            `;
-                }
-
-                if (device.HasVolts) {
-                    html += `
-                                <div class="settings-row">
-                                    <span class="settings-label text-ellipsis">${i18n.t('txtVolts')}</span>
-                                    <span class="meta-value" id="volts-${dev.device.serial}-${device.channelId}">${device.volts} V</span>
-                                </div>
-                            `;
-                }
-
-                html += `
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            `;
-            });
-        } else {
-            $.each(dev.device.devices, function (_, device) {
-                if (device.HasSpeed === false && device.HasTemps === false) {
-                    return
-                }
-                let cssClass = "col-md-2";
-                if (device.volts) {
-                    cssClass = "col-md-3";
-                }
-                const label = showLabels && device?.label
-                    ? device?.label
-                    : "";
-
-                html += `
-                <div class="${cssClass}">
-                    <div class="card system-card">
-                        <div class="card-header header-split">
-                            <span class="header-left">${device.name}</span>
-                            <span class="header-right">${label}</span>
-                        </div>
-                        <div class="card-body">
-                            <div class="settings-list">
-                `;
-
-                if (device.temperature > 0) {
-                    let tempString = i18n.t('txtTemperature');
-                    if (device.AIO || device.IsCpuBlock) {
-                        tempString = i18n.t('txtLiquidTemp');
-                    }
-                    html += `
-                                <div class="settings-row">
-                                    <span class="settings-label text-ellipsis">${tempString}</span>
-                                    <span class="meta-value" id="temp-${dev.device.serial}-${device.channelId}">${device.temperatureString}</span>
-                                </div>
-                            `;
-                }
-
-                if (device.HasSpeed) {
-                    html += `
-                                <div class="settings-row">
-                                    <span class="settings-label text-ellipsis">${i18n.t('txtSpeed')}</span>
-                                    <span class="meta-value" id="speed-${dev.device.serial}-${device.channelId}">${device.rpm} RPM</span>
-                                </div>
-                            `;
-                }
-
-                if (device.gpuTemperature > 0) {
-                    let tempString = i18n.t('txtTemperature');
-                    if (device.AIO || device.IsCpuBlock) {
-                        tempString = i18n.t('txtGpuLiquid');
-                    }
-                    html += `
-                                <div class="settings-row">
-                                    <span class="settings-label text-ellipsis">${tempString}</span>
-                                    <span class="meta-value" id="gpuTemp-${dev.device.serial}-${device.channelId}">${device.gpuTemperatureString}</span>
-                                </div>
-                            `;
-                }
-
-                if (device.gpuRpm > 0) {
-                    html += `
-                                <div class="settings-row">
-                                    <span class="settings-label text-ellipsis">${i18n.t('txtGpuPump')}</span>
-                                    <span class="meta-value" id="gpuSpeed-${dev.device.serial}-${device.channelId}">${device.gpuRpm} RPM</span>
-                                </div>
-                            `;
-                }
-
-                if (device.speed > 0) {
-                    html += `
-                                <div class="settings-row">
-                                    <span class="settings-label text-ellipsis">${i18n.t('txtSpeed')}</span>
-                                    <span class="meta-value">${device.speed} MHz</span>
-                                </div>
-                            `;
-                }
-
-                if (device.size > 0) {
-                    html += `
-                                <div class="settings-row">
-                                    <span class="settings-label text-ellipsis">${i18n.t('txtMemorySize')}</span>
-                                    <span class="meta-value">${device.size} GG</span>
-                                </div>
-                            `;
-                }
-
-                if (device.HasWatts) {
-                    html += `
-                                <div class="settings-row">
-                                    <span class="settings-label text-ellipsis">${i18n.t('txtWatts')}</span>
-                                    <span class="meta-value" id="watts-${dev.device.serial}-${device.channelId}">${device.watts} W</span>
-                                </div>
-                            `;
-                }
-
-                if (device.HasAmps) {
-                    html += `
-                                <div class="settings-row">
-                                    <span class="settings-label text-ellipsis">${i18n.t('txtAmps')}</span>
-                                    <span class="meta-value" id="amps-${dev.device.serial}-${device.channelId}">${device.amps} A</span>
-                                </div>
-                            `;
-                }
-
-                if (device.HasVolts) {
-                    html += `
-                                <div class="settings-row">
-                                    <span class="settings-label text-ellipsis">${i18n.t('txtVolts')}</span>
-                                    <span class="meta-value" id="volts-${dev.device.serial}-${device.channelId}">${device.volts} V</span>
-                                </div>
-                            `;
-                }
-
-                if (device.volts) {
-                    html += `
-                                <div class="settings-row settings-row-equal">
-                                    <span class="settings-label text-ellipsis">${i18n.t('txtOutput')}</span>
-                                    <span class="meta-value text-right" id="powerOut-${device.channelId}">${device.powerOutString} W</span>
-                                </div>
-                        `;
-
-                    $.each(device.volts, function (key, rail) {
-                        const amps = device.amps[key];
-                        const watts = device.watts[key];
-
-                        let railName = "";
-                        switch (parseInt(key)) {
-                            case 0:
-                                railName = "3.3V Rail"
-                                break
-                            case 1:
-                                railName = "5V Rail"
-                                break
-                            case 2:
-                                railName = "12V Rail"
-                                break
-                        }
-                        html += `
-                                <div class="settings-row settings-row-equal">
-                                    <span class="settings-label text-ellipsis">${railName}</span>
-                                    <span class="meta-value text-right" id="volts-${device.channelId}-${key}">${rail.ValueString} V</span>
-                                    <span class="meta-value text-right" id="amps-${device.channelId}-${key}">${amps.ValueString} A</span>
-                                    <span class="meta-value text-right" id="watts-${device.channelId}-${key}">${watts.ValueString} W</span>
-                                </div>
-                        `;
-                    });
-                }
-
-                html += `
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            `;
-            });
+        let primary = "";
+        if (hasTemperature) {
+            primary += `
+                <div class="dashboard-reading temperature">
+                    <span class="dashboard-reading-value" id="temp-${serial}-${device.channelId}">${device.temperatureString}</span>
+                </div>`;
+        }
+        if (hasSpeed) {
+            primary += `
+                <div class="dashboard-reading speed">
+                    <span class="dashboard-reading-value" id="speed-${serial}-${device.channelId}">${device.rpm} RPM</span>
+                </div>`;
         }
 
-        html += `</div>`;
-        return html;
+        let status = "";
+        const isMemory = Number(device.memoryType) === 4 || Number(device.memoryType) === 5 ||
+            device.xmpPresent === true || Number(device.configuredSpeed) > 0 || Number(device.jedecDataRate) > 0;
+
+        if (isMemory) {
+            const ddr = Number(device.memoryType) > 0 ? `DDR${device.memoryType}` : "DDR";
+            const configured = Number(device.configuredSpeed) > 0 ? `${ddr}-${device.configuredSpeed}` : "";
+            const jedec = Number(device.jedecDataRate) > 0 ? `${ddr}-${device.jedecDataRate}` : "";
+            const xmp = Number(device.xmpDataRate) > 0 ? `${ddr}-${device.xmpDataRate}` : "";
+            const timings = Number(device.xmpCasLatency) > 0 && Number(device.xmpTRAS) > 0
+                ? `CL${device.xmpCasLatency}-${device.xmpTRCD}-${device.xmpTRP}-${device.xmpTRAS}` : "";
+            const voltage = Number(device.xmpVdd) > 0 ? `${Number(device.xmpVdd).toFixed(2)} V` : "";
+            if (configured) status += renderStatusPill("Configured", configured, "memory-info");
+            else if (jedec) status += renderStatusPill("JEDEC", jedec, "memory-info");
+            if (device.capacity) status += renderStatusPill("Capacity", device.capacity, "memory-info");
+            if (xmp) status += renderStatusPill("XMP", [xmp, timings, voltage].filter(Boolean).join(" · "), "memory-info");
+            if (device.i2cAddress) status += renderStatusPill("SPD", device.i2cAddress, "memory-info");
+        }
+
+        if (hasProfile) {
+            status += renderStatusPill("Speed profile", device.profile, "speed-profile");
+        }
+        if (hasRgb) {
+            // Time Warp is a per-channel override. The stored RGB profile can still be
+            // "static" while Time Warp is actively driving the LEDs, so prefer the
+            // effective state on the dashboard.
+            const timewarpMap = parent.DeviceProfile?.Timewarp || parent.DeviceProfile?.timewarp || {};
+            const timewarp = timewarpMap[device.channelId] || timewarpMap[String(device.channelId)];
+            const effectiveRgb = timewarp?.Enabled === true || timewarp?.enabled === true
+                ? "Time Warp"
+                : device.rgb;
+            status += renderStatusPill("RGB", effectiveRgb, "rgb-profile");
+        }
+
+        // Keep less common telemetry visible without turning the overview into a control page.
+        if (device.gpuTemperature > 0) {
+            status += renderStatusPill(i18n.t('txtGpuLiquid'), device.gpuTemperatureString);
+        }
+        if (device.gpuRpm > 0) {
+            status += renderStatusPill(i18n.t('txtGpuPump'), device.gpuRpm + " RPM");
+        }
+        if (device.speed > 0) {
+            status += renderStatusPill("Clock", device.speed + " MHz");
+        }
+        if (device.size > 0) {
+            status += renderStatusPill(i18n.t('txtMemorySize'), device.size + " GB");
+        }
+
+        return `
+            <div class="dashboard-channel">
+                <div class="dashboard-channel-name" title="${displayName}">${displayName}</div>
+                <div class="dashboard-channel-readings">${primary}</div>
+                ${status ? `<div class="dashboard-channel-status">${status}</div>` : ""}
+            </div>
+        `;
+    }
+
+    function renderChannelGroup(title, parent, devices) {
+        let channels = "";
+        let channelCount = 0;
+        $.each(devices, function (_, device) {
+            const hasSpeed = device.HasSpeed === true || device.hasSpeed === true;
+            const hasTemps = device.HasTemps === true || device.hasTemps === true || Number(device.temperature) > 0;
+            if (!hasSpeed && !hasTemps) return;
+            channels += renderCompactChannel(parent, device);
+            channelCount++;
+        });
+        if (!channels) return "";
+        const countClass = channelCount >= 1 && channelCount <= 12 ? ` channels-${channelCount}` : "";
+        return `
+            <div class="dashboard-channel-group">
+                <div class="dashboard-channel-group-heading">
+                    <span>${title}</span>
+                    <span>${channelCount}</span>
+                </div>
+                <div class="dashboard-channel-grid${countClass}">${channels}</div>
+            </div>`;
+    }
+
+    function isLinkSystemHub(parent) {
+        const product = String(parent.product || parent.Product || "").toLowerCase();
+        return product.includes("link system hub");
+    }
+
+    function renderLinkSystemHub(parent, sectionTitle) {
+        const fans = [];
+        const specialised = [];
+        $.each(parent.devices || [], function (_, device) {
+            const name = String(device.name || device.description || "").toLowerCase();
+            const isPsu = device.IsPSU === true || device.isPSU === true || name.includes("hx") && name.includes("i");
+            const isPump = device.ContainsPump === true || device.containsPump === true || name.includes("titan") || name.includes("aio") || name.includes("pump");
+            if (isPsu || isPump) specialised.push(device);
+            else fans.push(device);
+        });
+
+        const fanHtml = renderChannelGroup("QX Fans", parent, fans);
+        const deviceHtml = renderChannelGroup("LINK Devices", parent, specialised);
+        const total = fans.length + specialised.length;
+        return `
+            <section class="dashboard-device-section">
+                <div class="dashboard-device-heading">
+                    <span>${sectionTitle}</span>
+                    <span class="dashboard-device-count">${total} ${total === 1 ? "channel" : "channels"}</span>
+                </div>
+                ${fanHtml}${deviceHtml}
+            </section>`;
+    }
+
+    function renderDevice(dev) {
+        const parent = dev.device;
+        const parentLabel = showLabels && parent.DeviceProfile?.Label ? parent.DeviceProfile.Label : "";
+        const sectionTitle = parentLabel || parent.product || parent.Product || "Device";
+
+        if (isLinkSystemHub(parent)) {
+            return renderLinkSystemHub(parent, sectionTitle);
+        }
+
+        // Keep the existing richer PSU presentation; its voltage/current rails do not fit the compact
+        // temperature/RPM dashboard layout particularly well.
+        if (parent.IsPSU) {
+            let html = `<div class="row g-4 mb-4 align-items-start">`;
+            $.each(parent.devices, function (_, device) {
+                if (device.IsTemperatureProbe || device.HasSpeed || device.Output) {
+                    return;
+                }
+                const rawLabel = typeof device?.label === "string" ? device.label.trim() : "";
+                const label = showLabels && rawLabel !== "" && rawLabel.toLowerCase() !== "set label" ? rawLabel : "";
+                html += `
+                    <div class="col-md-3">
+                        <div class="card system-card">
+                            <div class="card-header header-split">
+                                <span class="header-left">${device.name}</span>
+                                <span class="header-right">${label}</span>
+                            </div>
+                            <div class="card-body"><div class="settings-list">`;
+                if (device.MainPSU) {
+                    html += `
+                        <div class="settings-row"><span class="settings-label text-ellipsis">${i18n.t('txtSpeed')}</span><span class="meta-value" id="speed-${parent.serial}-${device.channelId}">${device.rpm} RPM</span></div>
+                        <div class="settings-row"><span class="settings-label text-ellipsis">${i18n.t('txtVrmTemperature')}</span><span class="meta-value" id="vrm-temp-${parent.serial}-${device.channelId}">${device.vrmTemperatureString}</span></div>
+                        <div class="settings-row"><span class="settings-label text-ellipsis">${i18n.t('txtPsuTemperature')}</span><span class="meta-value" id="psu-temp-${parent.serial}-${device.channelId}">${device.psuTemperatureString}</span></div>`;
+                }
+                if (device.HasWatts) html += `<div class="settings-row"><span class="settings-label text-ellipsis">${i18n.t('txtWatts')}</span><span class="meta-value" id="watts-${parent.serial}-${device.channelId}">${device.watts} W</span></div>`;
+                if (device.HasAmps) html += `<div class="settings-row"><span class="settings-label text-ellipsis">${i18n.t('txtAmps')}</span><span class="meta-value" id="amps-${parent.serial}-${device.channelId}">${device.amps} A</span></div>`;
+                if (device.HasVolts) html += `<div class="settings-row"><span class="settings-label text-ellipsis">${i18n.t('txtVolts')}</span><span class="meta-value" id="volts-${parent.serial}-${device.channelId}">${device.volts} V</span></div>`;
+                html += `</div></div></div></div>`;
+            });
+            html += `</div>`;
+            return html;
+        }
+
+        // Single devices (CPU blocks, etc.) get the same read-only dashboard language.
+        if (parent.devices === null) {
+            let readings = "";
+            if (parent.Temperature > 0 || parent.temperature > 0) {
+                readings = `<div class="dashboard-reading temperature"><span class="dashboard-reading-value" id="temperature-0">${parent.temperatureString}</span><span class="dashboard-reading-label">${parent.AIO || parent.IsCpuBlock ? i18n.t('txtLiquidTemp') : i18n.t('txtTemperature')}</span></div>`;
+            }
+            return `
+                <section class="dashboard-device-section">
+                    <div class="dashboard-device-heading"><span>${sectionTitle}</span></div>
+                    <div class="dashboard-single-device">${readings}</div>
+                </section>`;
+        }
+
+        let channels = "";
+        let channelCount = 0;
+        $.each(parent.devices, function (_, device) {
+            const hasSpeed = device.HasSpeed === true || device.hasSpeed === true;
+            const hasTemps = device.HasTemps === true || device.hasTemps === true || Number(device.temperature) > 0;
+            if (!hasSpeed && !hasTemps) {
+                return;
+            }
+            channels += renderCompactChannel(parent, device);
+            channelCount++;
+        });
+
+        if (!channels) {
+            return "";
+        }
+
+        const countClass = channelCount >= 1 && channelCount <= 12 ? ` channels-${channelCount}` : "";
+        return `
+            <section class="dashboard-device-section">
+                <div class="dashboard-device-heading">
+                    <span>${sectionTitle}</span>
+                    <span class="dashboard-device-count">${channelCount} ${channelCount === 1 ? "channel" : "channels"}</span>
+                </div>
+                <div class="dashboard-channel-grid${countClass}">${channels}</div>
+            </section>
+        `;
     }
 
     function autoRefresh() {
