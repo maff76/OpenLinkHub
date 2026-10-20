@@ -199,37 +199,76 @@ func (p *Profile) LinkDevice() *Device {
 	return nil
 }
 
-// DRAMDevice returns the most compact software-DRAM layout in the profile.
-// iCUE exports several compatibility layouts; the smallest Led_Cmd canvas is
-// the best match for current OpenLinkHub DIMMs and avoids applying large
-// Dominator compatibility canvases to Vengeance modules.
-func (p *Profile) DRAMDevice() *Device {
+// dramCanvasMaxLED returns the highest concrete LED id referenced by a DRAM
+// compatibility entry. iCUE exports several DramSoftware layouts for different
+// module families/counts, so canvas size is part of selecting the correct entry.
+func dramCanvasMaxLED(d *Device) int {
+	if d == nil {
+		return -1
+	}
+	maxID := -1
+	for _, ch := range d.Channels {
+		for _, l := range ch.Layers {
+			for _, key := range l.LEDs {
+				m := ledNumber.FindStringSubmatch(strings.TrimSpace(key))
+				if len(m) != 2 {
+					continue
+				}
+				n, _ := strconv.Atoi(m[1])
+				if n > maxID {
+					maxID = n
+				}
+			}
+		}
+	}
+	return maxID
+}
+
+// DRAMDeviceForLayout chooses the smallest software-DRAM compatibility canvas
+// that can represent the RGB memory actually installed. The previous global
+// "smallest canvas" rule could select a one-DIMM/10-LED compatibility entry for
+// a two-DIMM six-LED kit, causing ConcreteLeds and effect layers to disappear on
+// the second DIMM (and sometimes selecting the wrong family for both DIMMs).
+func (p *Profile) DRAMDeviceForLayout(moduleCount, ledCount int) *Device {
+	if moduleCount < 1 {
+		moduleCount = 1
+	}
+	if ledCount < 1 {
+		ledCount = 1
+	}
+	required := moduleCount * ledCount
 	var best *Device
-	bestMax := int(^uint(0) >> 1)
+	bestSpan := int(^uint(0) >> 1)
+	var fallback *Device
+	fallbackSpan := int(^uint(0) >> 1)
 	for i := range p.Devices {
 		d := &p.Devices[i]
 		if !strings.EqualFold(d.HIDCaps, "DramSoftware") || len(d.Channels) == 0 {
 			continue
 		}
-		maxID := -1
-		for _, ch := range d.Channels {
-			for _, l := range ch.Layers {
-				for _, key := range l.LEDs {
-					m := ledNumber.FindStringSubmatch(strings.TrimSpace(key))
-					if len(m) == 2 {
-						n, _ := strconv.Atoi(m[1])
-						if n > maxID {
-							maxID = n
-						}
-					}
-				}
-			}
+		maxID := dramCanvasMaxLED(d)
+		if maxID < 0 {
+			continue
 		}
-		if maxID >= 0 && maxID < bestMax {
-			best, bestMax = d, maxID
+		span := maxID + 1
+		if span >= required && span < fallbackSpan {
+			fallback, fallbackSpan = d, span
+		}
+		// Prefer a canvas whose module stride exactly matches the physical DIMM.
+		if span >= required && span%ledCount == 0 && span < bestSpan {
+			best, bestSpan = d, span
 		}
 	}
-	return best
+	if best != nil {
+		return best
+	}
+	return fallback
+}
+
+// DRAMDevice retains the diagnostic/default lookup for callers that do not know
+// the installed layout. Runtime playback should use DRAMDeviceForLayout.
+func (p *Profile) DRAMDevice() *Device {
+	return p.DRAMDeviceForLayout(1, 1)
 }
 
 // RenderDRAM renders one physical DIMM against the imported software-DRAM
@@ -241,8 +280,8 @@ func (p *Profile) DRAMDevice() *Device {
 // moved DRAM through spatial topology rendering and caused the physical RGB
 // output to go black; that path is intentionally removed until its behaviour
 // can be isolated independently from the logical LED mapping.
-func (p *Profile) RenderDRAM(moduleOrdinal, ledCount int, started time.Time, brightness float64) ([]byte, []string) {
-	d := p.DRAMDevice()
+func (p *Profile) RenderDRAM(moduleOrdinal, moduleCount, ledCount int, started time.Time, brightness float64) ([]byte, []string) {
+	d := p.DRAMDeviceForLayout(moduleCount, ledCount)
 	if d == nil || len(d.Channels) == 0 {
 		return make([]byte, ledCount*3), []string{"DRAM device entry missing"}
 	}

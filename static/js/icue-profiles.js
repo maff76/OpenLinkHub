@@ -43,11 +43,17 @@ $(function () {
     }
     function authoredColors(){
         const out=[];
-        const add=raw=>{const c=authoredColorFromLeaf(raw);if(c&&!out.includes(c))out.push(c);};
-        ((currentLayer&&currentLayer.rawColorValues)||[]).forEach(add);
+        const addHex=raw=>{const s=String(raw||'').trim().toLowerCase();if(/^#[0-9a-f]{6}$/.test(s)&&!out.includes(s))out.push(s);};
+        const addLeaf=raw=>{const c=authoredColorFromLeaf(raw);if(c&&!out.includes(c))out.push(c);};
+        // sourceColors is decoded by Go from the same Corsair colour formats used
+        // by playback, including packed first=/second= ARGB values used by Rain,
+        // Wave and Color Wave. The old browser-only decoder understood only
+        // color=#... leaves, so valid packed colours appeared black/missing.
+        ((currentLayer&&currentLayer.sourceColors)||[]).forEach(addHex);
+        ((currentLayer&&currentLayer.rawColorValues)||[]).forEach(addLeaf);
         if(!out.length){
             const a=authoredParameters();
-            ['color','colors','transitions'].forEach(k=>{const p=a[k];if(p&&Array.isArray(p.rawValues))p.rawValues.forEach(add);});
+            ['color','colors','transitions'].forEach(k=>{const p=a[k];if(p&&Array.isArray(p.rawValues))p.rawValues.forEach(addLeaf);});
         }
         return out;
     }

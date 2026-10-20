@@ -1597,7 +1597,7 @@ func (d *Device) setDeviceColor() {
 							brightness = d.GlobalBrightness
 						}
 						moduleOrdinal := d.rgbModuleOrdinal(k)
-						output, unsupported := imported.RenderDRAM(moduleOrdinal, int(d.Devices[k].LedChannels), startTime, brightness)
+						output, unsupported := imported.RenderDRAM(moduleOrdinal, len(keys), int(d.Devices[k].LedChannels), startTime, brightness)
 
 						// Final raw DIMM byte-frame override. Memory topology is intentionally
 						// not required here because this probe is what measures that topology.

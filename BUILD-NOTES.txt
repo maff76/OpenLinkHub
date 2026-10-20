@@ -1,13 +1,30 @@
-OpenLinkHub v12.4.74z7d9h - safe profile activation + RGB worker ownership
+OpenLinkHub v12.4.74z7d9i - effect + profile mapping audit fixes
 
-Baseline: user-supplied current source OpenLinkHub(20261019-231840).zip, retaining today's renderer/topology/group/live-reset work, plus the verified z7d9d store regression repair.
+Baseline: current z7d9h behaviour plus today's renderer/topology/editor work.
+Changed complete files only; no patch/diff files.
 
-Changes:
-- Profile selection loads editor controls independently of hardware activation.
-- One /api/color activation per physical OpenLinkHub device using channelId -1; no per-channel/bulk fan-out.
-- Same-profile editor refreshes and layer-structure refreshes do not restart hardware RGB.
-- LSH and memory UpdateRgbProfile calls are serialized with the existing rgbMutex.
-- Dynamic RGB workers now own a local ActiveRGB handle created before goroutine launch; worker exit no longer dereferences mutable d.activeRgb.
-- Restores ImportedProfile.Key and WorkspaceLayerCount from z7d9d.
+Confirmed audit fixes:
+1. DRAM compatibility canvas selection now uses the installed RGB DIMM layout.
+   The previous global "smallest DramSoftware canvas" rule could choose a one-DIMM
+   or wrong-LED-count compatibility entry. Runtime now chooses the smallest canvas
+   that covers moduleCount * ledCount and prefers an exact physical LED stride.
+2. RenderDRAM receives the actual RGB module count from memory.go, so two 6-LED
+   DIMMs resolve against a canvas that can represent at least 12 logical LEDs.
+3. Editor colours now consume Go-decoded sourceColors first. This supports packed
+   first=/second= Corsair ARGB values used by Rain/Wave/ColorWave instead of showing
+   black/missing colours when the browser cannot parse those leaves itself.
+4. Compatibility reporting is synchronized with renderer support for Breathe,
+   Ripple, Spiral, Visor, Marquee and Sequential.
 
-No effect maths, topology, mapper, LINK discovery/bounds, or imported .cueprofile persistence semantics were removed.
+Deliberately unchanged:
+- z7d9h profile activation / activeRgb lifecycle fix
+- LINK discovery/bounds hardening
+- measured QX/TITAN/Memory topology and raw mapper
+- live reset/group editing lifecycle
+- z7d9 maths/effect behaviour work
+- imported .cueprofile files remain immutable
+
+Validation:
+- gofmt applied to changed Go files
+- node --check passes for icue-profiles.js
+- full Go compile not run: local Go 1.23.2 cannot download required Go 1.25 toolchain in this environment
