@@ -657,10 +657,23 @@ $ curl -X POST http://127.0.0.1:27003/api/speed -d '{"deviceId":"40027074EFEBF25
 ```bash
 $ curl -X POST http://127.0.0.1:27003/api/speed -d '{ "deviceId":"5C126A3EB51A39569ABADC4C3A1FCF54", "channelId":0, "profile":"Liquid" }' --silent | jq
 ```
+### Get manual fan control configuration
+```bash
+$ curl http://127.0.0.1:27003/api/config/manual --silent | jq
+```
+The response exposes the existing `manual` configuration flag and indicates that changing it requires an OpenLinkHub service restart.
+
+### Set manual fan control configuration
+```bash
+$ curl -X POST http://127.0.0.1:27003/api/config/manual -H 'Content-Type: application/json' -d '{ "enabled": true }' --silent | jq
+```
+A service restart is required after changing this setting.
+
 ### Set device speed
 ```bash
 $ curl -X POST http://127.0.0.1:27003/api/speed/manual -d '{ "deviceId":"40027074EFEBF2568288ACE590128B30", "channelId":1, "value":50 }' --silent | jq
 ```
+This endpoint is available when the existing `manual` configuration flag is enabled.
 ### Set device RGB profile
 ```bash
 $ curl -X POST http://127.0.0.1:27003/api/color -d '{"deviceId":"40027074EFEBF2568288ACE590128B30", "channelId":1, "profile":"rainbow"}' --silent | jq
