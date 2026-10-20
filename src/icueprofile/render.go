@@ -3,7 +3,6 @@ package icueprofile
 import (
 	"fmt"
 	"math"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -182,8 +181,6 @@ func rgbCommandNear(a, b RGB, eps float64) bool {
 	return math.Abs(a.R-b.R) <= eps && math.Abs(a.G-b.G) <= eps && math.Abs(a.B-b.B) <= eps
 }
 
-var ledNumber = regexp.MustCompile(`(?i)Led_Cmd_Led(\d+)$`)
-
 // v12.4.45 patch resolver: effects generate sparse LED patches against a shared
 // profile clock. A patch has an explicit active bit, so "no command" can never
 // be confused with RGB black. Layers are applied base-to-top using iCUE's
@@ -359,12 +356,8 @@ func selectedAt(l Layer, logicalBase, local int) bool {
 	}
 	logical := logicalBase + local
 	for _, key := range l.LEDs {
-		m := ledNumber.FindStringSubmatch(strings.TrimSpace(key))
-		if len(m) == 2 {
-			n, _ := strconv.Atoi(m[1])
-			if n == logical {
-				return true
-			}
+		if n, ok := NumericICUETarget(key); ok && n == logical {
+			return true
 		}
 	}
 	return false
@@ -1057,17 +1050,8 @@ func selectedWithTopology(l Layer, topology LEDTopology, deviceOrdinal, local, s
 	if sourceDeviceCount > 0 && deviceOrdinal >= sourceDeviceCount {
 		mappedOrdinal = deviceOrdinal % sourceDeviceCount
 	}
-	logical, ok := topology.LogicalLED(mappedOrdinal, local)
-	if !ok {
-		return false
-	}
 	for _, key := range l.LEDs {
-		m := ledNumber.FindStringSubmatch(strings.TrimSpace(key))
-		if len(m) != 2 {
-			continue
-		}
-		n, _ := strconv.Atoi(m[1])
-		if n == logical {
+		if topology.MatchesTarget(key, mappedOrdinal, local) {
 			return true
 		}
 	}
@@ -1091,12 +1075,8 @@ func sourceQXFanCount(layers []Layer, topology LEDTopology) int {
 			continue
 		}
 		for _, key := range l.LEDs {
-			m := ledNumber.FindStringSubmatch(strings.TrimSpace(key))
-			if len(m) != 2 {
-				continue
-			}
-			id, err := strconv.Atoi(m[1])
-			if err != nil || id < 0 || id >= 756 {
+			id, ok := NumericICUETarget(key)
+			if !ok || id < 0 || id >= 756 {
 				continue
 			}
 			fan := id / 42

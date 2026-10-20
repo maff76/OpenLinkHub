@@ -1,6 +1,10 @@
 package icueprofile
 
-import "strings"
+import (
+	"regexp"
+	"strconv"
+	"strings"
+)
 
 // LEDTopology describes device geometry independently from an iCUE profile or
 // lighting effect. New fan families can be added here without changing Rain,
@@ -10,6 +14,32 @@ type LEDTopology interface {
 	LEDCount() int
 	Position(deviceOrdinal, localLED int) (float64, bool)
 	LogicalLED(deviceOrdinal, localLED int) (int, bool)
+	// MatchesTarget resolves an authored iCUE LED identifier against this physical output.
+	// Symbolic targets that this topology does not understand remain unresolved rather
+	// than being guessed or coerced to a numeric LED.
+	MatchesTarget(target string, deviceOrdinal, localLED int) bool
+}
+
+var numericICUETarget = regexp.MustCompile(`(?i)^(?:Led_Cmd_Led|LedId::)(\d+)$`)
+
+// NumericICUETarget decodes only the two numeric target spellings we explicitly
+// support. Names such as F1, MouseFrontLed, or Zone2 deliberately do not match.
+func NumericICUETarget(target string) (int, bool) {
+	m := numericICUETarget.FindStringSubmatch(strings.TrimSpace(target))
+	if len(m) != 2 {
+		return 0, false
+	}
+	n, err := strconv.Atoi(m[1])
+	return n, err == nil
+}
+
+func numericTargetMatches(t LEDTopology, target string, deviceOrdinal, localLED int) bool {
+	want, ok := NumericICUETarget(target)
+	if !ok {
+		return false
+	}
+	have, ok := t.LogicalLED(deviceOrdinal, localLED)
+	return ok && have == want
 }
 
 type qxTopology struct{}
@@ -24,6 +54,10 @@ func (qxTopology) Position(deviceOrdinal, localLED int) (float64, bool) {
 	const fanPitch = 365.0
 	const ledPitch = 20.0
 	return (float64(deviceOrdinal)*fanPitch + qxLocalX[localLED]) / ledPitch, true
+}
+
+func (qxTopology) MatchesTarget(target string, deviceOrdinal, localLED int) bool {
+	return numericTargetMatches(qxTopology{}, target, deviceOrdinal, localLED)
 }
 
 func (qxTopology) LogicalLED(deviceOrdinal, localLED int) (int, bool) {
@@ -106,6 +140,10 @@ func (titan280Topology) Position(deviceOrdinal, localLED int) (float64, bool) {
 	}
 	const ledPitch = 20.0
 	return titan280LocalX[localLED] / ledPitch, true
+}
+
+func (titan280Topology) MatchesTarget(target string, deviceOrdinal, localLED int) bool {
+	return numericTargetMatches(titan280Topology{}, target, deviceOrdinal, localLED)
 }
 
 func (titan280Topology) LogicalLED(deviceOrdinal, localLED int) (int, bool) {
