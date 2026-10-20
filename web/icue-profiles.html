@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+{{ template "head" . }}
+<body>
+<div class="container-fluid">
+    <div class="row">
+        {{ template "sidebar" . }}
+        <main class="main-content p-4">
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
+                <div>
+                    <h4 class="mb-1">iCUE Profiles</h4>
+                    <div class="sentence-text">Import, inspect and live-test iCUE lighting without rewriting the source profile.</div>
+                </div>
+                <form id="icueProfileForm" enctype="multipart/form-data" class="file-form d-flex gap-2 flex-wrap">
+                    <input type="file" class="system-input file-input" id="icueProfileFile" name="profileFile" accept=".cueprofile">
+                    <button class="system-button success" type="submit" id="btnICUEProfileUpload">Upload profile</button>
+                </form>
+            </div>
+
+            <div class="row g-4 align-items-start">
+                <div class="col-12 col-xl-3">
+                    <div class="card system-card">
+                        <div class="card-header text-center">Profiles</div>
+                        <div class="card-body">
+                            <div id="icueProfileDirectory" class="sentence-text mb-3"></div>
+                            <div id="icueProfileList" class="settings-list"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-12 col-xl-9">
+                    <div id="icueEmpty" class="card system-card"><div class="card-body sentence-text">Select an imported profile to open the lighting workspace.</div></div>
+                    <div id="icueWorkspace" style="display:none">
+                        <div class="card system-card mb-4">
+                            <div class="card-header d-flex justify-content-between align-items-center gap-2 flex-wrap">
+                                <span id="icueProfileTitle">Profile</span>
+                                <span class="sentence-text">PROFILE EDITOR · source remains read-only</span>
+                            </div>
+                            <div class="card-body">
+                                <div class="row g-3">
+                                    <div class="col-6 col-lg-3"><small class="sentence-text">File</small><div id="icueMetaFile">—</div></div>
+                                    <div class="col-6 col-lg-3"><small class="sentence-text">Devices</small><div id="icueMetaDevices">—</div></div>
+                                    <div class="col-6 col-lg-3"><small class="sentence-text">Channels</small><div id="icueMetaChannels">—</div></div>
+                                    <div class="col-6 col-lg-3"><small class="sentence-text">Layers</small><div id="icueMetaLayers">—</div></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="row g-4 align-items-start">
+                            <div class="col-12 col-lg-4">
+                                <div class="card system-card">
+                                    <div class="card-header d-flex justify-content-between align-items-center"><span>Lighting Layers</span><button type="button" class="system-button" id="icueAddLayer">+ Layer</button></div>
+                                    <div class="card-body"><div id="icueLayerList" class="settings-list"></div><div class="d-flex gap-2 flex-wrap mt-3"><button type="button" class="system-button secondary" id="icueDuplicateLayer">Duplicate</button><button type="button" class="system-button secondary" id="icueMoveUp">↑</button><button type="button" class="system-button secondary" id="icueMoveDown">↓</button><button type="button" class="system-button danger" id="icueDeleteLayer">Delete</button></div></div>
+                                </div>
+                            </div>
+                            <div class="col-12 col-lg-8">
+                                <div class="card system-card mb-4">
+                                    <div class="card-header d-flex justify-content-between align-items-center gap-2 flex-wrap">
+                                        <span id="icueLayerTitle">Layer</span>
+                                        <label class="system-toggle compact"><input type="checkbox" id="icueLayerEnabled"><span class="toggle-track"></span></label>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="row g-3 mb-3">
+                                            <div class="col-md-6"><label class="sentence-text" for="icueLayerName">Layer name</label><input id="icueLayerName" class="form-control system-input" type="text"></div>
+                                            <div class="col-md-6"><label class="sentence-text" for="icueEffectType">Effect</label><select id="icueEffectType" class="form-select system-select"></select></div>
+                                            <div class="col-md-6"><label class="sentence-text" for="icueDeviceCanvas">Detected device</label><select id="icueDeviceCanvas" class="form-select system-select"></select></div>
+                                            <div class="col-md-6"><label class="sentence-text" for="icueSelectionMode">LED targeting</label><select id="icueSelectionMode" class="form-select system-select"><option value="ConcreteLeds">Selected LEDs</option><option value="AllLeds">All LEDs</option></select></div>
+                                        </div>
+                                        <div id="icueDetectedSummary" class="sentence-text mb-2"></div>
+                                        <div class="icue-device-workbench mb-3">
+                                            <div class="d-flex justify-content-between align-items-center gap-2 flex-wrap mb-2">
+                                                <div><strong>Devices & lighting zones</strong><div class="sentence-text"><small>All detected lighting hardware stays visible. Choose a device or group here; the layer list remains conceptual.</small></div></div>
+                                                <div class="d-flex gap-2 flex-wrap"><button type="button" class="system-button secondary icue-device-shortcut" data-group="qx">All QX</button><button type="button" class="system-button secondary icue-device-shortcut" data-group="memory">All Memory</button></div>
+                                            </div>
+                                            <div id="icueDeviceStrip" class="icue-device-strip"></div>
+                                        </div>
+                                        <div class="d-flex justify-content-between align-items-center gap-2 flex-wrap mb-2">
+                                            <div class="sentence-text"><strong>Raw LED mapper</strong> <small id="icueMapperDescription">— identify the physical location of each raw hardware output without assuming topology.</small></div>
+                                            <label class="system-toggle compact"><input type="checkbox" id="icueTopologyProbe"><span class="toggle-track"></span><span class="ms-2">Live LED mapper</span></label>
+                                        </div>
+                                        <div id="icueLedMap" class="icue-led-map linear" aria-label="Physical lighting positions"></div>
+                                        <div class="sentence-text mt-2"><small id="icueMapperHint">Raw output numbers are deliberately topology-blind. Front/rear, inner/outer and position are recorded from what you actually see.</small></div>
+                                        <div id="icueProbePanel" class="icue-probe-panel mt-3" style="display:none">
+                                            <div class="d-flex align-items-center gap-2 flex-wrap">
+                                                <button type="button" class="system-button secondary" id="icueProbePrev">Previous</button>
+                                                <button type="button" class="system-button" id="icueProbeNext">Next LED</button>
+                                                <strong id="icueProbeLed">Raw LED 0</strong>
+                                                <strong id="icueProbeZone" class="icue-probe-zone">Unmapped</strong>
+                                            </div>
+                                            <div id="icueQXObservation" class="row g-2 mt-2" style="display:none">
+                                                <div class="col-md-3"><label class="sentence-text" for="icueMapFace">Face</label><select id="icueMapFace" class="form-select system-select"><option value="">Select…</option><option value="front">Front</option><option value="rear">Rear</option></select></div>
+                                                <div class="col-md-3"><label class="sentence-text" for="icueMapRing">Ring</label><select id="icueMapRing" class="form-select system-select"><option value="">Select…</option><option value="outer">Outer</option><option value="inner">Inner</option></select></div>
+                                                <div class="col-md-4"><label class="sentence-text" for="icueMapPosition">Physical position</label><input id="icueMapPosition" class="form-control system-input" type="text" placeholder="e.g. 12 o'clock"></div>
+                                                <div class="col-md-2 d-flex align-items-end"><button type="button" class="system-button w-100" id="icueMapRecord">Record</button></div>
+                                            </div>
+                                            <div class="sentence-text mt-2">Selected raw output is purple (#8000FF); every other raw output on the selected device is blue (#0066FF). Other devices continue the active profile. QX observations explicitly record Front/Rear, Inner/Outer and physical position.</div>
+                                            <div id="icueProbeStatus" class="sentence-text mt-2">Mapper off · profile playback unchanged.</div>
+                                        </div>
+                                        <div class="d-flex gap-2 flex-wrap mt-3" id="icueSelectionActions">
+                                            <button type="button" class="system-button" id="icueSelectAll">Include 34</button>
+                                            <button type="button" class="system-button secondary" id="icueSelectNone">Exclude 34</button>
+                                            <span id="icueLedCount" class="sentence-text align-self-center"></span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="card system-card">
+                                    <div class="card-header text-center">Effect Controls</div>
+                                    <div class="card-body">
+                                        <div id="icueEffectWorkbench" class="icue-effect-workbench mb-3">
+                                            <div class="d-flex justify-content-between align-items-center gap-2 flex-wrap mb-2">
+                                                <div><strong id="icueFriendlyEffectName">Effect</strong><div id="icueFriendlyEffectHint" class="sentence-text"><small>Profile-authored controls shown in an iCUE-style test bench.</small></div></div>
+                                                <span id="icueFriendlyEffectSource" class="icue-source-pill">PROFILE DATA</span>
+                                            </div>
+                                            <div id="icueTransitionPanel" class="icue-transition-panel" style="display:none">
+                                                <div class="d-flex justify-content-between align-items-center gap-2 mb-2"><span class="sentence-text"><strong>Transition graph</strong> · horizontal = authored time / position · vertical = level</span><span id="icueTransitionSummary" class="sentence-text"></span></div>
+                                                <div class="icue-transition-axis"><span>100%</span><span>0%</span></div>
+                                                <div id="icueTransitionGraph" class="icue-transition-graph"></div>
+                                                <div class="d-flex justify-content-between align-items-center mt-2"><div class="d-flex gap-2"><button type="button" class="system-button secondary" id="icueTransitionAdd" disabled title="UI scaffold only for now">+</button><button type="button" class="system-button secondary" id="icueTransitionRemove" disabled title="UI scaffold only for now">×</button></div><small class="sentence-text">Stops are read from the imported profile in this UI-only pass; effect-specific live controls below remain active.</small></div>
+                                            </div>
+                                            <div id="icueFriendlyFields" class="row g-3 mt-1"></div>
+                                        </div>
+                                        <div class="sentence-text mb-2"><strong>Existing live controls</strong> <small>Only controls used by this effect are shown; raw authored values remain available below.</small></div>
+                                        <div id="icueEffectControls" class="row g-3"></div>
+                                        <div class="sentence-text mt-3"><strong>Advanced / parsed parameters</strong> <small>Raw iCUE values are retained here while we calibrate effect semantics.</small></div>
+                                        <textarea id="icueParameters" class="form-control system-input mt-2" rows="7" spellcheck="false"></textarea>
+                                        <div class="d-flex justify-content-between gap-2 flex-wrap mt-3"><span id="icueLiveStatus" class="sentence-text">Changes apply live; imported source remains unchanged.</span><div class="d-flex gap-2 flex-wrap"><button type="button" class="system-button secondary" id="icueResetLive" disabled>Reset Live Preview</button><button type="button" class="system-button" id="icueApplyParameters">Apply parameters</button></div></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="card system-card mt-4"><div class="card-header text-center">Profile Output</div><div class="card-body"><div class="d-flex gap-2 flex-wrap align-items-end"><div class="flex-grow-1"><label class="sentence-text" for="icueSaveName">New profile name</label><input id="icueSaveName" class="form-control system-input" type="text" placeholder="Profile-EDIT-001"></div><button type="button" class="system-button" id="icueSaveAs" disabled title="Writer validation pending">Save As New</button><button type="button" class="system-button secondary" id="icueExport" disabled title="Writer validation pending">Export</button><button type="button" class="system-button secondary" id="icueCreateNew" disabled title="Writer validation pending">Create New</button></div><div class="sentence-text mt-2"><small>The source profile is immutable. Save/Create are intentionally locked until the cueprofile writer can preserve unknown Corsair XML without loss; live editing and hardware/effect calibration are active now.</small></div></div></div>
+                        <div class="card system-card mt-4">
+                            <div class="card-header text-center">Effect Clock</div>
+                            <div class="card-body">
+                                <div class="sentence-text mb-2">All animated effects use the same normalized 0→1 phase. Authored duration is scaled by the discrete Slow / Normal / Fast preset; effect-specific values then shape spatial travel, tail, width, direction and colour.</div>
+                                <div class="settings-list">
+                                    <div class="settings-row"><span class="settings-label">Layer</span><strong id="icueClockLayer">—</strong></div>
+                                    <div class="settings-row"><span class="settings-label">Authored duration</span><strong id="icueClockDuration">1000 ms</strong></div>
+                                    <div class="settings-row"><span class="settings-label">Speed preset</span><strong id="icueClockSpeed">Normal (2)</strong></div>
+                                    <div class="settings-row"><span class="settings-label">Duration scale</span><strong id="icueClockScale">1.0×</strong></div>
+                                    <div class="settings-row"><span class="settings-label">Effective window</span><strong id="icueClockWindow">1000 ms</strong></div>
+                                </div>
+                                <div class="row g-3 mt-1">
+                                    <div class="col-md-6">
+                                        <label class="sentence-text" for="icueSlowScale">Slow duration scale</label>
+                                        <div class="d-flex gap-2 align-items-center"><input id="icueSlowScaleRange" type="range" min="1" max="3" step="0.05" value="1.5" class="form-range flex-grow-1"><input id="icueSlowScale" type="number" min="1" max="3" step="0.05" value="1.5" class="form-control system-input" style="max-width:92px"></div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="sentence-text" for="icueFastScale">Fast duration scale</label>
+                                        <div class="d-flex gap-2 align-items-center"><input id="icueFastScaleRange" type="range" min="0.2" max="1" step="0.05" value="0.5" class="form-range flex-grow-1"><input id="icueFastScale" type="number" min="0.2" max="1" step="0.05" value="0.5" class="form-control system-input" style="max-width:92px"></div>
+                                    </div>
+                                </div>
+                                <div class="d-flex justify-content-between gap-2 flex-wrap align-items-center mt-3"><span id="icueTimingCalibrationStatus" class="sentence-text">Runtime calibration only · Normal stays fixed at 1.0×.</span><button type="button" class="system-button secondary" id="icueTimingReset">Reset 1.5 / 1.0 / 0.5</button></div>
+                                <div class="sentence-text mt-2"><small>Move Slow or Fast while comparing the same effect in iCUE. Changes apply globally to every animated effect immediately and are discarded on restart.</small></div>
+                                <hr class="my-3">
+                                <div class="d-flex justify-content-between gap-3 flex-wrap align-items-center">
+                                    <div><strong>Rain implementation</strong><div class="sentence-text"><small>A/B test only · changes Rain and resets Rain transient state.</small></div></div>
+                                    <div class="btn-group" role="group" aria-label="Rain implementation">
+                                        <button type="button" class="system-button icue-rain-method active" data-method="normalized">Normalized Rain</button>
+                                        <button type="button" class="system-button secondary icue-rain-method" data-method="native">Native Rain</button>
+                                    </div>
+                                </div>
+                                <div id="icueRainMethodStatus" class="sentence-text mt-2">Normalized Rain · runtime only.</div>
+                            </div>
+                        </div>
+                    </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+</div>
+<style>
+.icue-led-map{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:4px;min-height:130px;padding:14px;border:1px solid var(--bs-border-color);border-radius:10px}.icue-led{position:relative;width:34px;height:34px;border-radius:50%;border:1px solid currentColor;background:var(--bs-body-bg);color:inherit;font-size:10px;display:flex;align-items:center;justify-content:center;margin:3px}.icue-led-map.physical{display:block}.qx-layout{display:flex;justify-content:center;gap:34px;flex-wrap:wrap}.icue-fan-stage{position:relative;width:270px;height:270px;border:1px solid var(--bs-border-color);border-radius:22px;background:rgba(127,127,127,.04)}.icue-fan-stage:before{content:"";position:absolute;left:15%;top:15%;width:70%;height:70%;border:1px solid var(--bs-border-color);border-radius:50%;opacity:.55}.fan-face-label{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font-size:.78rem;font-weight:700;opacity:.62;text-transform:uppercase;letter-spacing:.08em}.fan-dot{position:absolute;width:20px;height:20px;margin:0;transform:translate(-50%,-50%);z-index:2}.fan-dot.inner{width:17px;height:17px}.qx-side-strip{position:absolute;top:29%;height:42%;width:16px;display:flex;flex-direction:column;justify-content:space-between;z-index:3}.qx-side-strip.strip-left{left:3%}.qx-side-strip.strip-right{right:3%}.qx-side-strip .strip-segment{width:14px;height:22px;margin:0;border-radius:5px}.memory-stick{width:72px;min-height:260px;margin:0 auto;padding:18px 14px;display:flex;flex-direction:column;justify-content:space-between;align-items:center;border:1px solid var(--bs-border-color);border-radius:12px;background:rgba(127,127,127,.04)}.memory-stick .memory-dot{width:26px;height:26px;margin:3px}.icue-led.selected{color:#fff;font-weight:700;text-shadow:0 1px 2px #000}.icue-led.probe{outline:3px solid #ffc107;outline-offset:2px}.icue-led:hover{filter:brightness(1.2)}..icue-profile-row,.icue-layer-row{cursor:pointer}.icue-profile-row.active,.icue-layer-row.active{font-weight:700}.icue-probe-panel{padding:10px;border:1px dashed var(--bs-border-color);border-radius:8px}.icue-probe-group{width:auto;min-width:190px}.icue-probe-zone{padding:5px 8px;border:1px solid var(--bs-border-color);border-radius:7px}.icue-layer-effect{margin-left:auto;font-size:.78rem;opacity:.78}.icue-layer-group{border-bottom:1px solid rgba(127,127,127,.12)}.icue-layer-group:last-child{border-bottom:0}.icue-layer-group-head{cursor:pointer}.icue-layer-group-head.expandable:before{content:'›';display:inline-block;width:14px;margin-right:5px;transition:transform .12s ease}.icue-layer-group-head.expandable.open:before{transform:rotate(90deg)}.icue-layer-group-meta{display:flex;align-items:center;gap:8px;margin-left:auto}.icue-layer-count{display:inline-flex;align-items:center;justify-content:center;min-width:34px;padding:2px 7px;border:1px solid var(--bs-border-color);border-radius:999px;font-size:.75rem;font-weight:600}.icue-layer-group-items{padding-left:18px}.icue-layer-child{font-size:.92rem;opacity:.92}.icue-layer-child.active{opacity:1}
+@media(max-width:900px){.icue-topology-key{grid-template-columns:1fr 1fr}.icue-led-map{grid-template-columns:1fr}.icue-fan-stage{width:230px;height:230px}}
+.icue-device-workbench,.icue-effect-workbench{padding:12px;border:1px solid var(--bs-border-color);border-radius:10px;background:rgba(127,127,127,.025)}.icue-device-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(112px,1fr));gap:8px}.icue-device-tile{appearance:none;border:1px solid var(--bs-border-color);border-radius:9px;background:rgba(127,127,127,.035);color:inherit;padding:9px;text-align:left;min-height:64px}.icue-device-tile:hover{background:rgba(127,127,127,.08)}.icue-device-tile.active{outline:2px solid #f0c400;outline-offset:-2px}.icue-device-kind{display:block;font-size:.68rem;opacity:.65;text-transform:uppercase;letter-spacing:.08em}.icue-device-name{display:block;font-weight:650;font-size:.82rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.icue-device-meta{display:block;font-size:.68rem;opacity:.72;margin-top:2px}.icue-source-pill{border:1px solid var(--bs-border-color);border-radius:999px;padding:3px 8px;font-size:.68rem;letter-spacing:.06em;opacity:.78}.icue-transition-panel{position:relative;margin-top:10px}.icue-transition-graph{position:relative;height:80px;margin-left:42px;border:1px solid var(--bs-border-color);border-radius:8px;background:linear-gradient(to bottom,rgba(255,255,255,.08),rgba(255,255,255,.01)),repeating-linear-gradient(to right,transparent 0,transparent calc(25% - 1px),rgba(127,127,127,.12) 25%)}.icue-transition-axis{position:absolute;width:36px;height:80px;margin-top:31px;display:flex;flex-direction:column;justify-content:space-between;font-size:.68rem;opacity:.68}.icue-transition-svg{display:block;width:100%;height:100%;overflow:visible}.icue-transition-line{position:absolute;height:2px;background:rgba(255,255,255,.35);transform-origin:0 50%;pointer-events:none}.icue-transition-stop{position:absolute;width:15px;height:15px;border-radius:50%;border:2px solid #fff;transform:translate(-50%,-50%);box-shadow:0 1px 5px rgba(0,0,0,.65);cursor:pointer;padding:0}.icue-transition-stop:hover,.icue-transition-stop:focus-visible{outline:2px solid #0d6efd;outline-offset:2px;transform:translate(-50%,-50%) scale(1.08)}.icue-friendly-field{border-left:2px solid rgba(127,127,127,.22);padding-left:10px}.icue-friendly-field small{display:block;opacity:.7}.icue-friendly-value{font-weight:650;word-break:break-word}
+</style>
+<script src="/static/js/icue-profiles.js?v=12.4.74z7d9q"></script>
+<script src="/static/js/sidebar.js"></script>
+</body>
+</html>

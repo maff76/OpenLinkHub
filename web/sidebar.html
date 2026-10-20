@@ -11,6 +11,7 @@
         ( .Dict "page" "macros" "url" "/macros" "icon" "icon-macro.svg" "alt" "Macros" "lang" "txtMacros" )
         ( .Dict "page" "rgbCluster" "url" "/rgbCluster" "icon" "icon-cluster.svg" "alt" "RGB Cluster" "lang" "txtRgbCluster" )
         ( .Dict "page" "rgb" "url" "/rgb" "icon" "icon-rgb.svg" "alt" "RGB Editor" "lang" "txtRgbEditor" )
+        ( .Dict "page" "icueProfiles" "url" "/icueProfiles" "icon" "icon-rgb.svg" "alt" "iCUE Profiles" "label" "iCUE Profiles" )
         ( .Dict "page" "temperature" "url" "/temperature" "icon" "icon-temperature.svg" "alt" "Temperature Profiles" "lang" "txtProfiles" )
         ( .Dict "page" "settings" "url" "/settings" "icon" "icon-settings.svg" "alt" "Settings" "lang" "txtSettings" )
         }}
@@ -52,9 +53,9 @@
         <nav class="nav flex-column sidebar-nav">
             <!-- Bottom Links -->
             {{ range $menu }}
-            <a class="nav-link {{ if eq $.Page .page }}active{{ end }}" href="{{ .url }}" data-label="{{ $.Lang .lang }}" >
+            <a class="nav-link {{ if eq $.Page .page }}active{{ end }}" href="{{ .url }}" data-label="{{ if .label }}{{ .label }}{{ else }}{{ $.Lang .lang }}{{ end }}" >
                 <img src="/static/img/icons/{{ .icon }}" class="sidebar-icon" alt="{{ .alt }}">
-                {{ $.Lang .lang }}
+                {{ if .label }}{{ .label }}{{ else }}{{ $.Lang .lang }}{{ end }}
             </a>
             {{ end }}
 
