@@ -1,6 +1,79 @@
 <!DOCTYPE html>
 <html lang="en">
 {{ template "head" . }}
+
+<style>
+/* Responsive device layout: keep controls readable without changing device behaviour. */
+.olh-device-layout {
+    display: grid;
+    grid-template-columns: minmax(250px, 300px) minmax(0, 1fr);
+    gap: 1.25rem;
+    margin-left: 0;
+    margin-right: 0;
+}
+.olh-device-layout > .olh-device-summary,
+.olh-device-layout > .olh-device-channels {
+    width: auto;
+    max-width: none;
+    padding-left: 0;
+    padding-right: 0;
+}
+.olh-channel-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1.25rem;
+    margin-left: 0;
+    margin-right: 0;
+}
+.olh-channel-grid > [class*="col-"] {
+    width: auto;
+    max-width: none;
+    padding: 0;
+}
+.olh-channel-grid .card { height: 100%; }
+.olh-channel-grid .card-header .header-left,
+.olh-channel-grid .card-header .header-right {
+    min-width: 0;
+}
+.olh-channel-grid .card-header .header-left {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.olh-channel-grid .settings-row { gap: .75rem; }
+.olh-channel-grid .settings-label { min-width: 0; }
+.olh-channel-grid .system-select.auto-width {
+    max-width: 100%;
+}
+/* PSU rail telemetry needs a wider wattage cell for three-digit loads. */
+.psu-rail-row {
+    display: grid;
+    grid-template-columns: minmax(34px, .55fr) minmax(54px, 1fr) minmax(54px, 1fr) minmax(68px, 1.25fr);
+    align-items: center;
+    column-gap: 10px;
+}
+.psu-rail-row > span {
+    min-width: 0;
+    white-space: nowrap;
+}
+.psu-rail-row .settings-label {
+    text-align: left;
+}
+.psu-rail-row .meta-value {
+    text-align: right;
+}
+@media (min-width: 2100px) {
+    .olh-channel-grid { grid-template-columns: repeat(auto-fit, minmax(235px, 1fr)); }
+}
+@media (max-width: 1050px) {
+    .olh-device-layout { grid-template-columns: 1fr; }
+    .olh-device-summary { max-width: 420px !important; }
+}
+@media (max-width: 640px) {
+    .olh-channel-grid { grid-template-columns: 1fr; }
+    .olh-device-summary { max-width: none !important; }
+}
+</style>
 <body>
 
 <div class="container-fluid">
@@ -35,8 +108,8 @@
             {{ end }}
 
             <!-- LINK SYSTEM HUB -->
-            <div class="row g-4 mb-4 align-items-start">
-                <div class="col-md-2">
+            <div class="row g-4 mb-4 align-items-start olh-device-layout">
+                <div class="col-md-2 olh-device-summary">
                     <div class="card system-card text-center">
                         <div class="card-header">
                             {{ .Device.Product }}
@@ -94,6 +167,15 @@
                                     </label>
                                 </div>
 
+                                <!-- RGB power. Off preserves the configured profiles; On restores them. -->
+                                <div class="settings-row">
+                                    <span class="settings-label text-ellipsis">{{ .Lang "txtRgbOnOff" }}</span>
+                                    <div class="settings-actions">
+                                        <button type="button" class="system-button compact danger rgbPowerHub" data-enabled="0" {{ if $deviceProfile.RgbOff }}disabled{{ end }}>Off</button>
+                                        <button type="button" class="system-button compact rgbPowerHub" data-enabled="1" {{ if not $deviceProfile.RgbOff }}disabled{{ end }}>On</button>
+                                    </div>
+                                </div>
+
                                 <!-- RGB Profile -->
                                 <div class="settings-row">
                                     <span class="settings-label text-ellipsis">{{ .Lang "txtRgb" }}</span>
@@ -101,6 +183,7 @@
                                         <select id="globalRgbProfile" class="form-select system-select compact auto-width globalRgb" name="globalRgb">
                                             <option value="">None</option>
                                             {{ range $key, $mode := $rgbModes }}
+                                            {{ if eq $mode "off" }}{{ continue }}{{ end }}
                                             <option value="{{ $mode }}">{{ $mode }}</option>
                                             {{ end }}
                                         </select>
@@ -109,11 +192,14 @@
 
                                 <!-- Speed Profile -->
                                 <div class="settings-row">
-                                    <span class="settings-label text-ellipsis">{{ .Lang "txtSpeed" }}</span>
+                                    <span class="settings-label text-ellipsis">FAN PROFILE</span>
                                     <label for="globalSpeedProfile">
                                         <select id="globalSpeedProfile" class="form-select system-select compact auto-width globalTempProfile" name="globalTempProfile">
                                             {{ range $key, $pf := $temperatures }}
                                             {{ if $pf.Hidden }}
+                                            {{ continue }}
+                                            {{ end }}
+                                            {{ if eq $pf.Sensor 10 }}
                                             {{ continue }}
                                             {{ end }}
                                             <option value="{{ $key }}" {{ if eq $deviceProfile.MultiProfile $key }}selected {{ end }}>{{ $key }}</option>
@@ -148,8 +234,8 @@
                         </div>
                     </div>
                 </div>
-                <div class="col-md-10">
-                    <div class="row g-4 mb-4 align-items-start" id="system-cards">
+                <div class="col-md-10 olh-device-channels">
+                    <div class="row g-4 mb-4 align-items-start olh-channel-grid" id="system-cards">
                         {{ range $device := $devices }}
                         {{ if $device.IsVrmCooler }}
                         {{ continue }}
@@ -442,18 +528,18 @@
                                         {{ $railName := "N/A" }}
 
                                         {{ if eq $vk 0 }}
-                                            {{ $railName = $root.Lang "txt3VRail" }}
+                                            {{ $railName = "3.3V" }}
                                         {{ else if eq $vk 1 }}
-                                            {{ $railName = $root.Lang "txt5VRail" }}
+                                            {{ $railName = "5V" }}
                                         {{ else if eq $vk 2 }}
-                                            {{ $railName = $root.Lang "txt12VRail" }}
+                                            {{ $railName = "12V" }}
                                         {{ end }}
 
                                         {{ $volts := index $device.Volts $vk }}
                                         {{ $amps := index $device.Amps $vk }}
                                         {{ $watts := index $device.Watts $vk }}
 
-                                        <div class="settings-row settings-row-equal">
+                                        <div class="settings-row psu-rail-row">
                                             <span class="settings-label text-ellipsis">{{ $railName }}</span>
                                             <span class="meta-value text-right" id="volts-{{ $vk }}">{{ $volts.ValueString }} V</span>
                                             <span class="meta-value text-right" id="amps-{{ $vk }}">{{ $amps.ValueString }} A</span>

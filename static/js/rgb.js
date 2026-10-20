@@ -188,6 +188,8 @@ $(document).ready(function () {
                                             case "tlr":
                                             case "spiralrainbow":
                                             case "rainbowwave":
+                                            case "openrgbrainbowwave":
+                                            case "icuerainbowwave":
                                             case "rain":
                                             case "visor":
                                             case "colorwave": {
@@ -316,6 +318,22 @@ $(document).ready(function () {
                                                 </div>
                                             `;
                                         }
+                                        let frequencyHtmlElement = '';
+                                        if (profile === "openrgbrainbowwave") {
+                                            const frequency = (data.frequency >= 1 && data.frequency <= 50) ? data.frequency : 10;
+                                            frequencyHtmlElement = `
+                                                <div class="settings-row">
+                                                    <span class="settings-label text-ellipsis">Frequency</span>
+                                                    <div class="system-slider no-padding-top">
+                                                        <label class="margin-lr-10">
+                                                            <input class="brightness-slider" type="range" id="frequency_${profile}" min="1" max="50" value="${frequency}" step="1" />
+                                                        </label>
+                                                        <span id="frequencyValue_${profile}">${frequency}</span>
+                                                    </div>
+                                                </div>
+                                            `;
+                                        }
+
                                         let modalElement = `
                                             <div class="modal fade" id="systemModal" tabindex="-1" aria-hidden="true">
                                                 <div class="modal-dialog modal-custom modal-${size}">
@@ -332,6 +350,7 @@ $(document).ready(function () {
                                                                 <span class="settings-label text-ellipsis">${i18n.t('txtSpeed')}</span>
                                                                 ${speedSliderHtml}
                                                             </div>
+                                                            ${frequencyHtmlElement}
                                                             <div class="settings-row">
                                                                 <span class="settings-label text-ellipsis">${i18n.t('txtSlipstreamDirection')}</span>
                                                                 ${rgbDirectionHtml}
@@ -352,6 +371,9 @@ $(document).ready(function () {
                                         const modal = $(modalElement).modal('toggle');
 
                                         const $brightnessSlider = modal.find(".brightness-slider");
+                                        modal.find(`#frequency_${profile}`).on('input', function () {
+                                            modal.find(`#frequencyValue_${profile}`).text($(this).val());
+                                        });
                                         const $brightnessSliderValue = modal.find("#brightnessSliderValue");
                                         function updateSlider() {
                                             const min = Number($brightnessSlider.attr("min"));
@@ -582,6 +604,7 @@ $(document).ready(function () {
 
                                                 let speed = $("#speed_" + profile).val();
                                                 let rgbDirection = $("#rgbDirection_" + profile).val();
+                                                let frequency = $("#frequency_" + profile).val();
                                                 let alternateColors = $("#alternateColors_" + profile).is(':checked');
                                                 const startColorVal = $("#startColor_" + profile).val();
                                                 const endColorVal = $("#endColor_" + profile).val();
@@ -632,6 +655,7 @@ $(document).ready(function () {
                                                 pf["speed"] = parseFloat(speed);
                                                 pf["alternateColors"] = alternateColors;
                                                 pf["rgbDirection"] = parseInt(rgbDirection);
+                                                pf["frequency"] = frequency == null ? 0 : parseFloat(frequency);
 
                                                 if (data.gradients != null) {
                                                     const wrapper = $("#gradientWrapper");
