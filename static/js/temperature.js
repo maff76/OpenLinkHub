@@ -103,6 +103,7 @@ $(document).ready(function () {
             pf["hwmonDeviceId"] = hwmonData[0];
             pf["temperatureInputId"] = hwmonData[1];
             pf["hwmonDevice"] = hwmonData[2];
+            pf["hwmonPersistentId"] = hwmonData[3] || "";
         }
 
         if (parseInt(sensor) === 7) {
