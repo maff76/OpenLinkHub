@@ -171,6 +171,256 @@ $(document).ready(function () {
         });
     });
 
+    // Existing OpenLinkHub manual fan control configuration.
+    // Changing this setting requires a service restart because device monitoring
+    // loops select automatic/manual behaviour during initialization.
+    $.ajax({
+        url: '/api/config/manual',
+        dataType: 'JSON',
+        success: function(response) {
+            if (response.status === 1 && response.data) {
+                $('#manualFanControl').prop('checked', response.data.manual === true);
+            } else {
+                toast.warning(response.message);
+            }
+        }
+    });
+
+    $('#btnSaveManualFanControl').on('click', function() {
+        const pf = {
+            enabled: $('#manualFanControl').is(':checked')
+        };
+
+        $.ajax({
+            url: '/api/config/manual',
+            type: 'POST',
+            data: JSON.stringify(pf),
+            contentType: 'application/json',
+            cache: false,
+            success: function(response) {
+                if (response.status === 1) {
+                    toast.success(response.message);
+                } else {
+                    toast.warning(response.message);
+                }
+            },
+            error: function() {
+                toast.warning('Unable to update manual fan control setting');
+            }
+        });
+    });
+
+    function formatByteArray(values) {
+        return (values || []).map(function(value) {
+            return '0x' + Number(value).toString(16).toUpperCase().padStart(2, '0');
+        }).join(', ');
+    }
+
+    function parseByteArray(selector, label) {
+        const text = $(selector).val().trim();
+        const values = [];
+        if (!text) {
+            return values;
+        }
+        const parts = text.split(/[\s,]+/).filter(Boolean);
+        for (const part of parts) {
+            const value = /^0x/i.test(part) ? parseInt(part, 16) : parseInt(part, 10);
+            if (!Number.isInteger(value) || value < 0 || value > 255) {
+                throw new Error(label + ' values must be 0x00-0xFF or 0-255');
+            }
+            values.push(value);
+        }
+        return values;
+    }
+
+    function parseIndexList(selector, label) {
+        const text = $(selector).val().trim();
+        if (!text) {
+            return [];
+        }
+        const values = [];
+        for (const part of text.split(/[\s,]+/).filter(Boolean)) {
+            const value = parseInt(part, 10);
+            if (!Number.isInteger(value) || value < 0) {
+                throw new Error(label + ' must contain non-negative integer indexes');
+            }
+            values.push(value);
+        }
+        return values;
+    }
+
+    function populateCpuSensorChips(info, selected) {
+        const select = $('#cfgCpuSensorChip');
+        const sensorInfo = info || {};
+        const values = Array.isArray(sensorInfo.candidates) ? sensorInfo.candidates.slice() : [];
+        const resolved = sensorInfo.resolvedChip || '';
+        const resolvedLabel = sensorInfo.resolvedLabel || '';
+        const resolvedFile = sensorInfo.resolvedFile || '';
+        let autoText = 'Auto';
+        if (resolved) {
+            autoText += ' — ' + resolved;
+            if (resolvedLabel) {
+                autoText += ' / ' + resolvedLabel;
+            } else if (resolvedFile) {
+                autoText += ' / ' + resolvedFile;
+            }
+            autoText += ' (currently selected)';
+        } else {
+            autoText += ' — no CPU sensor resolved';
+        }
+        select.empty().append($('<option>', { value: '', text: autoText }));
+        if (selected && !values.includes(selected)) {
+            values.push(selected);
+        }
+        values.sort().forEach(function(chip) {
+            let text = chip;
+            if (selected === chip && resolved === chip) {
+                text += ' — currently selected';
+            }
+            select.append($('<option>', { value: chip, text: text }));
+        });
+        select.val(selected || '');
+    }
+
+    function applyEditableConfig(settings, cpuSensorInfo) {
+        $('#cfgDebug').prop('checked', settings.debug === true);
+        $('#cfgLogLevel').val(settings.logLevel || 'info');
+        $('#cfgLogRetentionDays').val(Number.isInteger(settings.logRetentionDays) ? settings.logRetentionDays : 14);
+        $('#cfgMemory').prop('checked', settings.memory === true);
+        $('#cfgMemoryType').val(String(settings.memoryType === 4 ? 4 : 5));
+        $('#cfgMemorySmBus').val(settings.memorySmBus || '');
+        $('#cfgMemorySku').val(settings.memorySku || '');
+        $('#cfgMemoryRegisterOverride').val(formatByteArray(settings.memoryRegisterOverride));
+        $('#cfgEnhancementKits').val(formatByteArray(settings.enhancementKits));
+        populateCpuSensorChips(cpuSensorInfo, settings.cpuSensorChip || '');
+        $('#cfgCpuTempFile').val(settings.cpuTempFile || '');
+        $('#cfgAmdGpuIndex').val(Number.isInteger(settings.amdGpuIndex) ? settings.amdGpuIndex : 0);
+        $('#cfgAmdSmiPath').val(settings.amdsmiPath || '');
+        $('#cfgNvidiaGpuIndex').val((settings.nvidiaGpuIndex || []).join(', '));
+        $('#cfgDefaultNvidiaGPU').val(Number.isInteger(settings.defaultNvidiaGPU) ? settings.defaultNvidiaGPU : 0);
+        $('#cfgGraphProfiles').prop('checked', settings.graphProfiles === true);
+        $('#cfgMetrics').prop('checked', settings.metrics === true);
+        $('#cfgRamTempViaHwmon').prop('checked', settings.ramTempViaHwmon === true);
+        $('#cfgEnableGamepad').prop('checked', settings.enableGamepad === true);
+        $('#cfgEnableMotherboard').prop('checked', settings.enableMotherboard === true);
+        $('#cfgMotherboardBiosOnExit').prop('checked', settings.motherboardBiosOnExit === true);
+        $('#cfgEnableOpenRGB').prop('checked', settings.enableOpenRGBTargetServer === true);
+        $('#cfgOpenRGBPort').val(settings.openRGBPort);
+        $('#cfgResumeDelay').val(settings.resumeDelay);
+        $('#cfgTemperatureOffset').val(settings.temperatureOffset);
+        $('#cfgCheckDevicePermission').prop('checked', settings.checkDevicePermission === true);
+    }
+
+    $.ajax({
+        url: '/api/config/editable',
+        dataType: 'JSON',
+        success: function(response) {
+            if (response.status === 1 && response.data && response.data.settings) {
+                applyEditableConfig(response.data.settings, response.data.cpuSensorInfo || {});
+            } else {
+                toast.warning(response.message || 'Unable to load OpenLinkHub configuration');
+            }
+        }
+    });
+
+    $('#btnSaveEditableConfig').on('click', function() {
+        let memoryRegisterOverride;
+        let enhancementKits;
+        let nvidiaGpuIndex;
+        try {
+            memoryRegisterOverride = parseByteArray('#cfgMemoryRegisterOverride', 'Memory register override');
+            enhancementKits = parseByteArray('#cfgEnhancementKits', 'Memory enhancement kit');
+            nvidiaGpuIndex = parseIndexList('#cfgNvidiaGpuIndex', 'NVIDIA GPU indexes');
+        } catch (err) {
+            toast.warning(err.message);
+            return;
+        }
+
+        const settings = {
+            debug: $('#cfgDebug').is(':checked'),
+            logLevel: $('#cfgLogLevel').val(),
+            logRetentionDays: parseInt($('#cfgLogRetentionDays').val(), 10),
+            memory: $('#cfgMemory').is(':checked'),
+            memorySmBus: $('#cfgMemorySmBus').val().trim(),
+            memoryType: parseInt($('#cfgMemoryType').val(), 10),
+            memorySku: $('#cfgMemorySku').val().trim(),
+            memoryRegisterOverride: memoryRegisterOverride,
+            enhancementKits: enhancementKits,
+            cpuSensorChip: $('#cfgCpuSensorChip').val(),
+            cpuTempFile: $('#cfgCpuTempFile').val().trim(),
+            amdGpuIndex: parseInt($('#cfgAmdGpuIndex').val(), 10),
+            amdsmiPath: $('#cfgAmdSmiPath').val().trim(),
+            nvidiaGpuIndex: nvidiaGpuIndex,
+            defaultNvidiaGPU: parseInt($('#cfgDefaultNvidiaGPU').val(), 10),
+            graphProfiles: $('#cfgGraphProfiles').is(':checked'),
+            metrics: $('#cfgMetrics').is(':checked'),
+            ramTempViaHwmon: $('#cfgRamTempViaHwmon').is(':checked'),
+            enableGamepad: $('#cfgEnableGamepad').is(':checked'),
+            enableMotherboard: $('#cfgEnableMotherboard').is(':checked'),
+            motherboardBiosOnExit: $('#cfgMotherboardBiosOnExit').is(':checked'),
+            enableOpenRGBTargetServer: $('#cfgEnableOpenRGB').is(':checked'),
+            openRGBPort: parseInt($('#cfgOpenRGBPort').val(), 10),
+            resumeDelay: parseInt($('#cfgResumeDelay').val(), 10),
+            temperatureOffset: parseInt($('#cfgTemperatureOffset').val(), 10),
+            checkDevicePermission: $('#cfgCheckDevicePermission').is(':checked')
+        };
+
+        $.ajax({
+            url: '/api/config/editable',
+            type: 'POST',
+            data: JSON.stringify(settings),
+            contentType: 'application/json',
+            cache: false,
+            success: function(response) {
+                if (response.status === 1) {
+                    toast.success(response.message);
+                    if (response.data && response.data.settings) {
+                        applyEditableConfig(response.data.settings, response.data.cpuSensorInfo || {});
+                    }
+                } else {
+                    toast.warning(response.message);
+                }
+            },
+            error: function(xhr) {
+                const message = xhr.responseJSON && xhr.responseJSON.message ? xhr.responseJSON.message : 'Unable to save OpenLinkHub configuration';
+                toast.warning(message);
+            }
+        });
+    });
+
+    $('#btnRestartOpenLinkHub').on('click', function() {
+        if (!window.confirm('Restart OpenLinkHub now? Device control will briefly disconnect.')) {
+            return;
+        }
+        const button = $(this);
+        button.prop('disabled', true);
+        $.ajax({
+            url: '/api/restart',
+            type: 'POST',
+            cache: false,
+            success: function(response) {
+                if (response.status !== 1) {
+                    button.prop('disabled', false);
+                    toast.warning(response.message);
+                    return;
+                }
+                toast.success(response.message);
+                setTimeout(function waitForOpenLinkHub() {
+                    $.ajax({
+                        url: '/api/',
+                        cache: false,
+                        success: function() { window.location.reload(); },
+                        error: function() { setTimeout(waitForOpenLinkHub, 1000); }
+                    });
+                }, 1000);
+            },
+            error: function() {
+                button.prop('disabled', false);
+                toast.warning('Unable to restart OpenLinkHub');
+            }
+        });
+    });
+
     $.ajax({
         url: '/api/getSupportedDevices',
         dataType: 'JSON',
@@ -346,6 +596,39 @@ $(document).ready(function () {
     const checkboxAddDeviceToDashboard = $('#checkbox-addDeviceToDashboard');
     const checkboxRgbOff = $('#checkbox-rgbOff');
 
+    function updateGlobalRgbPowerButtons(rgbOff) {
+        checkboxRgbOff.prop('checked', rgbOff);
+        $('.rgbPowerGlobal[data-enabled="1"]').prop('disabled', !rgbOff);
+        $('.rgbPowerGlobal[data-enabled="0"]').prop('disabled', rgbOff);
+    }
+
+    $('.rgbPowerGlobal').on('click', function () {
+        const enabled = $(this).data('enabled') === 1;
+        const buttons = $('.rgbPowerGlobal');
+        buttons.prop('disabled', true);
+
+        $.ajax({
+            url: '/api/color/power',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ enabled: enabled }),
+            cache: false,
+            success: function (response) {
+                if (response?.status === 1) {
+                    updateGlobalRgbPowerButtons(!enabled);
+                    toast.success(response.message);
+                } else {
+                    updateGlobalRgbPowerButtons(checkboxRgbOff.is(':checked'));
+                    toast.warning(response?.message || 'Operation failed');
+                }
+            },
+            error: function () {
+                updateGlobalRgbPowerButtons(checkboxRgbOff.is(':checked'));
+                toast.warning('Request failed');
+            }
+        });
+    });
+
     function loadDashboardSettings() {
         // Load current settings
         $.ajax({
@@ -381,9 +664,7 @@ $(document).ready(function () {
                     if (response.dashboard.addDeviceToDashboard === true) {
                         checkboxAddDeviceToDashboard.attr('Checked','Checked');
                     }
-                    if (response.dashboard.rgbOff === true) {
-                        checkboxRgbOff.attr('Checked','Checked');
-                    }
+                    updateGlobalRgbPowerButtons(response.dashboard.rgbOff === true);
                 }
             }
         });
