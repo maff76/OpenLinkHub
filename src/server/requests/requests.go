@@ -61,12 +61,14 @@ type Payload struct {
 	Static                        bool                  `json:"static"`
 	AlternateColors               bool                  `json:"alternateColors"`
 	RgbDirection                  byte                  `json:"rgbDirection"`
+	Frequency                     float64               `json:"frequency"`
 	Sensor                        uint8                 `json:"sensor"`
 	HardwareLight                 int                   `json:"hardwareLight"`
 	ZeroRpm                       bool                  `json:"zeroRpm"`
 	Linear                        bool                  `json:"linear"`
 	HwmonDeviceId                 string                `json:"hwmonDeviceId"`
 	HwmonDevice                   string                `json:"hwmonDevice"`
+	HwmonPersistentId             string                `json:"hwmonPersistentId"`
 	TemperatureInputId            string                `json:"temperatureInputId"`
 	ExternalExecutable            string                `json:"externalExecutable"`
 	GpuIndex                      uint8                 `json:"gpuIndex"`
@@ -421,6 +423,7 @@ func ProcessNewTemperatureProfile(r *http.Request) *Payload {
 	}
 
 	hwmonId := ""
+	hwmonPersistentId := ""
 	temperatureInputId := ""
 	if sensor == temperatures.SensorTypeExternalHwMon {
 		hwmonDeviceId := req.HwmonDeviceId
@@ -448,6 +451,11 @@ func ProcessNewTemperatureProfile(r *http.Request) *Payload {
 				Code:    http.StatusOK,
 				Status:  0,
 			}
+		}
+
+		hwmonPersistentId = req.HwmonPersistentId
+		if hwmonPersistentId != "" && !common.AlphanumericUnderscore.MatchString(hwmonPersistentId) {
+			return &Payload{Message: language.GetValue("txtInvalidHwMon"), Code: http.StatusOK, Status: 0}
 		}
 
 		deviceId = fmt.Sprintf("/sys/class/hwmon/%s/%s", hwmonDeviceId, temperatureInputId)
@@ -497,6 +505,7 @@ func ProcessNewTemperatureProfile(r *http.Request) *Payload {
 		Sensor:             sensor,
 		ChannelId:          channelId,
 		HwmonDevice:        hwmonId,
+		HwmonPersistentID:  hwmonPersistentId,
 		TemperatureInputId: temperatureInputId,
 		GpuIndex:           gpuIndex,
 	}
@@ -585,6 +594,8 @@ func ProcessChangeSpeed(r *http.Request) *Payload {
 			return &Payload{Message: language.GetValue("txtSpeedProfileNoTemperatureData"), Code: http.StatusOK, Status: 0}
 		case 6:
 			return &Payload{Message: language.GetValue("txtSpeedProfileNoPSU"), Code: http.StatusOK, Status: 0}
+		case 7:
+			return &Payload{Message: language.GetValue("txtSpeedProfileBiosMode"), Code: http.StatusOK, Status: 0}
 		}
 	}
 	return &Payload{Message: language.GetValue("txtUnableToApplySpeedProfile"), Code: http.StatusOK, Status: 0}
@@ -730,6 +741,7 @@ func ProcessUpdateRgbProfile(r *http.Request) *Payload {
 		MaxTemp:         req.RgbMaxTemp,
 		AlternateColors: req.AlternateColors,
 		RgbDirection:    req.RgbDirection,
+		Frequency:       req.Frequency,
 		Gradients:       req.ColorZones,
 	}
 
@@ -2786,6 +2798,36 @@ func ProcessManualChangeSpeed(r *http.Request) *Payload {
 	return &Payload{Message: language.GetValue("txtNoDeviceForSpeedControl"), Code: http.StatusOK, Status: 0}
 }
 
+// ProcessSetRgbPower will turn RGB output on or off without changing saved RGB profiles.
+// An empty deviceId applies the state globally and persists the dashboard RGB state.
+func ProcessSetRgbPower(r *http.Request) *Payload {
+	req := &Payload{}
+	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
+		logger.Log(map[string]interface{}{"error": err}).Error("Unable to decode JSON")
+		return &Payload{Message: language.GetValue("txtUnableToValidateRequest"), Code: http.StatusOK, Status: 0}
+	}
+
+	rgbOff := !req.Enabled
+	if req.DeviceId == "" {
+		devices.ControlDeviceRgb(rgbOff)
+		dash := dashboard.GetDashboard()
+		dash.RgbOff = rgbOff
+		if dashboard.SaveDashboardSettings(dash, true) == 0 {
+			return &Payload{Message: language.GetValue("txtUnableToSaveDashboardSettings"), Code: http.StatusOK, Status: 0}
+		}
+		return &Payload{Message: language.GetValue("txtDashboardSettingsUpdated"), Code: http.StatusOK, Status: 1}
+	}
+
+	if devices.GetDevice(req.DeviceId) == nil {
+		return &Payload{Message: language.GetValue("txtNonExistingDevice"), Code: http.StatusOK, Status: 0}
+	}
+
+	// ControlDeviceRgb intentionally has no return value. The device has already been
+	// validated above, so invoke it and report the accepted power-state change.
+	devices.CallDeviceMethod(req.DeviceId, "ControlDeviceRgb", rgbOff)
+	return &Payload{Message: language.GetValue("txtDeviceRgbProfileChanged"), Code: http.StatusOK, Status: 1}
+}
+
 // ProcessChangeColor will process POST request from a client for RGB profile change
 func ProcessChangeColor(r *http.Request) *Payload {
 	req := &Payload{}
@@ -4616,7 +4658,7 @@ func ProcessSetRgbOverride(r *http.Request) *Payload {
 		return &Payload{Message: language.GetValue("txtNonExistingChannelId"), Code: http.StatusOK, Status: 0}
 	}
 
-	if req.Speed < 0 || req.Speed > 2 {
+	if req.Speed < 0 || req.Speed > 10 {
 		return &Payload{Message: language.GetValue("txtInvalidSpeedValue"), Code: http.StatusOK, Status: 0}
 	}
 
@@ -5026,6 +5068,28 @@ func ProcessSetKeyboardControlDialColors(r *http.Request) *Payload {
 		}
 	}
 	return &Payload{Message: language.GetValue("txtUnableToSetKeyboardControlDialColors"), Code: http.StatusOK, Status: 0}
+}
+
+// ProcessSetManualFanControl updates the existing manual fan speed configuration flag.
+// The setting is persisted immediately, but a service restart is required for all
+// device monitoring loops to fully switch between automatic and manual operation.
+func ProcessSetManualFanControl(r *http.Request) *Payload {
+	req := &Payload{}
+	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
+		logger.Log(map[string]interface{}{"error": err}).Error("Unable to decode JSON")
+		return &Payload{
+			Message: language.GetValue("txtUnableToValidateRequest"),
+			Code:    http.StatusOK,
+			Status:  0,
+		}
+	}
+
+	config.UpdateManual(req.Enabled)
+	return &Payload{
+		Message: "Manual fan control setting updated. Restart OpenLinkHub to apply the change.",
+		Code:    http.StatusOK,
+		Status:  1,
+	}
 }
 
 // ProcessSetSupportedDevices will enable / disable of supported devices

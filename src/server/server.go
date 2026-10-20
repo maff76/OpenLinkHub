@@ -12,7 +12,11 @@ import (
 	"OpenLinkHub/src/dashboard"
 	"OpenLinkHub/src/devices"
 	"OpenLinkHub/src/devices/lcd"
+	lshdevice "OpenLinkHub/src/devices/lsh"
+	memorydevice "OpenLinkHub/src/devices/memory"
+	"OpenLinkHub/src/discovery"
 	"OpenLinkHub/src/display"
+	"OpenLinkHub/src/icueprofile"
 	"OpenLinkHub/src/inputmanager"
 	"OpenLinkHub/src/language"
 	"OpenLinkHub/src/logger"
@@ -30,10 +34,15 @@ import (
 	"OpenLinkHub/src/version"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Response contains data what is sent back to a client
@@ -55,27 +64,30 @@ type Header struct {
 
 var headers []Header
 var server = &http.Server{}
+var restartHandler func() error
+
+// SetRestartHandler registers the controller-owned restart callback. Keeping
+// shutdown/exec in controller avoids a server -> controller import cycle.
+func SetRestartHandler(handler func() error) {
+	restartHandler = handler
+}
 
 // Send will process response and send it back to a client
 func (r *Response) Send(w http.ResponseWriter) {
 	r.Lock()
 	defer r.Unlock()
 
-	w.Header().Add("Content-Type", "application/json")
-	w.WriteHeader(r.Code)
-
 	data, err := json.Marshal(r)
 	if err != nil {
-		_, err := fmt.Println(w, err.Error())
-		if err != nil {
-			return
-		}
-		return
+		logger.Log(logger.Fields{"error": err}).Error("Unable to encode API response")
+		data = []byte(`{"code":500,"status":0,"message":"Unable to encode API response"}`)
+		r.Code = http.StatusInternalServerError
 	}
 
-	_, err = w.Write(data)
-	if err != nil {
-		return
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(r.Code)
+	if _, err = w.Write(data); err != nil {
+		logger.Log(logger.Fields{"error": err}).Error("Unable to write API response")
 	}
 }
 
@@ -86,6 +98,170 @@ func homePage(w http.ResponseWriter, _ *http.Request) {
 		Device: devices.GetDevices(),
 	}
 	resp.Send(w)
+}
+
+// getSystemInfo returns static host identity, CPU, kernel and motherboard firmware metadata.
+func getSystemInfo(w http.ResponseWriter, _ *http.Request) {
+	resp := &Response{
+		Code:   http.StatusOK,
+		Status: 1,
+		Data:   systeminfo.GetInfo(),
+	}
+	resp.Send(w)
+}
+
+// getHwmonTemperatures returns host hwmon temperature sensors with stable IDs.
+func getHwmonTemperatures(w http.ResponseWriter, _ *http.Request) {
+	resp := &Response{
+		Code:   http.StatusOK,
+		Status: 1,
+		Data:   temperatures.GetExternalHwMonSensors(),
+	}
+	resp.Send(w)
+}
+
+// restartOpenLinkHub acknowledges the request before restarting so the WebUI
+// can begin polling for the service to return.
+func restartOpenLinkHub(w http.ResponseWriter, _ *http.Request) {
+	if restartHandler == nil {
+		resp := &Response{
+			Code:    http.StatusServiceUnavailable,
+			Status:  0,
+			Message: "OpenLinkHub restart handler is not available",
+		}
+		resp.Send(w)
+		return
+	}
+
+	resp := &Response{
+		Code:    http.StatusOK,
+		Status:  1,
+		Message: "OpenLinkHub is restarting",
+	}
+	resp.Send(w)
+
+	go func() {
+		time.Sleep(250 * time.Millisecond)
+		if err := restartHandler(); err != nil {
+			logger.Log(logger.Fields{"error": err}).Error("Unable to restart OpenLinkHub")
+		}
+	}()
+}
+
+const maxAPIRequestBody = 1 << 20 // 1 MiB
+
+// decodeJSONRequest decodes exactly one JSON value and rejects oversized or
+// trailing request data. Unknown fields remain tolerated for API compatibility.
+func decodeJSONRequest(w http.ResponseWriter, r *http.Request, dst interface{}) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxAPIRequestBody)
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(dst); err != nil {
+		return err
+	}
+
+	var trailing interface{}
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("request body must contain exactly one JSON value")
+		}
+		return err
+	}
+	return nil
+}
+
+// configManual serves the manual fan-control setting from a single route.
+// GET reads the current value; POST validates and persists a new value.
+func configManual(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		resp := &Response{
+			Code:   http.StatusOK,
+			Status: 1,
+			Data: map[string]bool{
+				"manual": config.GetConfig().Manual,
+			},
+		}
+		resp.Send(w)
+	case http.MethodPost:
+		var request struct {
+			Enabled *bool `json:"enabled"`
+		}
+		if err := decodeJSONRequest(w, r, &request); err != nil || request.Enabled == nil {
+			(&Response{
+				Code:    http.StatusBadRequest,
+				Status:  0,
+				Message: "Unable to validate manual fan control setting",
+			}).Send(w)
+			return
+		}
+
+		if config.UpdateManual(*request.Enabled) != 1 {
+			(&Response{
+				Code:    http.StatusInternalServerError,
+				Status:  0,
+				Message: "Unable to update manual fan control setting",
+			}).Send(w)
+			return
+		}
+
+		(&Response{
+			Code:    http.StatusOK,
+			Status:  1,
+			Message: "Manual fan control setting updated. Restart OpenLinkHub to apply the change.",
+			Data: map[string]bool{
+				"manual": config.GetConfig().Manual,
+			},
+		}).Send(w)
+	default:
+		methodNotAllowed(w, http.MethodGet, http.MethodPost)
+	}
+}
+
+// configEditable serves the safe, user-facing OpenLinkHub configuration subset.
+// GET returns the persisted values; POST validates and saves the replacement set.
+func configEditable(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		(&Response{
+			Code:   http.StatusOK,
+			Status: 1,
+			Data: map[string]interface{}{
+				"settings":      config.GetEditableSettings(),
+				"cpuSensorInfo": temperatures.GetCpuSensorInfo(),
+			},
+		}).Send(w)
+	case http.MethodPost:
+		var settings config.EditableSettings
+		if err := decodeJSONRequest(w, r, &settings); err != nil {
+			(&Response{
+				Code:    http.StatusBadRequest,
+				Status:  0,
+				Message: "Unable to validate OpenLinkHub configuration",
+			}).Send(w)
+			return
+		}
+
+		if err := config.UpdateEditableSettings(settings); err != nil {
+			(&Response{
+				Code:    http.StatusBadRequest,
+				Status:  0,
+				Message: err.Error(),
+			}).Send(w)
+			return
+		}
+
+		(&Response{
+			Code:    http.StatusOK,
+			Status:  1,
+			Message: "OpenLinkHub configuration saved. Restart OpenLinkHub to apply the change.",
+			Data: map[string]interface{}{
+				"settings":      config.GetEditableSettings(),
+				"cpuSensorInfo": temperatures.GetCpuSensorInfo(),
+			},
+		}).Send(w)
+	default:
+		methodNotAllowed(w, http.MethodGet, http.MethodPost)
+	}
 }
 
 // getCpuTemperature will return current cpu temperature in string format
@@ -226,37 +402,19 @@ func getDevices(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// getDevices returns response on /devices
+// getDeviceProfiles returns available profiles for a device.
 func getDeviceProfiles(w http.ResponseWriter, r *http.Request) {
 	deviceId, valid := getVar("/api/device/profiles/", r)
 	if !valid {
-		resp := &Response{
-			Code: http.StatusOK,
-			Data: nil,
-		}
-		resp.Send(w)
-	} else {
-		results := devices.CallDeviceMethod(
-			deviceId,
-			"GetDeviceProfiles",
-		)
-
-		if len(results) > 0 {
-			resp := &Response{
-				Code:   http.StatusOK,
-				Status: 1,
-				Data:   results[0].Interface(),
-			}
-			resp.Send(w)
-		} else {
-			resp := &Response{
-				Code:   http.StatusOK,
-				Status: 0,
-				Data:   nil,
-			}
-			resp.Send(w)
-		}
+		(&Response{Code: http.StatusOK, Data: nil}).Send(w)
+		return
 	}
+	results := devices.CallDeviceMethod(deviceId, "GetDeviceProfiles")
+	if len(results) > 0 {
+		(&Response{Code: http.StatusOK, Status: 1, Data: results[0].Interface()}).Send(w)
+		return
+	}
+	(&Response{Code: http.StatusOK, Status: 0, Data: nil}).Send(w)
 }
 
 // getDeviceLed returns response on /led
@@ -1169,6 +1327,16 @@ func setManualDeviceSpeed(w http.ResponseWriter, r *http.Request) {
 }
 
 // setDeviceColor handles device color changes
+func setRgbPower(w http.ResponseWriter, r *http.Request) {
+	request := requests.ProcessSetRgbPower(r)
+	resp := &Response{
+		Code:    request.Code,
+		Status:  request.Status,
+		Message: request.Message,
+	}
+	resp.Send(w)
+}
+
 func setDeviceColor(w http.ResponseWriter, r *http.Request) {
 	request := requests.ProcessChangeColor(r)
 	resp := &Response{
@@ -2480,6 +2648,368 @@ func uiLcdOverview(w http.ResponseWriter, _ *http.Request) {
 	}
 }
 
+// getICUEEditorDevices exposes the RGB-capable hardware OpenLinkHub has actually
+// enumerated. The profile editor uses this instead of asking the user to enter a
+// fan/DIMM count, so the canvas follows the same live device model as playback.
+func getICUEEditorDevices(w http.ResponseWriter, _ *http.Request) {
+	type editorDevice struct {
+		Key       string `json:"key"`
+		Parent    string `json:"parent"`
+		Name      string `json:"name"`
+		Kind      string `json:"kind"`
+		LEDs      int    `json:"leds"`
+		ChannelID int    `json:"channelId"`
+		PortID    int    `json:"portId,omitempty"`
+		Topology  string `json:"topology,omitempty"`
+		Locator   string `json:"locator,omitempty"`
+	}
+	out := make([]editorDevice, 0)
+	qxNumber, titanNumber, memoryNumber, linkNumber := 0, 0, 0, 0
+	validLabel := func(label string) bool {
+		v := strings.TrimSpace(label)
+		return v != "" && !strings.EqualFold(v, "Set Label") && !strings.EqualFold(v, "SetLabel")
+	}
+	for serial, registered := range devices.GetDevices() {
+		switch d := registered.GetDevice.(type) {
+		case *lshdevice.Device:
+			keys := make([]int, 0, len(d.Devices))
+			for k := range d.Devices {
+				keys = append(keys, k)
+			}
+			sort.Ints(keys)
+			for _, k := range keys {
+				dev := d.Devices[k]
+				if dev == nil || dev.LedChannels == 0 {
+					continue
+				}
+				kind, topology := "link", "linear"
+				lower := strings.ToLower(dev.Name)
+				if strings.Contains(lower, "qx") && dev.LedChannels == 34 {
+					kind, topology = "qx", "qx34"
+				}
+				if strings.Contains(lower, "titan") && dev.LedChannels == 20 {
+					kind, topology = "titan", "titan20"
+				}
+				name := ""
+				if validLabel(dev.Label) {
+					name = strings.TrimSpace(dev.Label)
+				} else {
+					switch kind {
+					case "qx":
+						qxNumber++
+						name = fmt.Sprintf("QX %d", qxNumber)
+					case "titan":
+						titanNumber++
+						if titanNumber == 1 {
+							name = "TITAN"
+						} else {
+							name = fmt.Sprintf("TITAN %d", titanNumber)
+						}
+					default:
+						linkNumber++
+						name = strings.TrimSpace(dev.Name)
+						if name == "" || strings.EqualFold(name, "Set Label") {
+							name = fmt.Sprintf("LINK Device %d", linkNumber)
+						}
+					}
+				}
+				out = append(out, editorDevice{Key: fmt.Sprintf("%s:%d", serial, k), Parent: registered.Product, Name: name, Kind: kind, LEDs: int(dev.LedChannels), ChannelID: k, PortID: int(dev.PortId), Topology: topology})
+			}
+		case *memorydevice.Device:
+			keys := make([]int, 0, len(d.Devices))
+			for k := range d.Devices {
+				keys = append(keys, k)
+			}
+			sort.Ints(keys)
+			for _, k := range keys {
+				dev := d.Devices[k]
+				if dev == nil || dev.LedChannels == 0 {
+					continue
+				}
+				memoryNumber++
+				name := fmt.Sprintf("Memory %d", memoryNumber)
+				if validLabel(dev.Label) {
+					name = strings.TrimSpace(dev.Label)
+				}
+				out = append(out, editorDevice{Key: fmt.Sprintf("%s:%d", serial, k), Parent: registered.Product, Name: name, Kind: "memory", LEDs: int(dev.LedChannels), ChannelID: k, Topology: "linear", Locator: strings.TrimSpace(dev.Locator)})
+			}
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"devices": out})
+}
+
+// getICUEProfiles returns all imported iCUE profiles and parser failures.
+func getICUEProfiles(w http.ResponseWriter, _ *http.Request) {
+	profiles, failures, err := icueprofile.Scan(config.GetConfig().ConfigPath)
+	if err != nil {
+		http.Error(w, "Unable to scan iCUE profiles: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"profiles":  profiles,
+		"failures":  failures,
+		"directory": filepath.ToSlash(icueprofile.Directory(config.GetConfig().ConfigPath)),
+	})
+}
+
+// uploadICUEProfile validates and stores one Corsair .cueprofile. This stage is
+// parser-only: importing a profile never changes the currently active RGB.
+func uploadICUEProfile(w http.ResponseWriter, r *http.Request) {
+	const maxUpload = 16 << 20
+	r.Body = http.MaxBytesReader(w, r.Body, maxUpload)
+	if err := r.ParseMultipartForm(maxUpload); err != nil {
+		http.Error(w, "Unable to read profile upload: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	file, header, err := r.FormFile("profileFile")
+	if err != nil {
+		http.Error(w, "No .cueprofile file supplied", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+	if !strings.EqualFold(filepath.Ext(header.Filename), ".cueprofile") {
+		http.Error(w, "Only .cueprofile files are supported", http.StatusBadRequest)
+		return
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxUpload+1))
+	if err != nil || len(data) > maxUpload {
+		http.Error(w, "Unable to read profile or profile is larger than 16 MiB", http.StatusBadRequest)
+		return
+	}
+	profile, dest, err := icueprofile.Save(config.GetConfig().ConfigPath, header.Filename, data)
+	if err != nil {
+		http.Error(w, "iCUE profile import failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	logger.Log(logger.Fields{"profile": profile.Name, "file": filepath.Base(dest), "layers": profile.Summary.Layers}).Info("Imported iCUE profile")
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  1,
+		"message": "iCUE profile imported successfully",
+		"profile": map[string]interface{}{
+			"key": icueprofile.ProfileKey(filepath.Base(dest)), "fileName": filepath.Base(dest), "name": profile.Name, "id": profile.ID,
+			"deviceEntries": profile.Summary.DeviceEntries, "channels": profile.Summary.Channels,
+			"layers": profile.Summary.Layers, "enabledLayers": profile.Summary.EnabledLayers,
+			"effects": profile.Summary.Effects,
+		},
+	})
+}
+
+// icueRainMethod exposes only the runtime Rain A/B selector. It is deliberately
+// independent of timing calibration and never modifies imported profiles.
+func icueRainMethod(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	switch r.Method {
+	case http.MethodGet:
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": 1, "rain": icueprofile.GetRainMethod(), "persistent": false})
+	case http.MethodPost:
+		var req struct {
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
+			http.Error(w, "Unable to read Rain method: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		method, err := icueprofile.SetRainMethod(req.Method)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": 1, "rain": method, "persistent": false})
+	default:
+		w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// icueMappingProbe controls the runtime-only raw LED identification overlay.
+// It never modifies imported profiles. The mapper is intentionally topology-blind:
+// one raw output is purple and all other raw outputs on the selected device are blue.
+func icueMappingProbe(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	switch r.Method {
+	case http.MethodGet:
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": 1, "probe": icueprofile.GetMappingProbe(),
+			"observations": icueprofile.GetMappingObservations(), "persistent": false,
+		})
+	case http.MethodPost:
+		var req struct {
+			Enabled       bool   `json:"enabled"`
+			Kind          string `json:"kind"`
+			DeviceOrdinal int    `json:"deviceOrdinal"`
+			LocalLED      int    `json:"localLed"`
+			Record        bool   `json:"record"`
+			Face          string `json:"face"`
+			Ring          string `json:"ring"`
+			Position      string `json:"position"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
+			http.Error(w, "Unable to read LED mapping probe: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		probe, err := icueprofile.SetMappingProbe(req.Enabled, req.Kind, req.DeviceOrdinal, req.LocalLED)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		logger.Log(logger.Fields{
+			"enabled": probe.Enabled, "kind": probe.Kind, "deviceOrdinal": probe.DeviceOrdinal,
+			"rawLed": probe.LocalLED, "generation": probe.Generation,
+		}).Info("iCUE LED mapper selection updated")
+
+		if req.Record {
+			obs, obsErr := icueprofile.SetMappingObservation(icueprofile.MappingObservation{
+				Kind: req.Kind, DeviceOrdinal: req.DeviceOrdinal, LocalLED: req.LocalLED,
+				Face: req.Face, Ring: req.Ring, Position: req.Position,
+			})
+			if obsErr != nil {
+				http.Error(w, obsErr.Error(), http.StatusBadRequest)
+				return
+			}
+			logger.Log(logger.Fields{
+				"kind": obs.Kind, "deviceOrdinal": obs.DeviceOrdinal, "rawLed": obs.LocalLED,
+				"face": obs.Face, "ring": obs.Ring, "position": obs.Position,
+			}).Info("iCUE LED mapper observation recorded")
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": 1, "probe": probe, "observations": icueprofile.GetMappingObservations(), "persistent": false,
+		})
+	default:
+		w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// icueTimingCalibration exposes the runtime-only Slow/Fast duration factors.
+// It is intentionally non-persistent: restart restores the experimental
+// 1.5 / 1.0 / 0.5 baseline and imported profiles are never modified.
+func icueTimingCalibration(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	switch r.Method {
+	case http.MethodGet:
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": 1, "timing": icueprofile.GetTimingCalibration(), "normal": 1.0, "persistent": false})
+	case http.MethodPost:
+		var req struct {
+			Slow float64 `json:"slow"`
+			Fast float64 `json:"fast"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
+			http.Error(w, "Unable to read timing calibration: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		cal, err := icueprofile.SetTimingCalibration(req.Slow, req.Fast)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": 1, "timing": cal, "normal": 1.0, "persistent": false})
+	default:
+		w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// icueProfileWorkspace serves profile details and temporary live edits. Runtime
+// edits never rewrite the imported .cueprofile; they exist only in the parsed
+// profile cache and are discarded on restart/re-upload.
+func icueProfileWorkspace(w http.ResponseWriter, r *http.Request) {
+	key := strings.TrimSpace(r.URL.Query().Get("key"))
+	if key == "" {
+		http.Error(w, "Missing iCUE profile key", http.StatusBadRequest)
+		return
+	}
+	profile, path, err := icueprofile.LoadByKey(config.GetConfig().ConfigPath, key)
+	if err != nil {
+		http.Error(w, "Unable to load iCUE profile: "+err.Error(), http.StatusNotFound)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		// The workspace edits the authored profile model directly. Playback keeps
+		// its independent renderer path; the browser no longer needs a decoded/
+		// canonical mirror of the same layers.
+		authoredLayers := icueprofile.EnrichAuthoredSourceColors(profile.LightingLinkLayers)
+
+		// The editor can work directly on device-family compatibility layers
+		// (for example Dram1030) as well as shared LightingLink layers. Enrich
+		// every compatibility layer before serializing the workspace response so
+		// packed Rain/ColorWave first+second colours and transition palettes are
+		// available through the same sourceColors field in both paths. This is
+		// display metadata only; the imported .cueprofile and authored Parameters
+		// remain untouched.
+		for di := range profile.Devices {
+			for ci := range profile.Devices[di].Channels {
+				profile.Devices[di].Channels[ci].Layers = icueprofile.EnrichAuthoredSourceColors(profile.Devices[di].Channels[ci].Layers)
+			}
+		}
+
+		const editorBackendVersion = "v12.4.74z7d9n-device-layer-colours"
+		editorModel := map[string]interface{}{
+			"version": editorBackendVersion,
+			"source":  "authored-cueprofile",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-OpenLinkHub-ICUE-Editor", editorBackendVersion)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"key": key, "fileName": filepath.Base(path), "profile": profile,
+			"editorBackendVersion": editorBackendVersion,
+			"editor":               editorModel,
+			"lightingLinkLayers":   authoredLayers,
+		})
+
+	case http.MethodDelete:
+		profile, path, err = icueprofile.ResetRuntimeProfile(config.GetConfig().ConfigPath, key)
+		if err != nil {
+			http.Error(w, "Unable to reset live profile: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		logger.Log(logger.Fields{"profile": profile.Name, "file": filepath.Base(path)}).Info("Reset iCUE live editor to authored profile")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": 1, "key": key, "persistent": false})
+
+	case http.MethodPost:
+		var edit icueprofile.RuntimeLayerEdit
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&edit); err != nil {
+			http.Error(w, "Unable to read live layer edit: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		layer, err := icueprofile.ApplyRuntimeLayerEdit(profile, edit)
+		if err != nil {
+			http.Error(w, "Unable to apply live layer edit: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": 1, "layer": layer, "persistent": false})
+	default:
+		w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost+", "+http.MethodDelete)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// uiICUEProfiles is the dedicated iCUE import, inspection and live-test workspace.
+func uiICUEProfiles(w http.ResponseWriter, _ *http.Request) {
+	web := templates.Web{}
+	web.Title = dashboard.GetDashboard().PageTitle
+	web.Devices = devices.GetDevices()
+	web.BuildInfo = version.GetBuildInfo()
+	web.SystemInfo = systeminfo.GetInfo()
+	web.Dashboard = dashboard.GetDashboard()
+	web.CpuTemp = dashboard.GetDashboard().TemperatureToString(temperatures.GetCpuTemperature())
+	web.GpuTemp = dashboard.GetDashboard().TemperatureToString(temperatures.GetGpuTemperature())
+	web.Page = "icueProfiles"
+	t := templates.GetTemplate()
+	for header := range headers {
+		w.Header().Set(headers[header].Key, headers[header].Value)
+	}
+	if err := t.ExecuteTemplate(w, "icue-profiles.html", web); err != nil {
+		(&Response{Code: http.StatusInternalServerError, Message: language.GetValue("txtUnableToServeWebContent")}).Send(w)
+	}
+}
+
 // uiSettings handles index page
 func uiSettings(w http.ResponseWriter, _ *http.Request) {
 	web := templates.Web{}
@@ -2622,13 +3152,24 @@ func getDeviceID(uri string, r *http.Request) (string, bool) {
 	return value, true
 }
 
+func methodNotAllowed(w http.ResponseWriter, allowedMethods ...string) {
+	if len(allowedMethods) > 0 {
+		w.Header().Set("Allow", strings.Join(allowedMethods, ", "))
+	}
+	(&Response{
+		Code:    http.StatusMethodNotAllowed,
+		Status:  0,
+		Message: language.GetValue("txtMethodNotAllowed"),
+	}).Send(w)
+}
+
 func handleFunc(mux *http.ServeMux, path, method string, handler func(w http.ResponseWriter, r *http.Request)) {
 	mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == method {
 			handler(w, r)
-		} else {
-			http.Error(w, language.GetValue("txtMethodNotAllowed"), http.StatusMethodNotAllowed)
+			return
 		}
+		methodNotAllowed(w, method)
 	})
 }
 
@@ -2640,6 +3181,10 @@ func setRoutes() http.Handler {
 
 	// GET
 	handleFunc(r, "/api/", http.MethodGet, homePage)
+	handleFunc(r, "/api/systemInfo", http.MethodGet, getSystemInfo)
+	handleFunc(r, "/api/hwmonTemps", http.MethodGet, getHwmonTemperatures)
+	r.HandleFunc("/api/config/manual", configManual)
+	r.HandleFunc("/api/config/editable", configEditable)
 	handleFunc(r, "/api/cpuTemp", http.MethodGet, getCpuTemperature)
 	handleFunc(r, "/api/cpuTemp/clean", http.MethodGet, getCpuTemperatureClean)
 	handleFunc(r, "/api/cpuLoad", http.MethodGet, getCpuLoad)
@@ -2673,6 +3218,12 @@ func setRoutes() http.Handler {
 	handleFunc(r, "/api/systray", http.MethodGet, getSystrayData)
 	handleFunc(r, "/api/keyboard/dial/getColors/", http.MethodGet, getControlDialColors)
 	handleFunc(r, "/api/getSupportedDevices", http.MethodGet, getSupportedDevices)
+	handleFunc(r, "/api/icue/profiles", http.MethodGet, getICUEProfiles)
+	handleFunc(r, "/api/icue/devices", http.MethodGet, getICUEEditorDevices)
+	r.HandleFunc("/api/icue/profile", icueProfileWorkspace)
+	r.HandleFunc("/api/icue/timing-calibration", icueTimingCalibration)
+	r.HandleFunc("/api/icue/rain-method", icueRainMethod)
+	r.HandleFunc("/api/icue/mapping-probe", icueMappingProbe)
 	handleFunc(r, "/api/backup", http.MethodGet, backup.PerformBackup)
 	handleFunc(r, "/api/position/", http.MethodGet, getPositionData)
 	handleFunc(r, "/api/headset/getEqualizers/", http.MethodGet, getEqualizers)
@@ -2683,12 +3234,14 @@ func setRoutes() http.Handler {
 	handleFunc(r, "/api/media/", http.MethodGet, mediaPlaybackControl)
 
 	// POST
+	handleFunc(r, "/api/restart", http.MethodPost, restartOpenLinkHub)
 	handleFunc(r, "/api/temperatures/new", http.MethodPost, newTemperatureProfile)
 	handleFunc(r, "/api/temperatures/setLiquidTemperatureSource", http.MethodPost, setLiquidTemperatureSource)
 	handleFunc(r, "/api/speed", http.MethodPost, setDeviceSpeed)
 	handleFunc(r, "/api/speed/manual", http.MethodPost, setManualDeviceSpeed)
 	handleFunc(r, "/api/operatingMode", http.MethodPost, setOperatingMode)
 	handleFunc(r, "/api/color", http.MethodPost, setDeviceColor)
+	handleFunc(r, "/api/color/power", http.MethodPost, setRgbPower)
 	handleFunc(r, "/api/color/global", http.MethodPost, setGlobalDeviceColor)
 	handleFunc(r, "/api/color/all", http.MethodPost, setAllDevicesColor)
 	handleFunc(r, "/api/color/linkAdapter", http.MethodPost, setLinkAdapterColor)
@@ -2769,6 +3322,7 @@ func setRoutes() http.Handler {
 	handleFunc(r, "/api/keyboard/dial/setColors", http.MethodPost, setKeyboardControlDialColors)
 	handleFunc(r, "/api/setSupportedDevices", http.MethodPost, setSupportedDevices)
 	handleFunc(r, "/api/restore", http.MethodPost, backup.PerformRestore)
+	handleFunc(r, "/api/icue/upload", http.MethodPost, uploadICUEProfile)
 	handleFunc(r, "/api/lcd/upload", http.MethodPost, lcd.PerformImageUpload)
 	handleFunc(r, "/api/headset/anc", http.MethodPost, changeActiveNoiseCancellation)
 	handleFunc(r, "/api/headset/sidetone", http.MethodPost, changeSidetone)
@@ -2821,6 +3375,7 @@ func setRoutes() http.Handler {
 		handleFunc(r, "/color", http.MethodGet, uiColorOverview)
 		handleFunc(r, "/scheduler", http.MethodGet, uiSchedulerOverview)
 		handleFunc(r, "/rgb", http.MethodGet, uiRgbEditor)
+		handleFunc(r, "/icueProfiles", http.MethodGet, uiICUEProfiles)
 		handleFunc(r, "/rgbCluster", http.MethodGet, uiRgbCluster)
 		handleFunc(r, "/macros", http.MethodGet, uiMacrosOverview)
 		handleFunc(r, "/lcd", http.MethodGet, uiLcdOverview)
@@ -2848,6 +3403,11 @@ func Init() {
 	}
 
 	if config.GetConfig().ListenPort > 0 {
+		if dir, err := icueprofile.EnsureDirectory(config.GetConfig().ConfigPath); err != nil {
+			logger.Log(logger.Fields{"error": err, "directory": dir}).Error("Unable to initialize iCUE profile import directory")
+		} else {
+			logger.Log(logger.Fields{"directory": dir}).Info("iCUE profile import directory initialized")
+		}
 		templates.Init()
 		server = &http.Server{
 			Addr: fmt.Sprintf(
@@ -2864,9 +3424,13 @@ func Init() {
 				server.Addr,
 			),
 		)
-		err := server.ListenAndServe()
+		listener, err := net.Listen("tcp", server.Addr)
 		if err != nil {
 			logger.Log(logger.Fields{"error": err}).Fatal("Unable to start REST server")
+		}
+		discovery.Start()
+		if err = server.Serve(listener); err != nil && err != http.ErrServerClosed {
+			logger.Log(logger.Fields{"error": err}).Fatal("Unable to serve REST requests")
 		}
 	} else {
 		logger.Log(logger.Fields{}).Info("REST server is disabled")
