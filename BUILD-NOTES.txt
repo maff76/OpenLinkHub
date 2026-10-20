@@ -1,17 +1,23 @@
-OpenLinkHub v12.4.74z7d9m - basic effect colour editing
+OpenLinkHub v12.4.74z7d9n — device-layer colour bridge
 
-Changed files:
-- src/icueprofile/render.go
-- static/js/icue-profiles.js
+Focused fix based on z7d9m.
+
+Changed code:
+- src/server/server.go
+
+Fix:
+- The workspace GET previously enriched sourceColors only for shared LightingLinkLayers.
+- Direct compatibility layers (notably Dram1030 Rain 1 / Rain 2) were sent to the browser without sourceColors, even though their packed first/second colours were parsed correctly.
+- The workspace now enriches every device/channel compatibility layer with the same canonical colour decoder before JSON serialization.
+- Imported .cueprofile Parameters and raw authored values are not rewritten.
+
+Master Chief profile audit (no runtime behaviour change in this build):
+- Dram1030 Rain 1 and Rain 2 each contain packed first/second colours 4279840521 / 4284786989.
+- Dram1030 preserves a non-trivial authored ConcreteLeds order and duplicate LED IDs. This build deliberately preserves that data and does not sort/deduplicate or reinterpret traversal order.
+- Rain 1 and Rain 2 also carry different authored directions (4 and 3), another reason not to alter effect maths until ordering semantics are audited.
 
 Scope:
-- Keep imported .cueprofile colour decoding/sourceColors from z7d9l.
-- Add runtime-only normalized editorColors override consumed by all major renderer colour paths:
-  effectColors, transitionStops, layerColor and gradientColors.
-- Effect colour controls now edit sourceColors immediately and send editorColors to the live runtime instead of trying to rewrite each effect's different Corsair serialization.
-- Selected LEDs in the editor remain a selection display, not an effect simulation. One colour stays solid; 2+ colours cycle every 700 ms as a simple palette indication.
-- No changes to profile activation, QX topology, DRAM family mapping, Rain timing/maths, or source .cueprofile files.
-
-Checks:
-- gofmt: PASS
-- node --check static/js/icue-profiles.js: PASS
+- No Rain maths changes.
+- No QX/DRAM physical mapping changes.
+- No profile activation/lifecycle changes.
+- No parser changes.

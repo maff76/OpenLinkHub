@@ -2934,7 +2934,20 @@ func icueProfileWorkspace(w http.ResponseWriter, r *http.Request) {
 		// canonical mirror of the same layers.
 		authoredLayers := icueprofile.EnrichAuthoredSourceColors(profile.LightingLinkLayers)
 
-		const editorBackendVersion = "v12.4.74z7d8-live-reset"
+		// The editor can work directly on device-family compatibility layers
+		// (for example Dram1030) as well as shared LightingLink layers. Enrich
+		// every compatibility layer before serializing the workspace response so
+		// packed Rain/ColorWave first+second colours and transition palettes are
+		// available through the same sourceColors field in both paths. This is
+		// display metadata only; the imported .cueprofile and authored Parameters
+		// remain untouched.
+		for di := range profile.Devices {
+			for ci := range profile.Devices[di].Channels {
+				profile.Devices[di].Channels[ci].Layers = icueprofile.EnrichAuthoredSourceColors(profile.Devices[di].Channels[ci].Layers)
+			}
+		}
+
+		const editorBackendVersion = "v12.4.74z7d9n-device-layer-colours"
 		editorModel := map[string]interface{}{
 			"version": editorBackendVersion,
 			"source":  "authored-cueprofile",
