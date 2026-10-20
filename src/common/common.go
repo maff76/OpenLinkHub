@@ -306,7 +306,8 @@ type ClusterController struct {
 type LogLevel int
 
 const (
-	LogInfo LogLevel = iota
+	LogDebug LogLevel = iota
+	LogInfo
 	LogWarn
 	LogError
 	LogFatal
