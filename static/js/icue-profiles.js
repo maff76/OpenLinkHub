@@ -99,8 +99,8 @@ $(function () {
     const friendlyEffects={
         staticlighting:{name:'Static Color',fields:[['Colour','@colors']]},
         rainlighting:{name:'Rain',fields:[['Colour mode','@random'],['Speed','speed'],['Direction','direction']]},
-        wavelighting:{name:'Wave',graph:true,fields:[['Lighting time','duration'],['Velocity (lights/sec)','velocity'],['Tail (lights)','tailLength'],['Two sides','isDoublesided'],['Angle','angle']]},
-        ripplelighting:{name:'Ripple',graph:true,fields:[['Lighting time','duration'],['Velocity (lights/sec)','velocity'],['Tail (lights)','tailLength'],['Auto duration','autoDuration'],['Wave spread','waveSpread']]},
+        wavelighting:{name:'Wave',graph:true,fields:[['Lighting time (sec)','duration','seconds'],['Velocity (lights/sec)','velocity','tenths'],['Tail (lights)','tailLength','tenths'],['Two sides','isDoublesided'],['Angle','angle']]},
+        ripplelighting:{name:'Ripple',graph:true,fields:[['Lighting time (sec)','duration','seconds'],['Velocity (lights/sec)','velocity','tenths'],['Tail (lights)','tailLength','tenths'],['Auto duration','autoDuration'],['Wave spread','waveSpread']]},
         colorwavelighting:{name:'Color Wave',fields:[['Colour mode','@random'],['Colours','@colors'],['Speed','speed'],['Direction','direction']]},
         colorshiftlighting:{name:'Color Shift',fields:[['Colour mode','@random'],['Colours','@colors'],['Speed','speed'],['Direction','direction']]},
         colorpulselighting:{name:'Color Pulse',fields:[['Colour mode','@random'],['Colours','@colors'],['Speed','speed']]},
@@ -117,17 +117,24 @@ $(function () {
         blinklighting:{name:'Blink',fields:[['Colour','@colors'],['Speed','speed'],['Lighting time','duration']]},
         breathelighting:{name:'Breathe',fields:[['Colour','@colors'],['Speed','speed'],['Lighting time','duration']]}
     };
-    function formatFriendlyValue(key){
+    function formatFriendlyValue(key,display){
         if(key==='@colors'){const cs=authoredColors();return cs.length?cs.join('  ·  '):'—';}
         if(key==='@random'){const v=authoredValue('isRandom')??authoredValue('random');return v===true?'Random Colors':(v===false?'Alternating / authored':'—');}
-        const v=authoredValue(key);if(v===undefined||v===null||v==='')return '—';if(typeof v==='boolean')return v?'On':'Off';if(Array.isArray(v))return v.join(' · ');return String(v);
+        const v=authoredValue(key);if(v===undefined||v===null||v==='')return '—';if(typeof v==='boolean')return v?'On':'Off';if(Array.isArray(v))return v.join(' · ');
+        const n=Number(v);if(Number.isFinite(n)){if(display==='seconds')return (n/1000).toFixed(1);if(display==='tenths')return (n/10).toFixed(1);}
+        return String(v);
+    }
+    function authoredLevelFromLeaf(raw){
+        const s=String(raw||'').trim();let m=s.match(/^color\s*=\s*#([0-9a-fA-F]{8})$/i);if(m)return parseInt(m[1].slice(0,2),16)/255*100;
+        m=s.match(/^color\s*=\s*rgba\([^)]*\s([0-9.]+)\)\s*$/i);if(m){const a=Number(m[1]);if(Number.isFinite(a))return Math.max(0,Math.min(100,a<=1?a*100:a/255*100));}
+        return null;
     }
     function transitionStops(){
         const a=authoredParameters(), candidates=[];
         ['transitions','color'].forEach(k=>{const x=a[k];if(x&&Array.isArray(x.rawValues))candidates.push(...x.rawValues);});
         if(!candidates.length){const p=(currentLayer&&currentLayer.parameters)||{};if(Array.isArray(p.transitions))candidates.push(...p.transitions);}
         const stops=[];let cur=null;
-        candidates.forEach(raw=>{const str=String(raw||'').trim();let m=str.match(/^time\s*=\s*([-+0-9.eE]+)/i);if(m){if(cur&&cur.time!==undefined)stops.push(cur);cur={time:Number(m[1]),level:100};return;}m=str.match(/^opacity\s*=\s*([-+0-9.eE]+)/i);if(m){if(!cur)cur={time:0};const n=Number(m[1]);cur.level=n>100?(n/255*100):n;return;}const c=authoredColorFromLeaf(str);if(c){if(!cur)cur={time:stops.length?1:0,level:100};cur.color=c;}});
+        candidates.forEach(raw=>{const str=String(raw||'').trim();let m=str.match(/^time\s*=\s*([-+0-9.eE]+)/i);if(m){if(cur&&cur.time!==undefined)stops.push(cur);cur={time:Number(m[1]),level:100};return;}m=str.match(/^opacity\s*=\s*([-+0-9.eE]+)/i);if(m){if(!cur)cur={time:0};const n=Number(m[1]);cur.level=n>100?(n/255*100):n;return;}const c=authoredColorFromLeaf(str);if(c){if(!cur)cur={time:stops.length?1:0,level:100};cur.color=c;const level=authoredLevelFromLeaf(str);if(level!==null)cur.level=level;}});
         if(cur&&cur.time!==undefined)stops.push(cur);
         const cs=authoredColors();stops.forEach((x,i)=>{if(!x.color)x.color=cs[i%Math.max(1,cs.length)]||'#ffffff';x.level=Math.max(0,Math.min(100,Number.isFinite(x.level)?x.level:100));});
         return stops.filter(x=>Number.isFinite(x.time));
@@ -144,7 +151,7 @@ $(function () {
     function renderFriendlyEffect(){
         if(!currentLayer)return;const key=String(currentLayer.effect||'').toLowerCase(),cfg=friendlyEffects[key]||{name:currentLayer.effect||'Effect',fields:[]};
         $('#icueFriendlyEffectName').text(cfg.name);$('#icueFriendlyEffectHint').html('<small>'+((cfg.graph)?'iCUE-style transition graph plus the authored effect fields.':'Authored effect controls cross-referenced against the imported profile.')+'</small>');
-        const box=$('#icueFriendlyFields').empty();(cfg.fields||[]).forEach(([label,k])=>{const col=$('<div class="col-6 col-lg-4 icue-friendly-field"></div>');col.append($('<small></small>').text(label),$('<div class="icue-friendly-value"></div>').text(formatFriendlyValue(k)));box.append(col);});
+        const box=$('#icueFriendlyFields').empty();(cfg.fields||[]).forEach(([label,k,display])=>{const col=$('<div class="col-6 col-lg-4 icue-friendly-field"></div>');col.append($('<small></small>').text(label),$('<div class="icue-friendly-value"></div>').text(formatFriendlyValue(k,display)));box.append(col);});
         const known=new Set((cfg.fields||[]).map(x=>x[1]).filter(x=>!String(x).startsWith('@')));Object.keys(authoredParameters()).forEach(k=>{if(known.has(k)||['transitions','colors','color','background'].includes(k))return;const col=$('<div class="col-6 col-lg-4 icue-friendly-field"></div>');col.append($('<small></small>').text('Authored · '+k),$('<div class="icue-friendly-value"></div>').text(formatFriendlyValue(k)));box.append(col);});
         renderTransitionGraph();
     }

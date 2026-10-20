@@ -1,30 +1,51 @@
-OpenLinkHub v12.4.74z7d9q — Profile Editor v2 UI foundation
+OpenLinkHub v12.4.74z7d9r — iCUE effect UI audit pass 1
 
-UI-only pass based on the current z7d9p conceptual-layer editor.
-No Go/parser/renderer/effect-maths/playback changes.
+Scope: UI only. No renderer, playback, profile activation, parser, or hardware behaviour changes.
 
-Changed files:
-- web/icue-profiles.html
+Changed file:
 - static/js/icue-profiles.js
 
-Changes:
-- Removes the System Temperatures bar from the iCUE Profiles page only, giving the profile workspace the full page height.
-- Adds an always-visible Devices & Lighting Zones strip for all detected QX, TITAN and Memory devices while retaining the existing device dropdown and group shortcuts.
-- Keeps the conceptual layer list pinned; selecting hardware is still a backing-target/LED inspection action and does not replace the conceptual layer collection.
-- Adds an iCUE-style effect workbench above the existing live controls.
-- Wave, Ripple and Gradient use a transition-graph view when authored transition stops are available.
-- Graph X is authored transition time/position. Graph Y consumes an authored per-stop opacity/level if one is exposed; otherwise it deliberately displays 100% rather than inventing a value.
-- Friendly effect summaries added for Static, Rain, Wave, Ripple, Color Wave, Color Shift, Color Pulse, Infinity, Visor, Marquee, Sequential, Gradient, Watercolor, Spiral, Spiral Rainbow, Rainbow Wave, Rainbow, Blink and Breathe.
-- Adds missing discovered effect names InfinityLighting, BlinkLighting, BreatheLighting, RainbowLighting and BasicNoneLighting to the editor effect list.
-- Existing Effect Controls, Advanced/parsed parameters, Authored source values, Profile Output, Effect Clock, timing calibration and Rain A/B controls remain intact.
-- Transition + / x buttons are intentionally disabled in this UI-only pass; the graph is observational until profile stop editing semantics are fully verified.
+Confirmed from supplied Cobalt profile + iCUE screenshot:
+- Wave duration is stored as milliseconds (3000) but iCUE displays seconds (3.0).
+- Wave velocity is stored in tenths of lights/sec (500) but iCUE displays 50.0 lights/sec.
+- Wave tail is stored in tenths of lights (100) but iCUE displays 10.0 lights.
+- Two Sides and Angle already map directly.
+- Therefore the Cobalt Wave values were not the wrong layer in this example; the editor was displaying raw serialized units instead of iCUE display units.
 
-Cross-reference used:
-- iCUE screenshots supplied for Color Wave, Wave, Rain, Color Pulse, Marquee, Infinity, Color Shift, Visor, Ripple, Rotary Stack and Sequential.
-- Supplied wave.cueprofile, ripple.cueprofile, visor.cueprofile, infinity.cueprofile, color wave profile, Cobalt, Master Chief, Electricity and Sci-fi Dark fixtures.
-- Wave fixture confirms duration + transitions(time,color) + velocity + tailLength + isDoublesided + angle.
-- Ripple fixture confirms duration + transitions(time,color) + velocity + tailLength + autoDuration + waveSpread + colors.
+Transition graph correction:
+- Horizontal coordinate remains authored transition time/position.
+- Vertical coordinate now reads alpha from authored #AARRGGBB transition colours and converts it to 0–100%.
+- This matches the observed iCUE graph behaviour where dragging a point vertically shows 0–100%.
+- Explicit opacity leaves remain supported.
 
-Still useful later (not required for this build):
-- A saved iCUE profile with one transition dot moved vertically from 100% would prove exactly how iCUE serializes the graph Y percentage.
-- Dedicated authored fixtures for Rotary Stack/Sequential/Marquee would let us mirror every hidden field rather than relying on the screenshots for their friendly layout.
+Wave/Ripple friendly display:
+- Lighting time: raw ms -> seconds.
+- Velocity: raw value / 10 -> lights/sec.
+- Tail: raw value / 10 -> lights.
+- Raw authored values remain unchanged and remain visible in source diagnostics.
+
+Effect structure audit from supplied profiles:
+- StaticLighting: transition/static colour + opacity.
+- RainLighting: first/second colours, random, opacity, speed, direction.
+- WaveLighting: transition graph, duration, velocity, tailLength, isDoublesided, angle.
+- RippleLighting: transition graph, duration, velocity, tailLength; some profiles also carry trigger/play semantics and additional fields.
+- ColorWaveLighting: first/second colours, random, speed, direction.
+- ColorShiftLighting: first/second colours, random, speed.
+- ColorPulseLighting: first/second colours, random, speed.
+- VisorLighting: first/second colours, random, speed, direction.
+- InfinityLighting: first/second colours, speed, direction.
+- GradientLighting: transition graph; authored stops carry colour and alpha.
+- WaterColorLighting: first/second colours + speed in observed profiles.
+- RainbowWaveLighting: speed + direction.
+- SpiralRainbowLighting: speed (direction only where actually authored).
+- RainbowLighting: speed in observed Master Chief profile.
+- BlinkLighting/BreatheLighting: observed, but supplied profiles do not yet give enough modern iCUE UI evidence to invent additional friendly controls.
+
+Still deliberately not guessed:
+- Meaning/display scaling of effect-specific fields not confirmed by screenshots/profile pairs.
+- Rain direction numeric semantics.
+- Ripple special trigger/play-option presentation.
+- Effects not represented by supplied modern profile/screenshot evidence (for example Marquee/Sequential/Rotary Stack) retain generic authored-value exposure until captured.
+
+Validation:
+- node --check static/js/icue-profiles.js: PASS
