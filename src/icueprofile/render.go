@@ -2171,15 +2171,15 @@ func EnrichAuthoredSourceColors(layers []Layer) []Layer {
 	out := make([]Layer, len(layers))
 	copy(out, layers)
 	for i := range out {
-		// Always rebuild the derived list from the preserved source leaves. This
-		// keeps reloads/idempotent enrichment from accumulating stale colours.
+		// SourceColors is the browser-facing colour list. Build it from the same
+		// canonical authored-colour decoder used by playback diagnostics instead
+		// of relying only on RawColorValues. Corsair stores several effects
+		// (notably Rain/ColorWave) as packed first/second values in Parameters;
+		// those values are valid authored colours even when RawColorValues does
+		// not contain a color=#... leaf.
 		out[i].SourceColors = nil
 		seen := make(map[string]bool)
-		for _, raw := range out[i].RawColorValues {
-			c, ok := parseAuthoredColorLeaf(raw)
-			if !ok {
-				continue
-			}
+		for _, c := range canonicalAuthoredColors(out[i]) {
 			hex := editorColor(c).Hex
 			key := strings.ToLower(hex)
 			if !seen[key] {
