@@ -1592,58 +1592,48 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 		applyLayerOpacity(l, a)
 		return c, a, true
 	case "marqueelighting":
-		// Marquee keeps the shared normalized clock, but treats geometry as a
-		// repeating block/gap pattern. This mirrors OpenLinkHub's cleaner native
-		// separation: time advances an offset; block width is purely spatial.
+		// iCUE Marquee follows OpenLinkHub's native chasing topology: a fixed
+		// two-light block followed by a two-light dark gap.  Time only advances
+		// the pattern offset; it does not stretch the block into a Wave.  Keep
+		// this on logical LED order because native Marquee is intentionally a
+		// channel chase rather than a projected 2-D geometry effect.
 		col := layerColor(l, RGB{R: 255, G: 255, B: 255})
-		blockSize := int(math.Round(number(l.Parameters["width"], number(l.Parameters["waveSpread"], 2))))
-		if blockSize < 1 {
-			blockSize = 1
-		}
-		gapSize := blockSize
-		patternSize := blockSize + gapSize
-		direction := int(number(l.Parameters["direction"], 0))
+		const blockSize = 2
+		const gapSize = 2
+		const patternSize = blockSize + gapSize
+		direction := int(number(l.Parameters["direction"], 1))
 		offset := int(math.Floor(phase * float64(patternSize)))
-		if direction == 1 || direction == 3 {
+		if direction == 2 || direction == 3 {
 			offset = -offset
 		}
-		coords := spatial
-		if len(coords) != n {
-			coords = make([]float64, n)
-			for i := range coords {
-				coords[i] = float64(i)
-			}
-		}
-		for i, x := range coords {
-			// Marquee is a spatial pattern. Quantize the topology projection into
-			// route cells instead of accidentally using raw hardware LED order.
-			pos := int(math.Floor(x)) + offset
-			pos %= patternSize
+		for i := 0; i < n; i++ {
+			pos := (i + offset) % patternSize
 			if pos < 0 {
 				pos += patternSize
 			}
-			if pos >= blockSize {
-				a[i] = 0
-				continue
+			if pos < blockSize {
+				c[i] = col
+			} else {
+				// Native OpenLinkHub writes black into the gap.  Do the same here
+				// rather than making the gap transparent to lower lighting layers.
+				c[i] = RGB{}
 			}
-			c[i] = col
 		}
 		applyLayerOpacity(l, a)
 		return c, a, true
 	case "sequentiallighting":
-		// Sequential uses one normalized cycle to progressively hand the route
-		// from the previous colour to the current colour. The clock decides WHEN;
-		// LED order decides WHERE. Keeping the cycle count lets two authored
-		// colours alternate cleanly without introducing a second timebase.
-		c1, c2 := effectColors(l, layerColor(l, RGB{R: 255, G: 255, B: 255}), RGB{})
+		// OpenLinkHub's native Sequential is a moving boundary.  iCUE adds an
+		// explicit Random/One Colour mode and Left/Right direction, so retain the
+		// proven boundary geometry while deriving colour from the authored mode.
 		clock := effectClock(l, elapsed)
 		cycle := int(math.Floor(clock))
-		current, previous := c1, RGB{}
-		if c2 != (RGB{}) {
-			if cycle%2 == 0 {
-				current, previous = c1, c2
-			} else {
-				current, previous = c2, c1
+		random := boolParam(l.Parameters["random"], boolParam(l.Parameters["isRandom"], false))
+		base := layerColor(l, RGB{R: 255, G: 255, B: 255})
+		current, previous := base, RGB{}
+		if random {
+			current = hsv(hash(cycle, 701), 0.90, 1.0)
+			if cycle > 0 {
+				previous = hsv(hash(cycle-1, 701), 0.90, 1.0)
 			}
 		}
 		coords := spatial
@@ -1662,21 +1652,69 @@ func renderLayer(l Layer, fanOrdinal, n int, elapsed float64, spatial []float64)
 				maxC = x
 			}
 		}
-		direction := int(number(l.Parameters["direction"], 0))
+		direction := int(number(l.Parameters["direction"], 2))
 		threshold := minC + phase*(maxC-minC)
-		if direction == 1 || direction == 3 {
+		if direction == 1 {
 			threshold = maxC - phase*(maxC-minC)
 		}
 		for i, x := range coords {
 			reached := x <= threshold
-			if direction == 1 || direction == 3 {
+			if direction == 1 {
 				reached = x >= threshold
 			}
 			if reached {
 				c[i] = current
-			} else if previous != (RGB{}) {
+			} else if random && cycle > 0 {
 				c[i] = previous
 			} else {
+				a[i] = 0
+			}
+		}
+		applyLayerOpacity(l, a)
+		return c, a, true
+	case "rotarystacklighting":
+		// Follow OpenLinkHub's useful stack model: each completed pass leaves one
+		// more LED behind while the active rotor sweeps the remaining route. iCUE
+		// contributes the Random/Alternating colour mode and rotary direction.
+		clock := effectClock(l, elapsed)
+		cycle := int(math.Floor(clock))
+		if n <= 0 {
+			return c, a, true
+		}
+		trailCount := cycle % (n + 1)
+		if trailCount >= n {
+			trailCount = n
+		}
+		remaining := n - trailCount
+		rotorPos := 0
+		if remaining > 0 {
+			rotorPos = int(phase * float64(remaining))
+			if rotorPos >= remaining {
+				rotorPos = remaining - 1
+			}
+		}
+		c1, c2 := effectColors(l, RGB{R: 255}, RGB{B: 255})
+		random := boolParam(l.Parameters["random"], boolParam(l.Parameters["isRandom"], false))
+		rotor, stacked := c1, c2
+		if random {
+			rotor = hsv(hash(cycle, 811), 0.90, 1.0)
+			stacked = hsv(hash(maxInt(cycle-1, 0), 811), 0.90, 1.0)
+		} else if cycle%2 == 1 {
+			rotor, stacked = c2, c1
+		}
+		direction := int(number(l.Parameters["direction"], 5))
+		reverse := direction == 6
+		for logical := 0; logical < n; logical++ {
+			i := logical
+			if reverse {
+				i = n - 1 - logical
+			}
+			switch {
+			case logical >= n-trailCount:
+				c[i] = stacked
+			case remaining > 0 && logical <= rotorPos:
+				c[i] = rotor
+			default:
 				a[i] = 0
 			}
 		}
