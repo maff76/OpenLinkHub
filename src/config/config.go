@@ -6,46 +6,90 @@ package config
 
 import (
 	"OpenLinkHub/src/common"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/user"
 	"slices"
 	"strings"
 )
 
+// ByteArray is a byte slice that is stored in config.json as a readable
+// array of numbers instead of encoding/json's default base64 string.
+// UnmarshalJSON accepts both formats so existing configurations remain compatible.
+type ByteArray []byte
+
+func (b ByteArray) MarshalJSON() ([]byte, error) {
+	values := make([]uint16, len(b))
+	for i, value := range b {
+		values[i] = uint16(value)
+	}
+	return json.Marshal(values)
+}
+
+func (b *ByteArray) UnmarshalJSON(data []byte) error {
+	var values []uint16
+	if err := json.Unmarshal(data, &values); err == nil {
+		result := make(ByteArray, len(values))
+		for i, value := range values {
+			if value > 255 {
+				return fmt.Errorf("byte array value %d is outside the valid range 0-255", value)
+			}
+			result[i] = byte(value)
+		}
+		*b = result
+		return nil
+	}
+
+	var encoded string
+	if err := json.Unmarshal(data, &encoded); err != nil {
+		return fmt.Errorf("byte array must be a numeric array or base64 string: %w", err)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return fmt.Errorf("invalid base64 byte array: %w", err)
+	}
+	*b = ByteArray(decoded)
+	return nil
+}
+
 type Configuration struct {
-	Debug                     bool     `json:"debug"`
-	ListenPort                int      `json:"listenPort"`
-	ListenAddress             string   `json:"listenAddress"`
-	CPUSensorChip             string   `json:"cpuSensorChip"`
-	Manual                    bool     `json:"manual"`
-	Frontend                  bool     `json:"frontend"`
-	Metrics                   bool     `json:"metrics"`
-	Memory                    bool     `json:"memory"`
-	MemorySmBus               string   `json:"memorySmBus"`
-	MemoryType                int      `json:"memoryType"`
-	Exclude                   []uint16 `json:"exclude"`
-	MemorySku                 string   `json:"memorySku"`
-	ConfigPath                string   `json:",omitempty"`
-	ResumeDelay               int      `json:"resumeDelay"`
-	LogFile                   string   `json:"logFile"`
-	LogLevel                  string   `json:"logLevel"`
-	EnhancementKits           []byte   `json:"enhancementKits"`
-	TemperatureOffset         int      `json:"temperatureOffset"`
-	AMDGpuIndex               int      `json:"amdGpuIndex"`
-	AMDSmiPath                string   `json:"amdsmiPath"`
-	CheckDevicePermission     bool     `json:"checkDevicePermission"`
-	GraphProfiles             bool     `json:"graphProfiles"`
-	CpuTempFile               string   `json:"cpuTempFile"`
-	RamTempViaHwmon           bool     `json:"ramTempViaHwmon"`
-	NvidiaGpuIndex            []int    `json:"nvidiaGpuIndex"`
-	DefaultNvidiaGPU          int      `json:"defaultNvidiaGPU"`
-	OpenRGBPort               int      `json:"openRGBPort"`
-	EnableOpenRGBTargetServer bool     `json:"enableOpenRGBTargetServer"`
-	EnableGamepad             bool     `json:"enableGamepad"`
-	EnableMotherboard         bool     `json:"enableMotherboard"`
-	MotherboardBiosOnExit     bool     `json:"motherboardBiosOnExit"`
-	MemoryRegisterOverride    []byte   `json:"memoryRegisterOverride"`
+	Debug                     bool      `json:"debug"`
+	ListenPort                int       `json:"listenPort"`
+	ListenAddress             string    `json:"listenAddress"`
+	CPUSensorChip             string    `json:"cpuSensorChip"`
+	Manual                    bool      `json:"manual"`
+	Frontend                  bool      `json:"frontend"`
+	Metrics                   bool      `json:"metrics"`
+	Memory                    bool      `json:"memory"`
+	MemorySmBus               string    `json:"memorySmBus"`
+	MemoryType                int       `json:"memoryType"`
+	Exclude                   []uint16  `json:"exclude"`
+	MemorySku                 string    `json:"memorySku"`
+	ConfigPath                string    `json:",omitempty"`
+	ResumeDelay               int       `json:"resumeDelay"`
+	LogFile                   string    `json:"logFile"`
+	LogLevel                  string    `json:"logLevel"`
+	LogRetentionDays          int       `json:"logRetentionDays"`
+	EnhancementKits           ByteArray `json:"enhancementKits"`
+	TemperatureOffset         int       `json:"temperatureOffset"`
+	AMDGpuIndex               int       `json:"amdGpuIndex"`
+	AMDSmiPath                string    `json:"amdsmiPath"`
+	CheckDevicePermission     bool      `json:"checkDevicePermission"`
+	GraphProfiles             bool      `json:"graphProfiles"`
+	CpuTempFile               string    `json:"cpuTempFile"`
+	RamTempViaHwmon           bool      `json:"ramTempViaHwmon"`
+	NvidiaGpuIndex            []int     `json:"nvidiaGpuIndex"`
+	DefaultNvidiaGPU          int       `json:"defaultNvidiaGPU"`
+	OpenRGBPort               int       `json:"openRGBPort"`
+	EnableOpenRGBTargetServer bool      `json:"enableOpenRGBTargetServer"`
+	EnableGamepad             bool      `json:"enableGamepad"`
+	EnableMotherboard         bool      `json:"enableMotherboard"`
+	MotherboardBiosOnExit     bool      `json:"motherboardBiosOnExit"`
+	MemoryRegisterOverride    ByteArray `json:"memoryRegisterOverride"`
+	InstanceID                string    `json:"instanceId"`
 }
 
 var (
@@ -55,6 +99,7 @@ var (
 		"memorySku":                 "",
 		"resumeDelay":               15000,
 		"logLevel":                  "info",
+		"logRetentionDays":          14,
 		"logFile":                   "",
 		"enhancementKits":           make([]byte, 0),
 		"temperatureOffset":         0,
@@ -72,6 +117,7 @@ var (
 		"enableMotherboard":         false,
 		"motherboardBiosOnExit":     false,
 		"memoryRegisterOverride":    make([]byte, 0),
+		"instanceId":                "",
 	}
 	systemService = true
 )
@@ -103,11 +149,207 @@ func Init() {
 		panic(err.Error())
 	}
 	configuration.ConfigPath = configPath
+	ensureInstanceID()
+}
+
+// ensureInstanceID creates the stable identity used by network discovery.
+// The value is application-owned and intentionally not exposed as an editable setting.
+func ensureInstanceID() {
+	if configuration.InstanceID != "" {
+		return
+	}
+
+	configuration.InstanceID = newUUID()
+	saveConfigSettings(configuration)
+}
+
+// newUUID returns an RFC 4122 version 4 UUID using the kernel CSPRNG.
+func newUUID() string {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		panic(fmt.Sprintf("unable to generate OpenLinkHub instance ID: %v", err))
+	}
+	value[6] = (value[6] & 0x0f) | 0x40
+	value[8] = (value[8] & 0x3f) | 0x80
+	return fmt.Sprintf(
+		"%08x-%04x-%04x-%04x-%012x",
+		value[0:4], value[4:6], value[6:8], value[8:10], value[10:16],
+	)
 }
 
 // GetConfig will return structs.Configuration struct
 func GetConfig() Configuration {
 	return configuration
+}
+
+// UpdateManual updates the manual fan speed setting and persists it to config.json.
+// A service restart is required for device monitoring loops to fully apply the new mode.
+func UpdateManual(enabled bool) uint8 {
+	configuration.Manual = enabled
+	saveConfigSettings(configuration)
+	return 1
+}
+
+// EditableMemoryType keeps config.json/API compatibility numeric (4/5), while
+// accepting either numeric or display values from the Settings UI.
+type EditableMemoryType int
+
+func (m *EditableMemoryType) UnmarshalJSON(data []byte) error {
+	var value interface{}
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+
+	switch v := value.(type) {
+	case float64:
+		*m = EditableMemoryType(int(v))
+	case string:
+		switch strings.ToUpper(strings.TrimSpace(v)) {
+		case "4", "DDR4":
+			*m = 4
+		case "5", "DDR5":
+			*m = 5
+		default:
+			return fmt.Errorf("memory type must be DDR4 or DDR5")
+		}
+	case nil:
+		return fmt.Errorf("memory type must be DDR4 or DDR5")
+	default:
+		return fmt.Errorf("memory type must be DDR4 or DDR5")
+	}
+	return nil
+}
+
+// EditableSettings contains user-facing configuration options that can be safely
+// persisted from the Control Panel. These settings are applied after a service restart.
+type EditableSettings struct {
+	Debug                     bool      `json:"debug"`
+	LogLevel                  string    `json:"logLevel"`
+	LogRetentionDays          int       `json:"logRetentionDays"`
+	Memory                    bool      `json:"memory"`
+	MemorySmBus               string    `json:"memorySmBus"`
+	MemoryType                EditableMemoryType `json:"memoryType"`
+	MemorySku                 string    `json:"memorySku"`
+	MemoryRegisterOverride    ByteArray `json:"memoryRegisterOverride"`
+	EnhancementKits           ByteArray `json:"enhancementKits"`
+	CPUSensorChip             string    `json:"cpuSensorChip"`
+	CpuTempFile               string    `json:"cpuTempFile"`
+	AMDGpuIndex               int       `json:"amdGpuIndex"`
+	AMDSmiPath                string    `json:"amdsmiPath"`
+	NvidiaGpuIndex            []int     `json:"nvidiaGpuIndex"`
+	DefaultNvidiaGPU          int       `json:"defaultNvidiaGPU"`
+	GraphProfiles             bool      `json:"graphProfiles"`
+	Metrics                   bool      `json:"metrics"`
+	RamTempViaHwmon           bool      `json:"ramTempViaHwmon"`
+	EnableGamepad             bool      `json:"enableGamepad"`
+	EnableMotherboard         bool      `json:"enableMotherboard"`
+	MotherboardBiosOnExit     bool      `json:"motherboardBiosOnExit"`
+	EnableOpenRGBTargetServer bool      `json:"enableOpenRGBTargetServer"`
+	OpenRGBPort               int       `json:"openRGBPort"`
+	ResumeDelay               int       `json:"resumeDelay"`
+	TemperatureOffset         int       `json:"temperatureOffset"`
+	CheckDevicePermission     bool      `json:"checkDevicePermission"`
+}
+
+// GetEditableSettings returns the configuration subset exposed by the Control Panel.
+func GetEditableSettings() EditableSettings {
+	return EditableSettings{
+		Debug:                     configuration.Debug,
+		LogLevel:                  configuration.LogLevel,
+		LogRetentionDays:          configuration.LogRetentionDays,
+		Memory:                    configuration.Memory,
+		MemorySmBus:               configuration.MemorySmBus,
+		MemoryType:                EditableMemoryType(configuration.MemoryType),
+		MemorySku:                 configuration.MemorySku,
+		MemoryRegisterOverride:    append(ByteArray(nil), configuration.MemoryRegisterOverride...),
+		EnhancementKits:           append(ByteArray(nil), configuration.EnhancementKits...),
+		CPUSensorChip:             configuration.CPUSensorChip,
+		CpuTempFile:               configuration.CpuTempFile,
+		AMDGpuIndex:               configuration.AMDGpuIndex,
+		AMDSmiPath:                configuration.AMDSmiPath,
+		NvidiaGpuIndex:            append([]int(nil), configuration.NvidiaGpuIndex...),
+		DefaultNvidiaGPU:          configuration.DefaultNvidiaGPU,
+		GraphProfiles:             configuration.GraphProfiles,
+		Metrics:                   configuration.Metrics,
+		RamTempViaHwmon:           configuration.RamTempViaHwmon,
+		EnableGamepad:             configuration.EnableGamepad,
+		EnableMotherboard:         configuration.EnableMotherboard,
+		MotherboardBiosOnExit:     configuration.MotherboardBiosOnExit,
+		EnableOpenRGBTargetServer: configuration.EnableOpenRGBTargetServer,
+		OpenRGBPort:               configuration.OpenRGBPort,
+		ResumeDelay:               configuration.ResumeDelay,
+		TemperatureOffset:         configuration.TemperatureOffset,
+		CheckDevicePermission:     configuration.CheckDevicePermission,
+	}
+}
+
+// UpdateEditableSettings validates and persists the Control Panel configuration.
+func UpdateEditableSettings(settings EditableSettings) error {
+	validLogLevels := map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
+	if !validLogLevels[settings.LogLevel] {
+		return fmt.Errorf("log level must be debug, info, warn, or error")
+	}
+	if settings.LogRetentionDays < 0 || settings.LogRetentionDays > 3650 {
+		return fmt.Errorf("log retention must be between 0 and 3650 days")
+	}
+	if len(settings.MemoryRegisterOverride) > 32 {
+		return fmt.Errorf("memory register override cannot contain more than 32 addresses")
+	}
+	if settings.MemoryType != 4 && settings.MemoryType != 5 {
+		return fmt.Errorf("memory type must be DDR4 or DDR5")
+	}
+	if len(settings.EnhancementKits) > 32 {
+		return fmt.Errorf("enhancement kits cannot contain more than 32 addresses")
+	}
+	if settings.AMDGpuIndex < 0 {
+		return fmt.Errorf("AMD GPU index cannot be negative")
+	}
+	if settings.DefaultNvidiaGPU < 0 {
+		return fmt.Errorf("default NVIDIA GPU index cannot be negative")
+	}
+	for _, index := range settings.NvidiaGpuIndex {
+		if index < 0 {
+			return fmt.Errorf("NVIDIA GPU indexes cannot be negative")
+		}
+	}
+	if settings.OpenRGBPort < 1 || settings.OpenRGBPort > 65535 {
+		return fmt.Errorf("OpenRGB port must be between 1 and 65535")
+	}
+	if settings.ResumeDelay < 0 || settings.ResumeDelay > 120000 {
+		return fmt.Errorf("resume delay must be between 0 and 120000 milliseconds")
+	}
+	if settings.TemperatureOffset < -50 || settings.TemperatureOffset > 50 {
+		return fmt.Errorf("temperature offset must be between -50 and 50 degrees")
+	}
+
+	configuration.Debug = settings.Debug
+	configuration.LogLevel = settings.LogLevel
+	configuration.LogRetentionDays = settings.LogRetentionDays
+	configuration.Memory = settings.Memory
+	configuration.MemorySmBus = strings.TrimSpace(settings.MemorySmBus)
+	configuration.MemoryType = int(settings.MemoryType)
+	configuration.MemorySku = settings.MemorySku
+	configuration.MemoryRegisterOverride = append(ByteArray(nil), settings.MemoryRegisterOverride...)
+	configuration.EnhancementKits = append(ByteArray(nil), settings.EnhancementKits...)
+	configuration.CPUSensorChip = strings.TrimSpace(settings.CPUSensorChip)
+	configuration.CpuTempFile = strings.TrimSpace(settings.CpuTempFile)
+	configuration.AMDGpuIndex = settings.AMDGpuIndex
+	configuration.AMDSmiPath = strings.TrimSpace(settings.AMDSmiPath)
+	configuration.NvidiaGpuIndex = append([]int(nil), settings.NvidiaGpuIndex...)
+	configuration.DefaultNvidiaGPU = settings.DefaultNvidiaGPU
+	configuration.GraphProfiles = settings.GraphProfiles
+	configuration.Metrics = settings.Metrics
+	configuration.RamTempViaHwmon = settings.RamTempViaHwmon
+	configuration.EnableGamepad = settings.EnableGamepad
+	configuration.EnableMotherboard = settings.EnableMotherboard
+	configuration.MotherboardBiosOnExit = settings.MotherboardBiosOnExit
+	configuration.EnableOpenRGBTargetServer = settings.EnableOpenRGBTargetServer
+	configuration.OpenRGBPort = settings.OpenRGBPort
+	configuration.ResumeDelay = settings.ResumeDelay
+	configuration.TemperatureOffset = settings.TemperatureOffset
+	configuration.CheckDevicePermission = settings.CheckDevicePermission
+	saveConfigSettings(configuration)
+	return nil
 }
 
 // UpdateSupportedDevices will update the Exclude slice based on the enabled flag for each product ID
@@ -150,8 +392,9 @@ func upgradeFile(cfg string) {
 			MemorySku:                 "",
 			ResumeDelay:               15000,
 			LogLevel:                  "info",
+			LogRetentionDays:          14,
 			LogFile:                   "",
-			EnhancementKits:           make([]byte, 0),
+			EnhancementKits:           make(ByteArray, 0),
 			TemperatureOffset:         0,
 			AMDGpuIndex:               0,
 			AMDSmiPath:                "",
@@ -166,7 +409,7 @@ func upgradeFile(cfg string) {
 			EnableGamepad:             true,
 			EnableMotherboard:         false,
 			MotherboardBiosOnExit:     false,
-			MemoryRegisterOverride:    make([]byte, 0),
+			MemoryRegisterOverride:    make(ByteArray, 0),
 		}
 		saveConfigSettings(value)
 	} else {
