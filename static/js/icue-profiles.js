@@ -13,26 +13,29 @@ $(function () {
     const width=field(['width','waveSpread','spread','size'],'Width / spread');
     const tail=field(['tailLength','tail','falloff'],'Tail / falloff');
     const phase=field(['phase','offset'],'Phase / offset');
+    // Effect-specific live controls. Keep this deliberately strict: the raw/advanced
+    // parameter box below remains the escape hatch for authored fields that are not yet
+    // confirmed as visible controls in iCUE. Do not fill the live bench with generic blanks.
     const schemas={
-        staticlighting:[colours,field('brightness','Brightness'),field('opacity','Opacity')],
-        rainlighting:[colours,speed,direction,duration,tail,field('brightness','Brightness'),field('opacity','Opacity')],
-        wavelighting:[colours,speed,direction,width,field(['wavelength','period','frequency'],'Wavelength / period'),tail,phase,field('isDoublesided','Double-sided','bool')],
-        colorwavelighting:[colours,speed,direction,width,field(['wavelength','period','frequency'],'Wavelength / period'),tail,phase,field('isDoublesided','Double-sided','bool')],
-        ripplelighting:[colours,speed,duration,width,tail,direction,field('autoDuration','Auto duration','bool')],
-        spirallighting:[colours,speed,direction,width,tail,phase,field('clockwise','Clockwise','bool')],
-        spiralrainbowlighting:[speed,direction,width,phase,field('clockwise','Clockwise','bool')],
-        rainbowwavelighting:[speed,direction,width,phase],
-        watercolorlighting:[colours,speed,duration,width,field('brightness','Brightness'),field('opacity','Opacity')],
-        visorlighting:[colours,speed,direction,width,tail,duration],
-        marqueelighting:[colours,speed,direction,width,field(['spacing','period'],'Spacing / period')],
-        sequentiallighting:[colours,speed,direction,duration,field(['step','steps'],'Step / steps')],
-        colorshiftlighting:[colours,speed,duration,phase],
-        colorpulselighting:[colours,speed,duration,phase],
-        gradientlighting:[colours,direction,field('brightness','Brightness'),field('opacity','Opacity')],
+        staticlighting:[colours],
+        rainlighting:[colours,speed,direction],
+        wavelighting:[duration,field('velocity','Velocity'),tail,field('isDoublesided','Two sides','bool')],
+        colorwavelighting:[colours,speed,direction],
+        ripplelighting:[duration,field('velocity','Velocity'),tail],
+        spirallighting:[colours,speed,direction],
+        spiralrainbowlighting:[speed],
+        rainbowwavelighting:[speed,direction],
+        watercolorlighting:[colours,speed],
+        visorlighting:[colours,speed,direction],
+        marqueelighting:[colours,speed,direction],
+        sequentiallighting:[colours,speed,direction],
+        colorshiftlighting:[colours,speed],
+        colorpulselighting:[colours,speed],
+        gradientlighting:[],
         infinitylighting:[colours,speed,direction],
-        blinklighting:[colours,speed,duration,field('brightness','Brightness'),field('opacity','Opacity')],
-        breathelighting:[colours,speed,duration,field('brightness','Brightness'),field('opacity','Opacity')],
-        rainbowlighting:[speed,direction,duration],
+        blinklighting:[colours],
+        breathelighting:[colours],
+        rainbowlighting:[speed],
         basicnonelighting:[]
     };
     const boolKeys=new Set(['clockwise','random','isRandom','isDoublesided','reverse','autoDuration']);
@@ -99,8 +102,8 @@ $(function () {
     const friendlyEffects={
         staticlighting:{name:'Static Color',fields:[['Colour','@colors']]},
         rainlighting:{name:'Rain',fields:[['Colour mode','@random'],['Speed','speed'],['Direction','direction']]},
-        wavelighting:{name:'Wave',graph:true,fields:[['Lighting time (sec)','duration','seconds'],['Velocity (lights/sec)','velocity','tenths'],['Tail (lights)','tailLength','tenths'],['Two sides','isDoublesided'],['Angle','angle']]},
-        ripplelighting:{name:'Ripple',graph:true,fields:[['Lighting time (sec)','duration','seconds'],['Velocity (lights/sec)','velocity','tenths'],['Tail (lights)','tailLength','tenths'],['Auto duration','autoDuration'],['Wave spread','waveSpread']]},
+        wavelighting:{name:'Wave',graph:true,fields:[['Lighting time (sec)','duration','seconds'],['Velocity (lights/sec)','velocity','tenths'],['Tail (lights)','tailLength','tenths'],['Two sides','isDoublesided']]},
+        ripplelighting:{name:'Ripple',graph:true,fields:[['Lighting time (sec)','duration','seconds'],['Velocity (lights/sec)','velocity','tenths'],['Tail (lights)','tailLength','tenths']]},
         colorwavelighting:{name:'Color Wave',fields:[['Colour mode','@random'],['Colours','@colors'],['Speed','speed'],['Direction','direction']]},
         colorshiftlighting:{name:'Color Shift',fields:[['Colour mode','@random'],['Colours','@colors'],['Speed','speed'],['Direction','direction']]},
         colorpulselighting:{name:'Color Pulse',fields:[['Colour mode','@random'],['Colours','@colors'],['Speed','speed']]},
@@ -108,14 +111,14 @@ $(function () {
         visorlighting:{name:'Visor',fields:[['Colour mode','@random'],['Colours','@colors'],['Speed','speed'],['Direction','direction']]},
         marqueelighting:{name:'Marquee',fields:[['Colour','@colors'],['Speed','speed'],['Direction','direction']]},
         sequentiallighting:{name:'Sequential',fields:[['Colour mode','@random'],['Colour','@colors'],['Speed','speed'],['Direction','direction']]},
-        gradientlighting:{name:'Gradient',graph:true,fields:[['Direction / angle','direction'],['Brightness','brightness'],['Opacity','opacity']]},
-        watercolorlighting:{name:'Watercolor',fields:[['Colours','@colors'],['Speed','speed'],['Lighting time','duration']]},
+        gradientlighting:{name:'Gradient',graph:true,fields:[]},
+        watercolorlighting:{name:'Watercolor',fields:[['Colours','@colors'],['Speed','speed']]},
         spirallighting:{name:'Spiral',fields:[['Colours','@colors'],['Speed','speed'],['Direction','direction']]},
         spiralrainbowlighting:{name:'Spiral Rainbow',fields:[['Speed','speed'],['Direction','direction']]},
         rainbowwavelighting:{name:'Rainbow Wave',fields:[['Speed','speed'],['Direction','direction']]},
-        rainbowlighting:{name:'Rainbow',fields:[['Speed','speed'],['Direction','direction']]},
-        blinklighting:{name:'Blink',fields:[['Colour','@colors'],['Speed','speed'],['Lighting time','duration']]},
-        breathelighting:{name:'Breathe',fields:[['Colour','@colors'],['Speed','speed'],['Lighting time','duration']]}
+        rainbowlighting:{name:'Rainbow',fields:[['Speed','speed']]},
+        blinklighting:{name:'Blink',fields:[['Colour','@colors']]},
+        breathelighting:{name:'Breathe',fields:[['Colour','@colors']]}
     };
     function formatFriendlyValue(key,display){
         if(key==='@colors'){const cs=authoredColors();return cs.length?cs.join('  ·  '):'—';}
@@ -152,7 +155,6 @@ $(function () {
         if(!currentLayer)return;const key=String(currentLayer.effect||'').toLowerCase(),cfg=friendlyEffects[key]||{name:currentLayer.effect||'Effect',fields:[]};
         $('#icueFriendlyEffectName').text(cfg.name);$('#icueFriendlyEffectHint').html('<small>'+((cfg.graph)?'iCUE-style transition graph plus the authored effect fields.':'Authored effect controls cross-referenced against the imported profile.')+'</small>');
         const box=$('#icueFriendlyFields').empty();(cfg.fields||[]).forEach(([label,k,display])=>{const col=$('<div class="col-6 col-lg-4 icue-friendly-field"></div>');col.append($('<small></small>').text(label),$('<div class="icue-friendly-value"></div>').text(formatFriendlyValue(k,display)));box.append(col);});
-        const known=new Set((cfg.fields||[]).map(x=>x[1]).filter(x=>!String(x).startsWith('@')));Object.keys(authoredParameters()).forEach(k=>{if(known.has(k)||['transitions','colors','color','background'].includes(k))return;const col=$('<div class="col-6 col-lg-4 icue-friendly-field"></div>');col.append($('<small></small>').text('Authored · '+k),$('<div class="icue-friendly-value"></div>').text(formatFriendlyValue(k)));box.append(col);});
         renderTransitionGraph();
     }
     function renderDeviceStrip(){
@@ -222,11 +224,10 @@ $(function () {
     function renderEffectControls(){
         const box=$('#icueEffectControls').empty(),p=Object.assign({},currentLayer.parameters||{}),auth=authoredParameters(),used=new Set();
         Object.keys(auth).forEach(k=>{const v=authoredValue(k);if(v!==undefined)p[k]=v;});
-        const schema=(schemas[String(currentLayer.effect||'').toLowerCase()]||[colours,speed,direction,duration]).slice();
-        // Anything iCUE authored but the effect registry does not yet understand is
-        // still surfaced. This is the calibration bench for the per-effect pass.
-        Object.keys(auth).forEach(k=>{if(['color','colors','transitions','background'].includes(k))return;if(schema.some(f=>f.keys.includes(k)))return;schema.push(field(k,'Authored · '+k,boolKeys.has(k)?'bool':'number'));});
+        const schema=(schemas[String(currentLayer.effect||'').toLowerCase()]||[]).slice();
         schema.forEach(f=>{
+            const hasValue=f.type==='colors'?authoredColors().length>0:f.keys.some(k=>Object.prototype.hasOwnProperty.call(p,k)||Object.prototype.hasOwnProperty.call(auth,k));
+            if(!hasValue)return;
             const key=firstPresentKey(f.keys,p);used.add(key);
             if(f.type==='colors'){
                 const dc=authoredColors(),count=Math.max(String(currentLayer.effect||'').toLowerCase()==='staticlighting'?1:2,dc.length),cs=Array.from({length:count},(_,n)=>dc[n]||dc[0]||'#000000');
@@ -239,7 +240,7 @@ $(function () {
             const col=$('<div class="col-md-4"></div>');col.append($('<label class="sentence-text"></label>').text(f.label));const inp=$('<input type="number" step="any" class="form-control system-input icue-param-number">').attr('data-key',key);if(p[key]!==undefined&&!Array.isArray(p[key]))inp.val(p[key]);const raw=auth[key]&&auth[key].rawValues;if(raw&&raw.length)inp.attr('title','Authored: '+raw.join(' · '));col.append(inp);box.append(col);
         });
         const randomKey=Object.prototype.hasOwnProperty.call(auth,'isRandom')?'isRandom':'random';
-        if(!used.has(randomKey)){const col=$('<div class="col-12"></div>'),wrap=$('<label class="system-toggle compact"></label>'),inp=$('<input type="checkbox" class="icue-param-bool">').attr('data-key',randomKey).prop('checked',!!p[randomKey]);wrap.append(inp,$('<span class="toggle-track"></span>'),$('<span class="ms-2">Random</span>'));col.append(wrap);box.append(col);}
+        if(Object.prototype.hasOwnProperty.call(auth,randomKey)&&!used.has(randomKey)){const col=$('<div class="col-12"></div>'),wrap=$('<label class="system-toggle compact"></label>'),inp=$('<input type="checkbox" class="icue-param-bool">').attr('data-key',randomKey).prop('checked',!!p[randomKey]);wrap.append(inp,$('<span class="toggle-track"></span>'),$('<span class="ms-2">Random</span>'));col.append(wrap);box.append(col);}
     }
     function selectedGroupKind(){const v=String($('#icueDeviceCanvas').val()||'');return v.startsWith('group:')?v.slice(6):'';}
     function selectedDevices(){const kind=selectedGroupKind();if(kind)return detectedDevices.filter(d=>d.kind===kind);const i=parseInt($('#icueDeviceCanvas').val(),10);return Number.isFinite(i)&&detectedDevices[i]?[detectedDevices[i]]:[];}
