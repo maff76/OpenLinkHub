@@ -5,13 +5,13 @@ $(function () {
     // 756..775 in local output order, matching the verified Go topology.
     const titan280Zones=[6,7,8,9,10,11,12,13,14,15,16,1,2,3,4,5,17,18,19,20];
     const commonEffects=['StaticLighting','RainLighting','WaveLighting','ColorWaveLighting','RippleLighting','SpiralLighting','SpiralRainbowLighting','RainbowWaveLighting','WatercolorLighting','VisorLighting','MarqueeLighting','SequentialLighting','ColorShiftLighting','ColorPulseLighting','GradientLighting','InfinityLighting','BlinkLighting','BreatheLighting','RainbowLighting','BasicNoneLighting'];
-    const field=(keys,label,type='number')=>({keys:Array.isArray(keys)?keys:[keys],label,type});
+    const field=(keys,label,type='number',display=null)=>({keys:Array.isArray(keys)?keys:[keys],label,type,display});
     const colours=field(['transitions','colors','color'],'Colours','colors');
     const speed=field(['speed','velocity'],'Speed / velocity');
     const direction=field(['direction','angle'],'Direction / angle');
-    const duration=field(['duration','autoDuration'],'Duration');
+    const duration=field(['duration','autoDuration'],'Duration','seconds');
     const width=field(['width','waveSpread','spread','size'],'Width / spread');
-    const tail=field(['tailLength','tail','falloff'],'Tail / falloff');
+    const tail=field(['tailLength','tail','falloff'],'Tail / falloff','tenths');
     const phase=field(['phase','offset'],'Phase / offset');
     // Effect-specific live controls. Keep this deliberately strict: the raw/advanced
     // parameter box below remains the escape hatch for authored fields that are not yet
@@ -19,9 +19,9 @@ $(function () {
     const schemas={
         staticlighting:[colours],
         rainlighting:[colours,speed,direction],
-        wavelighting:[duration,field('velocity','Velocity'),tail,field('isDoublesided','Two sides','bool')],
+        wavelighting:[duration,field('velocity','Velocity','number','tenths'),tail,field('isDoublesided','Two sides','bool')],
         colorwavelighting:[colours,speed,direction],
-        ripplelighting:[duration,field('velocity','Velocity'),tail],
+        ripplelighting:[duration,field('velocity','Velocity','number','tenths'),tail],
         spirallighting:[colours,speed,direction],
         spiralrainbowlighting:[speed],
         rainbowwavelighting:[speed,direction],
@@ -39,6 +39,21 @@ $(function () {
         basicnonelighting:[]
     };
     const boolKeys=new Set(['clockwise','random','isRandom','isDoublesided','reverse','autoDuration']);
+    // Keep imported/runtime values in their native units, but make the live editor
+    // use the same human units shown by iCUE and by the friendly summary above it.
+    function toDisplayUnit(value,display){
+        const n=Number(value);if(!Number.isFinite(n))return value;
+        if(display==='seconds')return n/1000;
+        if(display==='tenths')return n/10;
+        return n;
+    }
+    function fromDisplayUnit(value,display){
+        const n=Number(value);if(!Number.isFinite(n))return value;
+        if(display==='seconds')return n*1000;
+        if(display==='tenths')return n*10;
+        return n;
+    }
+    function displayStep(display){return (display==='seconds'||display==='tenths')?'0.1':'any';}
     function status(t){$('#icueLiveStatus').text(t);} function layerLabel(l,i){return (l.name&&l.name.trim())||l.effectName||l.effect||('Layer '+(i+1));}
     // The Go parser has already extracted the authored colour leaves from the
     // .cueprofile.  For display, consume those leaves directly instead of
@@ -147,8 +162,15 @@ $(function () {
         const cfg=friendlyEffects[String(currentLayer&&currentLayer.effect||'').toLowerCase()]||{};
         if(!cfg.graph||!stops.length){panel.hide();return;}
         panel.show();const min=Math.min(...stops.map(x=>x.time)),max=Math.max(...stops.map(x=>x.time)),span=(max-min)||1;
-        const pts=stops.map(x=>({x:(x.time-min)/span*100,y:100-x.level,color:x.color,time:x.time,level:x.level}));
-        pts.forEach((pt,i)=>{if(i){const prev=pts[i-1],dx=pt.x-prev.x,dy=pt.y-prev.y;const line=$('<span class="icue-transition-line"></span>');line.css({left:prev.x+'%',top:prev.y+'%',width:Math.hypot(dx,dy)+'%',transform:'rotate('+Math.atan2(dy,dx)*180/Math.PI+'deg)'});graph.append(line);}const dot=$('<span class="icue-transition-stop"></span>').css({left:pt.x+'%',top:pt.y+'%',background:pt.color}).attr('title','time '+pt.time+' · '+Math.round(pt.level)+'% · '+pt.color);graph.append(dot);});
+        // The line/fill and HTML control points share the same percentage X and
+        // pixel Y coordinates. This keeps the joins centred on the dots while the
+        // dots themselves stay circular at any responsive graph width.
+        const pts=stops.map(x=>({x:(x.time-min)/span*100,y:4+(100-x.level)*0.72,color:x.color,time:x.time,level:x.level}));
+        const esc=s=>String(s||'#ffffff').replace(/[^#0-9a-fA-F]/g,'');
+        const gradStops=pts.map((pt,i)=>'<stop offset="'+(pts.length===1?0:(i/(pts.length-1)*100))+'%" stop-color="'+esc(pt.color)+'"/>').join('');
+        const points=pts.map(pt=>pt.x.toFixed(3)+','+pt.y.toFixed(2)).join(' '),area=points+' 100,76 0,76';
+        graph.html('<svg class="icue-transition-svg" viewBox="0 0 100 80" preserveAspectRatio="none"><defs><linearGradient id="icueTransitionColour" x1="0%" x2="100%">'+gradStops+'</linearGradient><linearGradient id="icueTransitionFade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="white" stop-opacity=".72"/><stop offset="1" stop-color="white" stop-opacity=".08"/></linearGradient><mask id="icueTransitionMask"><rect width="100" height="80" fill="url(#icueTransitionFade)"/></mask></defs><polygon points="'+area+'" fill="url(#icueTransitionColour)" opacity=".55" mask="url(#icueTransitionMask)"/><polyline points="'+points+'" fill="none" stroke="url(#icueTransitionColour)" stroke-width=".65" vector-effect="non-scaling-stroke"/></svg>');
+        pts.forEach(pt=>{const dot=$('<span class="icue-transition-stop"></span>').css({left:pt.x+'%',top:pt.y+'px',background:pt.color}).attr('title','time '+pt.time+' · '+Math.round(pt.level)+'% · '+pt.color);graph.append(dot);});
         $('#icueTransitionSummary').text(stops.length+' stops · '+min+' → '+max);
     }
     function renderFriendlyEffect(){
@@ -237,7 +259,7 @@ $(function () {
             if(f.type==='bool'){
                 const col=$('<div class="col-md-4"></div>'),wrap=$('<label class="system-toggle compact"></label>'),inp=$('<input type="checkbox" class="icue-param-bool">').attr('data-key',key).prop('checked',!!p[key]);wrap.append(inp,$('<span class="toggle-track"></span>'),$('<span class="ms-2"></span>').text(f.label));col.append(wrap);box.append(col);return;
             }
-            const col=$('<div class="col-md-4"></div>');col.append($('<label class="sentence-text"></label>').text(f.label));const inp=$('<input type="number" step="any" class="form-control system-input icue-param-number">').attr('data-key',key);if(p[key]!==undefined&&!Array.isArray(p[key]))inp.val(p[key]);const raw=auth[key]&&auth[key].rawValues;if(raw&&raw.length)inp.attr('title','Authored: '+raw.join(' · '));col.append(inp);box.append(col);
+            const col=$('<div class="col-md-4"></div>');col.append($('<label class="sentence-text"></label>').text(f.label));const inp=$('<input type="number" class="form-control system-input icue-param-number">').attr('step',displayStep(f.display)).attr('data-key',key).attr('data-display',f.display||'');if(p[key]!==undefined&&!Array.isArray(p[key])){const shown=toDisplayUnit(p[key],f.display);inp.val(shown);}const raw=auth[key]&&auth[key].rawValues;if(raw&&raw.length)inp.attr('title','Authored raw: '+raw.join(' · '));col.append(inp);box.append(col);
         });
         const randomKey=Object.prototype.hasOwnProperty.call(auth,'isRandom')?'isRandom':'random';
         if(Object.prototype.hasOwnProperty.call(auth,randomKey)&&!used.has(randomKey)){const col=$('<div class="col-12"></div>'),wrap=$('<label class="system-toggle compact"></label>'),inp=$('<input type="checkbox" class="icue-param-bool">').attr('data-key',randomKey).prop('checked',!!p[randomKey]);wrap.append(inp,$('<span class="toggle-track"></span>'),$('<span class="ms-2">Random</span>'));col.append(wrap);box.append(col);}
@@ -370,7 +392,7 @@ $(function () {
     $('#icueProfileForm').on('submit',function(e){e.preventDefault();const f=$('#icueProfileFile')[0].files[0];if(!f){toast.warning('Choose a .cueprofile first');return;}const fd=new FormData();fd.append('profileFile',f);$.ajax({url:'/api/icue/upload',type:'POST',data:fd,processData:false,contentType:false,success:r=>{toast.success(r.message||'Profile imported');refreshProfiles(r.profile&&r.profile.key);},error:x=>toast.warning(x.responseText||'Import failed')});});
     $('#icueDeviceCanvas').on('change',function(){renderDeviceStrip();if(selectedGroupKind()&&$('#icueTopologyProbe').prop('checked')){$('#icueTopologyProbe').prop('checked',false);$('#icueProbePanel').hide();applyMappingProbe();}const conceptualIndex=currentTarget&&currentTarget.lightingLink?Number(currentTarget.layerIndex):$('.icue-layer-row.active').data('i');const layers=workspaceLayers(currentData||{}),index=Number.isFinite(Number(conceptualIndex))?Number(conceptualIndex):0;if(layers.length){selectLayer(layers[Math.min(index,layers.length-1)],Math.min(index,layers.length-1));}else{currentTarget=null;currentLayer=null;renderLEDs();status('Profile loaded · no compatible target for selected hardware.');}if($('#icueTopologyProbe').prop('checked'))applyMappingProbe();});$('#icueSelectionMode').on('change',function(){currentLayer.selectionMode=this.value;renderLEDs();apply({selectionMode:this.value});});$('#icueLayerEnabled').on('change',function(){currentLayer.enabled=this.checked;apply({enabled:this.checked});});
     $('#icueLayerName').on('change',function(){currentLayer.name=this.value;apply({name:this.value});});$('#icueEffectType').on('change',function(){currentLayer.effect=this.value;renderEffectControls();renderFriendlyEffect();apply({effect:this.value});});
-    $('#icueEffectControls').on('change','.icue-param-number',function(){if(this.value!=='')applyParam($(this).data('key'),Number(this.value));}).on('change','.icue-param-color',function(){const inputs=$('.icue-param-color'),hexes=inputs.map((_,x)=>String(x.value).toLowerCase()).get(),colors=hexes.map(hexToRGB);currentLayer.sourceColors=hexes;currentLayer.parameters=currentLayer.parameters||{};currentLayer.parameters.editorColors=colors;palettePhase=0;$('#icueParameters').val(JSON.stringify(currentLayer.parameters,null,2));applyColourParameters(colors);renderFriendlyEffect();renderLEDs();}).on('change','.icue-param-bool',function(){applyParam($(this).data('key'),this.checked);});
+    $('#icueEffectControls').on('change','.icue-param-number',function(){if(this.value!==''){const display=String($(this).data('display')||''),v=fromDisplayUnit(this.value,display);applyParam($(this).data('key'),v);}}).on('change','.icue-param-color',function(){const inputs=$('.icue-param-color'),hexes=inputs.map((_,x)=>String(x.value).toLowerCase()).get(),colors=hexes.map(hexToRGB);currentLayer.sourceColors=hexes;currentLayer.parameters=currentLayer.parameters||{};currentLayer.parameters.editorColors=colors;palettePhase=0;$('#icueParameters').val(JSON.stringify(currentLayer.parameters,null,2));applyColourParameters(colors);renderFriendlyEffect();renderLEDs();}).on('change','.icue-param-bool',function(){applyParam($(this).data('key'),this.checked);});
     $('#icueApplyParameters').on('click',function(){try{const p=JSON.parse($('#icueParameters').val()||'{}');currentLayer.parameters=p;renderEffectControls();renderFriendlyEffect();renderLEDs();apply({parameters:p});}catch(e){toast.warning('Parameters must be valid JSON');}});
     $('#icueSelectAll').on('click',()=>setDeviceSelection(true));$('#icueSelectNone').on('click',()=>setDeviceSelection(false));$('#icueTopologyProbe').on('change',function(){$('#icueProbePanel').toggle(this.checked);$('#icueSelectionActions').toggle(!this.checked);renderLEDs();applyMappingProbe();});$('#icueProbePrev').on('click',()=>{const d=selectedDevice(),n=mapperLedCount(d);probeLocal=(probeLocal+n-1)%n;renderLEDs();applyMappingProbe();});$('#icueProbeNext').on('click',()=>{const d=selectedDevice(),n=mapperLedCount(d);probeLocal=(probeLocal+1)%n;renderLEDs();applyMappingProbe();});$('#icueMapRecord').on('click',recordMappingObservation);
     $('#icueResetLive').on('click',resetLivePreview);
