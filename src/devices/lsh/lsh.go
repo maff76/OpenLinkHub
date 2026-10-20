@@ -344,7 +344,6 @@ var (
 		"probe-temperature",
 		"rain",
 		"rainbow",
-		"icuerainbowwave",
 		"pastelrainbow",
 		"rotarystack",
 		"rotator",
@@ -363,7 +362,6 @@ var (
 		"nebula",
 		"marquee",
 		"rain",
-		"icuerainbowwave",
 		"rotarystack",
 		"sequential",
 		"spiralrainbow",
@@ -5184,12 +5182,6 @@ func (d *Device) generateRgbEffect(k int, channels uint8, startTime *time.Time, 
 			r.Rainbow(*startTime)
 			buff = r.Output
 		}
-	case "icuerainbowwave":
-		{
-			r.RgbDirection = profile.RgbDirection
-			r.ICUERainbowWave(*startTime)
-			buff = r.Output
-		}
 	case "pastelrainbow":
 		{
 			r.PastelRainbow(*startTime)
@@ -5386,10 +5378,6 @@ func (d *Device) getLedDevices() {
 
 	channels := int(buf[6])
 	data := buf[7:]
-
-	if d.Debug {
-		logger.Log(logger.Fields{"led-data": fmt.Sprintf("% 2x", data), "channels": channels}).Info("LED DEBUG DATA")
-	}
 
 	for i := 1; i <= channels; i++ {
 		offset := i * 4
