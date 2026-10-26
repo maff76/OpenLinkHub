@@ -104,12 +104,12 @@ $(document).ready(function () {
                                 <div class="modal-body">
                                     <div class="settings-list"></div>
                                 </div>
-                        
+
                                 <div class="modal-footer">
                                   <button class="btn btn-secondary" type="button" data-bs-dismiss="modal">${i18n.t('txtClose')}</button>
                                   <button class="btn btn-primary" type="button" id="btnSaveKeyboardPerformance">${i18n.t('txtSave')}</button>
                                 </div>
-                        
+
                               </div>
                             </div>
                           </div>
@@ -380,12 +380,12 @@ $(document).ready(function () {
                                   <div class="modal-body">
                                       <div class="settings-list"></div>
                                   </div>
-                            
+
                                   <div class="modal-footer">
                                     <button class="btn btn-secondary" type="button" data-bs-dismiss="modal">${i18n.t('txtClose')}</button>
                                     <button class="btn btn-primary" type="button" id="btnSaveControlDialColors">${i18n.t('txtSave')}</button>
                                   </div>
-                            
+
                                 </div>
                               </div>
                             </div>
@@ -680,7 +680,7 @@ $(document).ready(function () {
                                                         <label for="userProfileName">
                                                             <input type="text" id="toggleDelay" autocomplete="off" value="${data.toggleDelay}">
                                                         </label>
-                                                    </div>                                    
+                                                    </div>
                                                 </td>
                                                 <td>
                                                     <select class="system-select compact keyAssignmentType" id="keyAssignmentType"></select>
@@ -1084,7 +1084,7 @@ $(document).ready(function () {
                           <div class="modal fade" id="systemModal" tabindex="-1" aria-hidden="true">
                             <div class="modal-dialog modal-custom modal-600">
                               <div class="modal-content">
-                        
+
                                 <div class="modal-header">
                                   <h5 class="modal-title">${i18n.t('txtKeyActuation')} - ${data.keyName}</h5>
                                   <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -1098,7 +1098,7 @@ $(document).ready(function () {
                                                 <span class="toggle-track"></span>
                                             </label>
                                         </div>
-                                        
+
                                         <div class="settings-row settings-actuation">
                                             <span class="settings-label text-ellipsis">${i18n.t('txtActuation')}</span>
                                             <div class="system-slider no-padding-top">
@@ -1106,7 +1106,7 @@ $(document).ready(function () {
                                             </div>
                                             <span class="settings-label text-ellipsis" id="actuationValue">${data.actuationPoint / 10} mm</span>
                                         </div>
-                                        
+
                                         <div class="settings-row">
                                             <span class="settings-label text-ellipsis">${i18n.t('txtEnableResetPoint')}</span>
                                             <label class="system-toggle compact">
@@ -1114,7 +1114,7 @@ $(document).ready(function () {
                                                 <span class="toggle-track"></span>
                                             </label>
                                         </div>
-                                        
+
                                         <div class="settings-row settings-actuation" id="primaryReset">
                                             <span class="settings-label text-ellipsis">${i18n.t('txtActuationReset')}</span>
                                             <div class="system-slider no-padding-top">
@@ -1130,7 +1130,7 @@ $(document).ready(function () {
                                                 <span class="toggle-track"></span>
                                             </label>
                                         </div>
-                                        
+
                                         <div id="secondaryContainer">
                                             <div class="settings-row settings-actuation" id="secondaryPoint">
                                                 <span class="settings-label text-ellipsis">${i18n.t('txtActuation')}</span>
@@ -1139,7 +1139,7 @@ $(document).ready(function () {
                                                 </div>
                                                 <span class="settings-label text-ellipsis" id="secondaryActuationValue">${data.secondaryActuationPoint / 10} mm</span>
                                             </div>
-                                            
+
                                             <div class="settings-row settings-actuation" id="secondaryReset">
                                                 <span class="settings-label text-ellipsis">${i18n.t('txtActuationReset')}</span>
                                                 <div class="system-slider no-padding-top">
@@ -1150,12 +1150,12 @@ $(document).ready(function () {
                                         </div>
                                     </div>
                                 </div>
-                        
+
                                 <div class="modal-footer">
                                   <button class="btn btn-secondary" type="button" data-bs-dismiss="modal">${i18n.t('txtClose')}</button>
                                   <button class="btn btn-primary" type="button" id="btnSaveActuationValue">${i18n.t('txtSave')}</button>
                                 </div>
-                        
+
                               </div>
                             </div>
                           </div>
@@ -1388,7 +1388,7 @@ $(document).ready(function () {
                                                         <label for="toggleDelay">
                                                             <input type="text" id="toggleDelay" autocomplete="off" value="${data.toggleDelay}">
                                                         </label>
-                                                    </div>                                    
+                                                    </div>
                                                 </td>
                                                 <td>${retainCheckbox}</td>
                                                 <td>
@@ -2221,9 +2221,13 @@ $(document).ready(function () {
         const keyboardRgbProfile = $('.keyboardRgbProfile');
         if (keyboardRgbProfile.length > 0 && typeof (deviceProfile.RGBProfile === "string") || deviceProfile.SlipstreamRGBProfile === "string") {
             let rgbProfileValue = "0;" + deviceProfile.RGBProfile;
-            if (deviceProfile.SlipstreamRGBProfile != null && deviceProfile.SlipstreamRGBProfile.length > 0) {
-                rgbProfileValue = "0;" + deviceProfile.SlipstreamRGBProfile;
+
+            if (!device.Usb) {
+                if (deviceProfile.SlipstreamRGBProfile != null && deviceProfile.SlipstreamRGBProfile.length > 0) {
+                    rgbProfileValue = "0;" + deviceProfile.SlipstreamRGBProfile;
+                }
             }
+
             if (keyboardRgbProfile.find('option[value="' + rgbProfileValue + '"]').length > 0) {
                 keyboardRgbProfile.val(rgbProfileValue);
             }
@@ -3388,7 +3392,7 @@ $(document).ready(function () {
                                   <div class="modal fade" id="systemModal" tabindex="-1" aria-hidden="true">
                                     <div class="modal-dialog modal-custom modal-500">
                                       <div class="modal-content">
-                                
+
                                         <div class="modal-header">
                                           <h5 class="modal-title">${i18n.t('txtLedOverride')}</h5>
                                           <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -3402,7 +3406,7 @@ $(document).ready(function () {
                                                         <span class="toggle-track"></span>
                                                     </label>
                                                 </div>
-            
+
                                                 <div class="settings-row">
                                                     <span class="settings-label text-ellipsis">${i18n.t('txtLedAmount')}</span>
                                                     <div class="system-input text-input">
@@ -3413,12 +3417,12 @@ $(document).ready(function () {
                                                 </div>
                                             </div>
                                         </div>
-                                
+
                                         <div class="modal-footer">
                                           <button class="btn btn-secondary" type="button" data-bs-dismiss="modal">${i18n.t('txtClose')}</button>
                                           <button class="btn btn-primary" type="button" id="btnSaveOverride">${i18n.t('txtSave')}</button>
                                         </div>
-                                
+
                                       </div>
                                     </div>
                                   </div>
@@ -3495,7 +3499,7 @@ $(document).ready(function () {
                           <div class="modal fade" id="systemModal" tabindex="-1" aria-hidden="true">
                             <div class="modal-dialog modal-custom modal-500">
                               <div class="modal-content">
-                        
+
                                 <div class="modal-header">
                                   <h5 class="modal-title">${i18n.t('txtTemperatureProbe')}</h5>
                                   <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -3526,12 +3530,12 @@ $(document).ready(function () {
                                         </div>
                                     </div>
                                 </div>
-                        
+
                                 <div class="modal-footer">
                                   <button class="btn btn-secondary" type="button" data-bs-dismiss="modal">${i18n.t('txtClose')}</button>
                                   <button class="btn btn-primary" type="button" id="btnSaveTemperatureProbe">${i18n.t('txtSave')}</button>
                                 </div>
-                        
+
                               </div>
                             </div>
                           </div>
@@ -3648,7 +3652,7 @@ $(document).ready(function () {
                           <div class="modal fade" id="systemModal" tabindex="-1" aria-hidden="true">
                             <div class="modal-dialog modal-custom modal-500">
                               <div class="modal-content">
-                        
+
                                 <div class="modal-header">
                                   <h5 class="modal-title">${i18n.t('txtRgbOverride')}</h5>
                                   <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -3662,7 +3666,7 @@ $(document).ready(function () {
                                                 <span class="toggle-track"></span>
                                             </label>
                                         </div>
-    
+
                                         <div class="settings-row rgb-editor">
                                             <span class="settings-label text-ellipsis">${i18n.t('txtStartColor')}</span>
                                             <div class="system-color">
@@ -3674,7 +3678,7 @@ $(document).ready(function () {
                                                 <input type="text" class="rgb-color-start" id="startColorTemp" value="${data.RGBStartColor.temperature}">
                                             </div>
                                         </div>
-                                        
+
                                         <div class="settings-row rgb-editor">
                                             <span class="settings-label text-ellipsis">${i18n.t('txtMiddleColor')}</span>
                                             <div class="system-color">
@@ -3684,7 +3688,7 @@ $(document).ready(function () {
                                                 <input type="text" class="rgb-color-start" id="middleColorTemp" value="${data.RGBMiddleColor.temperature}">
                                             </div>
                                         </div>
-                                        
+
                                         <div class="settings-row rgb-editor">
                                             <span class="settings-label text-ellipsis">${i18n.t('txtEndColor')}</span>
                                             <div class="system-color">
@@ -3694,7 +3698,7 @@ $(document).ready(function () {
                                                 <input type="text" class="rgb-color-start" id="endColorTemp" value="${data.RGBEndColor.temperature}">
                                             </div>
                                         </div>
-                                        
+
                                         <div class="settings-row">
                                             <span class="settings-label text-ellipsis">${i18n.t('txtSpeed')}</span>
                                             <div class="system-slider no-padding-top">
@@ -3707,12 +3711,12 @@ $(document).ready(function () {
                                         </div>
                                     </div>
                                 </div>
-                        
+
                                 <div class="modal-footer">
                                   <button class="btn btn-secondary" type="button" data-bs-dismiss="modal">${i18n.t('txtClose')}</button>
                                   <button class="btn btn-primary" type="button" id="btnSaveRgbOverride">${i18n.t('txtSave')}</button>
                                 </div>
-                        
+
                               </div>
                             </div>
                           </div>
@@ -3834,7 +3838,7 @@ $(document).ready(function () {
                           <div class="modal fade" id="systemModal" tabindex="-1" aria-hidden="true">
                             <div class="modal-dialog modal-custom modal-500">
                               <div class="modal-content">
-                        
+
                                 <div class="modal-header">
                                   <h5 class="modal-title">${i18n.t('txtTimeWarp')}</h5>
                                   <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -3848,7 +3852,7 @@ $(document).ready(function () {
                                                 <span class="toggle-track"></span>
                                             </label>
                                         </div>
-    
+
                                         <div class="settings-row rgb-editor">
                                             <span class="settings-label text-ellipsis">${i18n.t('txtColor')}</span>
                                             <div class="system-color">
@@ -3868,7 +3872,7 @@ $(document).ready(function () {
                                                 </select>
                                             </div>
                                         </div>
-                                        
+
                                         <div class="settings-row">
                                             <span class="settings-label text-ellipsis">${i18n.t('txtSpeed')}</span>
                                             <div class="system-slider no-padding-top">
@@ -3881,12 +3885,12 @@ $(document).ready(function () {
                                         </div>
                                     </div>
                                 </div>
-                        
+
                                 <div class="modal-footer">
                                   <button class="btn btn-secondary" type="button" data-bs-dismiss="modal">${i18n.t('txtClose')}</button>
                                   <button class="btn btn-primary" type="button" id="btnSaveRgbTimewarp">${i18n.t('txtSave')}</button>
                                 </div>
-                        
+
                               </div>
                             </div>
                           </div>
@@ -4340,7 +4344,7 @@ $(document).ready(function () {
                           <div class="modal fade" id="systemModal" tabindex="-1" aria-hidden="true">
                             <div class="modal-dialog modal-custom modal-500">
                               <div class="modal-content">
-                        
+
                                 <div class="modal-header">
                                   <h5 class="modal-title">${i18n.t('txtRgbOverride')}</h5>
                                   <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -4354,7 +4358,7 @@ $(document).ready(function () {
                                                 <span class="toggle-track"></span>
                                             </label>
                                         </div>
-    
+
                                         <div class="settings-row">
                                             <span class="settings-label text-ellipsis">${i18n.t('txtStartColor')}</span>
                                             <div class="system-color">
@@ -4363,14 +4367,14 @@ $(document).ready(function () {
                                                 </label>
                                             </div>
                                         </div>
-                                        
+
                                         <div class="settings-row">
                                             <span class="settings-label text-ellipsis">${i18n.t('txtEndColor')}</span>
                                             <div class="system-color">
                                                     <input type="color" class="system-color" id="endColor" value="${endColor}">
                                             </div>
                                         </div>
-                                        
+
                                         <div class="settings-row">
                                             <span class="settings-label text-ellipsis">${i18n.t('txtSpeed')}</span>
                                             <div class="system-slider no-padding-top">
@@ -4383,12 +4387,12 @@ $(document).ready(function () {
                                         </div>
                                     </div>
                                 </div>
-                        
+
                                 <div class="modal-footer">
                                   <button class="btn btn-secondary" type="button" data-bs-dismiss="modal">${i18n.t('txtClose')}</button>
                                   <button class="btn btn-primary" type="button" id="btnSaveRgbOverrideLinkAdapter">${i18n.t('txtSave')}</button>
                                 </div>
-                        
+
                               </div>
                             </div>
                           </div>
@@ -4419,7 +4423,7 @@ $(document).ready(function () {
                                 $speedSlider.on("input", updateSpeedSlider);
                                 updateSpeedSlider();
                             }
-                            
+
                             modal.find('#btnSaveRgbOverrideLinkAdapter').on('click', function () {
                                 const pf = {};
                                 let startColorRgb = {}
@@ -5222,7 +5226,7 @@ $(document).ready(function () {
                                   <div class="modal fade" id="systemModal" tabindex="-1" aria-hidden="true">
                                     <div class="modal-dialog modal-custom modal-500">
                                       <div class="modal-content">
-                                
+
                                         <div class="modal-header">
                                           <h5 class="modal-title">${data.name}</h5>
                                           <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -5237,7 +5241,7 @@ $(document).ready(function () {
                                                         </label>
                                                     </div>
                                                 </div>
-                                                
+
                                                 <div class="settings-row rgb-editor">
                                                     <span class="settings-label text-ellipsis">${i18n.t('txtDateColor')}</span>
                                                     <div class="system-color">
@@ -5246,25 +5250,25 @@ $(document).ready(function () {
                                                         </label>
                                                     </div>
                                                 </div>
-                                                
+
                                                 <div class="settings-row rgb-editor">
                                                     <span class="settings-label text-ellipsis">${i18n.t('txtTimeSize')}</span>
                                                     <div class="system-input text-input compact">
                                                         <label for="fontSize">
                                                             <input type="text" id="fontSize" autocomplete="off" value="${data.fontSize}">
                                                         </label>
-                                                    </div> 
+                                                    </div>
                                                 </div>
-                                                
+
                                                 <div class="settings-row rgb-editor">
                                                     <span class="settings-label text-ellipsis">${i18n.t('txtDateSize')}</span>
                                                     <div class="system-input text-input compact">
                                                         <label for="subFontSize">
                                                             <input type="text" id="subFontSize" autocomplete="off" value="${data.subFontSize}">
                                                         </label>
-                                                    </div> 
+                                                    </div>
                                                 </div>
-                                                
+
                                                 <div class="settings-row rgb-editor">
                                                     <span class="settings-label text-ellipsis">${i18n.t('txtTimePosition')}</span>
                                                     <div class="system-input text-input compact max-width-120">
@@ -5276,9 +5280,9 @@ $(document).ready(function () {
                                                         <label for="timePositionRight">
                                                             <input type="text" id="timePositionRight" autocomplete="off" value="${data.top}">
                                                         </label>
-                                                    </div> 
+                                                    </div>
                                                 </div>
-                                                
+
                                                 <div class="settings-row rgb-editor">
                                                     <span class="settings-label text-ellipsis">${i18n.t('txtDatePosition')}</span>
                                                     <div class="system-input text-input compact max-width-120">
@@ -5290,9 +5294,9 @@ $(document).ready(function () {
                                                         <label for="datePositionRight">
                                                             <input type="text" id="datePositionRight" autocomplete="off" value="${data.subTop}">
                                                         </label>
-                                                    </div> 
+                                                    </div>
                                                 </div>
-                                                
+
                                             </div>
                                         </div>
                                         <div class="modal-footer">
@@ -5315,7 +5319,7 @@ $(document).ready(function () {
 
                         modal.on('shown.bs.modal', function (e) {
                             modal.find('#btnSaveWidget').on('click', function () {
-                                
+
                             });
                         })
                     } else {

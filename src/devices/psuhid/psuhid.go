@@ -69,10 +69,7 @@ type DeviceProfile struct {
 }
 
 type Device struct {
-	dev       *hid.Device
-	deviceKey string // devices.go registration key; "<productId>-<usb port>" for a duplicate
-	// Per device, not package globals: with two PSUs, globals made both refresh
-	// goroutines share one ticker (each refreshed at about half rate) and one mutex.
+	dev             *hid.Device
 	mutex           sync.Mutex
 	timer           *time.Ticker
 	autoRefreshChan chan bool
@@ -90,6 +87,7 @@ type Device struct {
 	InputVoltage    float32
 	instance        *common.Device
 	IsPSU           bool
+	DevicePath      string
 }
 
 var (
@@ -113,13 +111,11 @@ var (
 	dataPowerOut          = byte(0xee)
 	dataInputVoltage      = byte(0x88)
 	deviceRefreshInterval = 1000
-	// A PSU that never answers a request would otherwise block transfer() (and Init)
-	// forever: hid Read has no timeout.
-	readTimeout         = 1000 * time.Millisecond
-	bufferSize          = 64
-	readBufferSize      = 64
-	bufferSizeWrite     = bufferSize + 1
-	temperatureChannels = 2
+	readTimeout           = 1000 * time.Millisecond
+	bufferSize            = 64
+	readBufferSize        = 64
+	bufferSizeWrite       = bufferSize + 1
+	temperatureChannels   = 2
 )
 
 func Init(vendorId, productId uint16, key, path string) *common.Device {
@@ -147,8 +143,8 @@ func Init(vendorId, productId uint16, key, path string) *common.Device {
 			9:  "90 %",
 			10: "100 %",
 		},
-		IsPSU:     true,
-		deviceKey: key,
+		IsPSU:      true,
+		DevicePath: key,
 	}
 
 	// Bootstrap
@@ -169,13 +165,15 @@ func Init(vendorId, productId uint16, key, path string) *common.Device {
 // createDevice will create new device register object
 func (d *Device) createDevice() {
 	d.instance = &common.Device{
-		ProductType: common.ProductTypePSUHid,
-		Product:     d.Product,
-		Serial:      d.Serial,
-		Firmware:    d.Firmware,
-		Image:       "icon-psu.svg",
-		Instance:    d,
-		GetDevice:   d,
+		ProductType:  common.ProductTypePSUHid,
+		Product:      d.Product,
+		Serial:       d.Serial,
+		Firmware:     d.Firmware,
+		Image:        "icon-psu.svg",
+		Instance:     d,
+		GetDevice:    d,
+		DevicePath:   d.DevicePath,
+		DeviceLookup: d.DevicePath,
 	}
 }
 
@@ -196,7 +194,13 @@ func (d *Device) Stop() {
 func (d *Device) StopDirty() uint8 {
 	logger.Log(logger.Fields{"serial": d.Serial}).Info("Stopping device (dirty)...")
 	d.stopAutoRefresh()
-	return 1
+	if d.dev != nil {
+		err := d.dev.Close()
+		if err != nil {
+			logger.Log(logger.Fields{"error": err}).Error("Unable to close HID device")
+		}
+	}
+	return 2
 }
 
 // GetDeviceTemplate will return device template name
@@ -262,15 +266,7 @@ func (d *Device) getProductData() {
 
 	d.Product = product
 
-	// The serial is derived from the product name, so two identical PSUs would share it
-	// (and their profile). A second one is registered with a "<productId>-<usb port>" key;
-	// mix that port into its serial. A single PSU keeps its existing serial and profile.
-	seed := product
-	if i := strings.Index(d.deviceKey, "-"); i >= 0 {
-		seed = product + d.deviceKey[i:]
-	}
-
-	hash := md5.Sum([]byte(seed))
+	hash := md5.Sum([]byte(d.DevicePath))
 	serial := hex.EncodeToString(hash[:])
 	d.Serial = serial
 }
@@ -796,11 +792,6 @@ func (d *Device) transfer(buffer []byte) ([]byte, error) {
 		return bufferR, err
 	}
 
-	// Read until the response to THIS request arrives, or readTimeout passes. A read that
-	// was interrupted (EINTR: the Go runtime signals threads) or timed out leaves its
-	// response pending; it then arrives ahead of the next one. Treating that as a failed
-	// transfer left every later read one response behind ("response does not match the
-	// request" on every transfer), so stale responses are skipped instead.
 	deadline := time.Now().Add(readTimeout)
 	for {
 		remaining := time.Until(deadline)
@@ -825,6 +816,5 @@ func (d *Device) transfer(buffer []byte) ([]byte, error) {
 		if buffer[1] == bufferR[0] && buffer[2] == bufferR[1] {
 			return bufferR, nil
 		}
-		// A late response to an earlier request: discard it and keep reading.
 	}
 }

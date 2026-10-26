@@ -45,16 +45,18 @@ type Slipstream struct {
 }
 
 type Device struct {
-	ProductType uint16
-	Product     string
-	Serial      string
-	Firmware    string
-	Image       string
-	GetDevice   interface{}
-	Instance    interface{} `json:"-"`
-	Hidden      bool
-	DeviceType  uint32
-	ProductId   uint16
+	ProductType  uint16
+	Product      string
+	Serial       string
+	Firmware     string
+	Image        string
+	GetDevice    interface{}
+	Instance     interface{} `json:"-"`
+	Hidden       bool
+	DeviceType   uint32
+	ProductId    uint16
+	DevicePath   string
+	DeviceLookup string
 }
 
 type KeyboardPerformance struct {
@@ -271,12 +273,18 @@ type OpenRGBSegment struct {
 	LedCount uint32
 }
 
+type OpenRGGLed struct {
+	Name  string
+	Value uint32
+}
+
 type OpenRGBZone struct {
 	Name     string
 	NumLEDs  uint32
 	MinLeds  uint32
 	ZoneType uint32
 	Segments []OpenRGBSegment
+	Matrix   [][]uint32
 }
 
 type OpenRGBController struct {
@@ -287,6 +295,7 @@ type OpenRGBController struct {
 	Serial       string
 	Location     string
 	Zones        []OpenRGBZone
+	LEDs         []OpenRGGLed
 	Colors       []byte
 	ActiveMode   int32
 	WriteColorEx func([]byte, int)
