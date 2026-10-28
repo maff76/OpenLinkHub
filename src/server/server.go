@@ -6,6 +6,7 @@ package server
 
 import (
 	"OpenLinkHub/src/audio"
+	"OpenLinkHub/src/auth"
 	"OpenLinkHub/src/backup"
 	"OpenLinkHub/src/common"
 	"OpenLinkHub/src/config"
@@ -25,6 +26,7 @@ import (
 	"OpenLinkHub/src/metrics"
 	"OpenLinkHub/src/rgb"
 	"OpenLinkHub/src/scheduler"
+	"OpenLinkHub/src/server/certificate"
 	"OpenLinkHub/src/server/requests"
 	"OpenLinkHub/src/stats"
 	"OpenLinkHub/src/systeminfo"
@@ -32,11 +34,13 @@ import (
 	"OpenLinkHub/src/temperatures"
 	"OpenLinkHub/src/templates"
 	"OpenLinkHub/src/version"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -2304,6 +2308,17 @@ func setHardwareLight(w http.ResponseWriter, r *http.Request) {
 	resp.Send(w)
 }
 
+// updateAuthSettings will update dashboard auth
+func updateAuthSettings(w http.ResponseWriter, r *http.Request) {
+	request := requests.ProcessAuthSettings(r)
+	resp := &Response{
+		Code:    request.Code,
+		Status:  request.Status,
+		Message: request.Message,
+	}
+	resp.Send(w)
+}
+
 // uiDeviceOverview handles device overview
 func uiDeviceOverview(w http.ResponseWriter, r *http.Request) {
 	deviceId, valid := getVar("/device/", r)
@@ -3112,6 +3127,28 @@ func uiXeneon(w http.ResponseWriter, _ *http.Request) {
 	}
 }
 
+// uiLogin handles user login
+func uiLogin(w http.ResponseWriter, _ *http.Request) {
+	web := templates.Web{}
+	web.Title = dashboard.GetDashboard().PageTitle
+	web.Dashboard = dashboard.GetDashboard()
+	web.Page = "login"
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+
+	t := templates.GetTemplate()
+	err := t.ExecuteTemplate(w, "login.html", web)
+	if err != nil {
+		fmt.Println(err)
+		resp := &Response{
+			Code:    http.StatusInternalServerError,
+			Message: language.GetValue("txtUnableToServeWebContent"),
+		}
+		resp.Send(w)
+	}
+}
+
 // getVar will extract dynamic path from GET request
 func getVar(path string, r *http.Request) (string, bool) {
 	value := strings.TrimPrefix(r.URL.Path, path)
@@ -3344,6 +3381,7 @@ func setRoutes() http.Handler {
 	handleFunc(r, "/api/devices/getHardwareLights", http.MethodPost, getHardwareLights)
 	handleFunc(r, "/api/devices/setHardwareLights", http.MethodPost, setHardwareLights)
 	handleFunc(r, "/api/devices/setHardwareLight", http.MethodPost, setHardwareLight)
+	handleFunc(r, "/api/auth/update", http.MethodPost, updateAuthSettings)
 
 	// PUT
 	handleFunc(r, "/api/temperatures/update", http.MethodPut, updateTemperatureProfile)
@@ -3380,6 +3418,7 @@ func setRoutes() http.Handler {
 		handleFunc(r, "/macros", http.MethodGet, uiMacrosOverview)
 		handleFunc(r, "/lcd", http.MethodGet, uiLcdOverview)
 		handleFunc(r, "/settings", http.MethodGet, uiSettings)
+		handleFunc(r, "/login", http.MethodGet, uiLogin)
 		//handleFunc(r, "/xeneon", http.MethodGet, uiXeneon)
 	}
 	return r
@@ -3417,19 +3456,69 @@ func Init() {
 			),
 			Handler: setRoutes(),
 		}
+		scheme := "http"
 
-		fmt.Println(
-			fmt.Sprintf("[Server] Running REST and WebUI on %s. WebUI is accessible via: http://%s",
-				server.Addr,
-				server.Addr,
-			),
+		if dashboard.GetDashboard().AuthEnabled {
+			origin, err := url.Parse(dashboard.GetDashboard().AuthOrigin)
+			if err != nil || origin.Scheme != "https" || origin.Hostname() == "" {
+				logger.Log(logger.Fields{}).Fatal("Authentication requires an HTTPS origin")
+				return
+			}
+
+			cert, err := certificate.EnsureCertificate(
+				filepath.Join(config.GetConfig().ConfigPath, "certificates"),
+				[]string{
+					"localhost",
+					"127.0.0.1",
+					"::1",
+					origin.Hostname(),
+				},
+			)
+			if err != nil {
+				logger.Log(logger.Fields{"error": err}).Fatal("Unable to initialize TLS certificate")
+				return
+			}
+
+			server.TLSConfig = &tls.Config{
+				MinVersion:   tls.VersionTLS12,
+				Certificates: []tls.Certificate{cert},
+			}
+
+			authentication, err := auth.New(
+				auth.Config{
+					Enabled:         dashboard.GetDashboard().AuthEnabled,
+					Username:        dashboard.GetDashboard().AuthUsername,
+					PasswordHash:    dashboard.GetDashboard().AuthPassword,
+					Origin:          dashboard.GetDashboard().AuthOrigin,
+					SessionLifetime: time.Duration(dashboard.GetDashboard().SessionLifetime) * time.Minute,
+				},
+			)
+			if err != nil {
+				logger.Log(logger.Fields{"error": err}).Fatal("Unable to initialize authentication")
+				return
+			}
+
+			server.Handler = authentication.Middleware(setRoutes())
+			scheme = "https"
+		}
+
+		fmt.Printf(
+			"[Server] Running REST and WebUI on %s. WebUI is accessible via: %s://%s\n",
+			server.Addr,
+			scheme,
+			server.Addr,
 		)
 		listener, err := net.Listen("tcp", server.Addr)
 		if err != nil {
 			logger.Log(logger.Fields{"error": err}).Fatal("Unable to start REST server")
 		}
 		discovery.Start()
-		if err = server.Serve(listener); err != nil && err != http.ErrServerClosed {
+		if dashboard.GetDashboard().AuthEnabled {
+			err = server.ServeTLS(listener, "", "")
+		} else {
+			err = server.Serve(listener)
+		}
+		if err != nil && err != http.ErrServerClosed {
 			logger.Log(logger.Fields{"error": err}).Fatal("Unable to serve REST requests")
 		}
 	} else {
