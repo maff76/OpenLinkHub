@@ -342,6 +342,38 @@ func getGpuTemperatureClean(w http.ResponseWriter, _ *http.Request) {
 	resp.Send(w)
 }
 
+// getMemoryUsage will return current memory and swap usage.
+func getMemoryUsage(w http.ResponseWriter, _ *http.Request) {
+	data, err := systeminfo.GetMemoryUsage()
+	status := 1
+	if err != nil {
+		status = 0
+	}
+
+	resp := &Response{
+		Code:   http.StatusOK,
+		Status: status,
+		Data:   data,
+	}
+	resp.Send(w)
+}
+
+// getStorageUsage will return capacity for mounted local filesystems.
+func getStorageUsage(w http.ResponseWriter, _ *http.Request) {
+	data, err := systeminfo.GetStorageUsage()
+	status := 1
+	if err != nil {
+		status = 0
+	}
+
+	resp := &Response{
+		Code:   http.StatusOK,
+		Status: status,
+		Data:   data,
+	}
+	resp.Send(w)
+}
+
 // getStorageTemperature will return current storage temperature
 func getStorageTemperature(w http.ResponseWriter, _ *http.Request) {
 	resp := &Response{
@@ -777,6 +809,16 @@ func getMouseButtons(w http.ResponseWriter, _ *http.Request) {
 		Code:   http.StatusOK,
 		Status: 1,
 		Data:   inputmanager.GetMouseButtons(),
+	}
+	resp.Send(w)
+}
+
+// getDeviceStats returns device temperature and speed readings
+func getDeviceStats(w http.ResponseWriter, _ *http.Request) {
+	resp := &Response{
+		Code:   http.StatusOK,
+		Status: 1,
+		Data:   stats.GetAIOStats(),
 	}
 	resp.Send(w)
 }
@@ -1308,6 +1350,50 @@ func changeBrightnessGradual(w http.ResponseWriter, r *http.Request) {
 	resp.Send(w)
 }
 
+// changeContrastGradual handles user contrast change via defined number from 0-100
+func changeContrastGradual(w http.ResponseWriter, r *http.Request) {
+	request := requests.ProcessContrastChangeGradual(r)
+	resp := &Response{
+		Code:    request.Code,
+		Status:  request.Status,
+		Message: request.Message,
+	}
+	resp.Send(w)
+}
+
+// changeBacklightGradual handles user backlight change via defined number from 0-100
+func changeBacklightGradual(w http.ResponseWriter, r *http.Request) {
+	request := requests.ProcessBacklightChangeGradual(r)
+	resp := &Response{
+		Code:    request.Code,
+		Status:  request.Status,
+		Message: request.Message,
+	}
+	resp.Send(w)
+}
+
+// changeColorTone handles user color tone change via defined number from 0-100
+func changeColorTone(w http.ResponseWriter, r *http.Request) {
+	request := requests.ProcessColortoneChange(r)
+	resp := &Response{
+		Code:    request.Code,
+		Status:  request.Status,
+		Message: request.Message,
+	}
+	resp.Send(w)
+}
+
+// resetDeviceSettings handles user device settings reset
+func resetDeviceSettings(w http.ResponseWriter, r *http.Request) {
+	request := requests.ProcessDeviceSettingsReset(r)
+	resp := &Response{
+		Code:    request.Code,
+		Status:  request.Status,
+		Message: request.Message,
+	}
+	resp.Send(w)
+}
+
 // changePosition handles device position change
 func changePosition(w http.ResponseWriter, r *http.Request) {
 	request := requests.ProcessPositionChange(r)
@@ -1435,6 +1521,28 @@ func getXeneonWidget(w http.ResponseWriter, r *http.Request) {
 		Code:   request.Code,
 		Status: request.Status,
 		Data:   request.Data,
+	}
+	resp.Send(w)
+}
+
+// setXeneonWidgetArea sets a widget area
+func setXeneonWidgetArea(w http.ResponseWriter, r *http.Request) {
+	request := requests.ProcessSetXeneonWidgetArea(r)
+	resp := &Response{
+		Code:    request.Code,
+		Status:  request.Status,
+		Message: request.Message,
+	}
+	resp.Send(w)
+}
+
+// saveXeneonWidget saves xeneon widget configuration
+func saveXeneonWidget(w http.ResponseWriter, r *http.Request) {
+	request := requests.ProcessSaveXeneonWidget(r)
+	resp := &Response{
+		Code:    request.Code,
+		Status:  request.Status,
+		Message: request.Message,
 	}
 	resp.Send(w)
 }
@@ -3253,6 +3361,9 @@ func setRoutes() http.Handler {
 	handleFunc(r, "/api/keyboard/getPerformance/", http.MethodGet, getKeyboardPerformance)
 	handleFunc(r, "/api/keyboard/getFlashTap/", http.MethodGet, getKeyboardFlashTap)
 	handleFunc(r, "/api/systray", http.MethodGet, getSystrayData)
+	handleFunc(r, "/api/stats/devices", http.MethodGet, getDeviceStats)
+	handleFunc(r, "/api/stats/memory", http.MethodGet, getMemoryUsage)
+	handleFunc(r, "/api/stats/storage", http.MethodGet, getStorageUsage)
 	handleFunc(r, "/api/keyboard/dial/getColors/", http.MethodGet, getControlDialColors)
 	handleFunc(r, "/api/getSupportedDevices", http.MethodGet, getSupportedDevices)
 	handleFunc(r, "/api/icue/profiles", http.MethodGet, getICUEProfiles)
@@ -3310,6 +3421,10 @@ func setRoutes() http.Handler {
 	handleFunc(r, "/api/lcd/image", http.MethodPost, setDeviceLcdImage)
 	handleFunc(r, "/api/brightness", http.MethodPost, changeBrightness)
 	handleFunc(r, "/api/brightness/gradual", http.MethodPost, changeBrightnessGradual)
+	handleFunc(r, "/api/contrast/gradual", http.MethodPost, changeContrastGradual)
+	handleFunc(r, "/api/backlight/gradual", http.MethodPost, changeBacklightGradual)
+	handleFunc(r, "/api/colortone", http.MethodPost, changeColorTone)
+	handleFunc(r, "/api/resetSettings", http.MethodPost, resetDeviceSettings)
 	handleFunc(r, "/api/position/update", http.MethodPost, changePosition)
 	handleFunc(r, "/api/dashboard/update", http.MethodPost, setDashboardSettings)
 	handleFunc(r, "/api/dashboard/sidebar", http.MethodPost, setDashboardSidebar)
@@ -3378,6 +3493,8 @@ func setRoutes() http.Handler {
 	handleFunc(r, "/api/devices/channel", http.MethodPost, getChannelData)
 	handleFunc(r, "/api/display/update", http.MethodPost, updateDisplayData)
 	handleFunc(r, "/api/xeneon/getWidget", http.MethodPost, getXeneonWidget)
+	handleFunc(r, "/api/xeneon/saveWidget", http.MethodPost, saveXeneonWidget)
+	handleFunc(r, "/api/xeneon/setWidgetArea", http.MethodPost, setXeneonWidgetArea)
 	handleFunc(r, "/api/devices/getHardwareLights", http.MethodPost, getHardwareLights)
 	handleFunc(r, "/api/devices/setHardwareLights", http.MethodPost, setHardwareLights)
 	handleFunc(r, "/api/devices/setHardwareLight", http.MethodPost, setHardwareLight)
@@ -3419,7 +3536,7 @@ func setRoutes() http.Handler {
 		handleFunc(r, "/lcd", http.MethodGet, uiLcdOverview)
 		handleFunc(r, "/settings", http.MethodGet, uiSettings)
 		handleFunc(r, "/login", http.MethodGet, uiLogin)
-		//handleFunc(r, "/xeneon", http.MethodGet, uiXeneon)
+		handleFunc(r, "/xeneon", http.MethodGet, uiXeneon)
 	}
 	return r
 }
