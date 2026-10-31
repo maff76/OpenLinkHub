@@ -5596,6 +5596,7 @@ $(document).ready(function () {
                                     ['fontSize', 'txtXeneonValueSize', 'number', 36, 8, 200],
                                     ['subFontSize', 'txtXeneonLabelSize', 'number', 15, 8, 100]
                                 ];
+
                                 if (data.template === 'xeneon-memory') {
                                     fields.push(['showSwap', 'txtXeneonShowSwap', 'checkbox', true]);
                                 } else {
@@ -5619,10 +5620,12 @@ $(document).ready(function () {
                                     ['fontSize', 'txtXeneonValueSize', 'number', history ? 48 : 24, 8, 200],
                                     ['subFontSize', 'txtXeneonLabelSize', 'number', 15, 8, 100]
                                 ];
+
                                 if (!profiles) {
                                     fields.push(['max', history ? 'txtXeneonMaximum' : 'txtXeneonMaxRPM', 'number', history ? 100 : 3000, 1, history ? 1000 : 50000]);
                                     fields.push(['unit', 'txtXeneonUnit', 'select', '°C', [['°C', '°C'], ['°F', '°F']]]);
                                 }
+
                                 if (history) {
                                     fields.push(['historyMinutes', 'txtXeneonHistoryMinutes', 'number', 5, 1, 30]);
                                 }
@@ -5834,7 +5837,7 @@ $(document).ready(function () {
 
                             select.val(selected);
 
-                            $.getJSON('/api/xeneon/stats', function (response) {
+                            $.getJSON('/api/stats/devices', function (response) {
                                 if (response.status !== 1 || !response.data) {
                                     return;
                                 }
@@ -5873,7 +5876,7 @@ $(document).ready(function () {
 
                             const profiles = data.template === 'xeneon-profile-shortcuts';
 
-                            $.getJSON(profiles ? '/api/devices/' : '/api/xeneon/stats', function (response) {
+                            $.getJSON(profiles ? '/api/devices/' : '/api/stats/devices', function (response) {
                                 $.each((profiles ? response.devices : response.data) || {}, function (serial, device) {
                                     if (profiles && (!device.GetDevice || !device.GetDevice.userProfiles || !Object.keys(device.GetDevice.userProfiles).length)) {
                                         return;
@@ -5907,7 +5910,7 @@ $(document).ready(function () {
                                 select.val(selected);
                             }
 
-                            $.getJSON('/api/xeneon/stats', function (response) {
+                            $.getJSON('/api/stats/devices', function (response) {
                                 if (response.status !== 1 || !response.data) {
                                     return;
                                 }
