@@ -775,6 +775,13 @@
     "txtXeneonRAM": "RAM",
     "txtXeneonSwap": "Swap",
     "txtXeneonNoSwap": "Swap je onemogućen",
-    "txtXeneonTemperatures": "Temperature diskova"
+    "txtXeneonTemperatures": "Temperature diskova",
+    "txtMediaPrevious": "Prethodno",
+    "txtMediaStop": "Zaustavi",
+    "txtMediaPlay": "Reproduciraj",
+    "txtMediaNext": "Sljedeće",
+    "txtMediaVolumeDown": "Glas. -",
+    "txtMediaVolumeUp": "Glas. +",
+    "txtMediaMute": "Utišaj"
   }
 }

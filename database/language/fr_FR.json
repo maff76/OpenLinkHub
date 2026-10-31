@@ -775,6 +775,13 @@
         "txtXeneonRAM": "RAM",
         "txtXeneonSwap": "Swap",
         "txtXeneonNoSwap": "Le swap est désactivé",
-        "txtXeneonTemperatures": "Températures des disques"
+        "txtXeneonTemperatures": "Températures des disques",
+        "txtMediaPrevious": "Précédent",
+        "txtMediaStop": "Arrêter",
+        "txtMediaPlay": "Lire",
+        "txtMediaNext": "Suivant",
+        "txtMediaVolumeDown": "Vol -",
+        "txtMediaVolumeUp": "Vol +",
+        "txtMediaMute": "Muet"
     }
 }

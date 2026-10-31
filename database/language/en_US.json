@@ -775,6 +775,13 @@
     "txtXeneonRAM": "RAM",
     "txtXeneonSwap": "Swap",
     "txtXeneonNoSwap": "Swap is disabled",
-    "txtXeneonTemperatures": "Drive temperatures"
+    "txtXeneonTemperatures": "Drive temperatures",
+    "txtMediaPrevious": "Previous",
+    "txtMediaStop": "Stop",
+    "txtMediaPlay": "Play",
+    "txtMediaNext": "Next",
+    "txtMediaVolumeDown": "Vol -",
+    "txtMediaVolumeUp": "Vol +",
+    "txtMediaMute": "Mute"
   }
 }

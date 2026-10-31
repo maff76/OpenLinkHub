@@ -775,6 +775,13 @@
         "txtXeneonRAM": "RAM",
         "txtXeneonSwap": "Подкачка",
         "txtXeneonNoSwap": "Подкачка отключена",
-        "txtXeneonTemperatures": "Температуры накопителей"
+        "txtXeneonTemperatures": "Температуры накопителей",
+        "txtMediaPrevious": "Назад",
+        "txtMediaStop": "Стоп",
+        "txtMediaPlay": "Воспроизвести",
+        "txtMediaNext": "Далее",
+        "txtMediaVolumeDown": "Громк. -",
+        "txtMediaVolumeUp": "Громк. +",
+        "txtMediaMute": "Без звука"
     }
 }

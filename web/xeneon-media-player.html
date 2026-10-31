@@ -17,13 +17,13 @@
 
             <div class="settings-list top-10" {{ if $widget.HideControls }}style="display: none;"{{ end }}>
                 <div class="settings-row">
-                    <button class="system-button center media-button" data-info="1">PREVIOUS</button>
-                    <button class="system-button center media-button" data-info="2">STOP</button>
-                    <button class="system-button center media-button" data-info="3">PLAY</button>
-                    <button class="system-button center media-button" data-info="4">NEXT</button>
-                    <button class="system-button center media-button" data-info="5">VOL -</button>
-                    <button class="system-button center media-button" data-info="6">VOL +</button>
-                    <button class="system-button center media-button" data-info="7">MUTE</button>
+                    <button class="system-button center media-button" data-info="1">{{ $root.Lang "txtMediaPrevious" }}</button>
+                    <button class="system-button center media-button" data-info="2">{{ $root.Lang "txtMediaStop" }}</button>
+                    <button class="system-button center media-button" data-info="3">{{ $root.Lang "txtMediaPlay" }}</button>
+                    <button class="system-button center media-button" data-info="4">{{ $root.Lang "txtMediaNext" }}</button>
+                    <button class="system-button center media-button" data-info="5">{{ $root.Lang "txtMediaVolumeDown" }}</button>
+                    <button class="system-button center media-button" data-info="6">{{ $root.Lang "txtMediaVolumeUp" }}</button>
+                    <button class="system-button center media-button" data-info="7">{{ $root.Lang "txtMediaMute" }}</button>
                 </div>
             </div>
         </div>

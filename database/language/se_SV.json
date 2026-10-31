@@ -775,6 +775,13 @@
     "txtXeneonRAM": "RAM",
     "txtXeneonSwap": "Växlingsminne",
     "txtXeneonNoSwap": "Växlingsminne är inaktiverat",
-    "txtXeneonTemperatures": "Enhetstemperaturer"
+    "txtXeneonTemperatures": "Enhetstemperaturer",
+    "txtMediaPrevious": "Föregående",
+    "txtMediaStop": "Stoppa",
+    "txtMediaPlay": "Spela",
+    "txtMediaNext": "Nästa",
+    "txtMediaVolumeDown": "Vol -",
+    "txtMediaVolumeUp": "Vol +",
+    "txtMediaMute": "Ljud av"
   }
 }
