@@ -168,6 +168,38 @@ func getGpuTemperatureClean(w http.ResponseWriter, _ *http.Request) {
 	resp.Send(w)
 }
 
+// getMemoryUsage will return current memory and swap usage.
+func getMemoryUsage(w http.ResponseWriter, _ *http.Request) {
+	data, err := systeminfo.GetMemoryUsage()
+	status := 1
+	if err != nil {
+		status = 0
+	}
+
+	resp := &Response{
+		Code:   http.StatusOK,
+		Status: status,
+		Data:   data,
+	}
+	resp.Send(w)
+}
+
+// getStorageUsage will return capacity for mounted local filesystems.
+func getStorageUsage(w http.ResponseWriter, _ *http.Request) {
+	data, err := systeminfo.GetStorageUsage()
+	status := 1
+	if err != nil {
+		status = 0
+	}
+
+	resp := &Response{
+		Code:   http.StatusOK,
+		Status: status,
+		Data:   data,
+	}
+	resp.Send(w)
+}
+
 // getStorageTemperature will return current storage temperature
 func getStorageTemperature(w http.ResponseWriter, _ *http.Request) {
 	resp := &Response{
@@ -2786,7 +2818,9 @@ func setRoutes() http.Handler {
 	handleFunc(r, "/api/keyboard/getPerformance/", http.MethodGet, getKeyboardPerformance)
 	handleFunc(r, "/api/keyboard/getFlashTap/", http.MethodGet, getKeyboardFlashTap)
 	handleFunc(r, "/api/systray", http.MethodGet, getSystrayData)
-	handleFunc(r, "/api/xeneon/stats", http.MethodGet, getDeviceStats)
+	handleFunc(r, "/api/stats/devices", http.MethodGet, getDeviceStats)
+	handleFunc(r, "/api/stats/memory", http.MethodGet, getMemoryUsage)
+	handleFunc(r, "/api/stats/storage", http.MethodGet, getStorageUsage)
 	handleFunc(r, "/api/keyboard/dial/getColors/", http.MethodGet, getControlDialColors)
 	handleFunc(r, "/api/getSupportedDevices", http.MethodGet, getSupportedDevices)
 	handleFunc(r, "/api/backup", http.MethodGet, backup.PerformBackup)

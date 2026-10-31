@@ -65,7 +65,7 @@
             "dataColor": "#FFC107",
             "max": 95,
             "headerText": "CPU Temperature",
-            "unit": "\u00b0C",
+            "unit": "°C",
             "textColor": "#a1a1a1"
         },
         {
@@ -91,7 +91,7 @@
             "dataColor": "#FFC107",
             "max": 85,
             "headerText": "GPU Temperature",
-            "unit": "\u00b0C",
+            "unit": "°C",
             "textColor": "#a1a1a1"
         },
         {
@@ -117,7 +117,7 @@
             "dataColor": "#FFC107",
             "max": 100,
             "headerText": "Device Temperature",
-            "unit": "\u00b0C",
+            "unit": "°C",
             "textColor": "#a1a1a1",
             "deviceId": "",
             "channelId": 0
@@ -136,6 +136,93 @@
             "textColor": "#a1a1a1",
             "deviceId": "",
             "channelId": 0
+        },
+        {
+            "id": 12,
+            "name": "Temperature History",
+            "template": "xeneon-temperature-history",
+            "columns": [
+                1,
+                3
+            ],
+            "source": "cpu",
+            "historyMinutes": 5,
+            "max": 100,
+            "unit": "°C",
+            "headerText": "Temperature History",
+            "dataColor": "#38bdf8",
+            "textColor": "#e6e6e6",
+            "subTextColor": "#a1a1a1",
+            "fontSize": 48,
+            "subFontSize": 15
+        },
+        {
+            "id": 13,
+            "name": "Cooling Overview",
+            "template": "xeneon-cooling-overview",
+            "columns": [
+                1,
+                3
+            ],
+            "deviceId": "",
+            "max": 3000,
+            "unit": "°C",
+            "headerText": "Cooling Overview",
+            "dataColor": "#38bdf8",
+            "textColor": "#e6e6e6",
+            "subTextColor": "#a1a1a1",
+            "fontSize": 24,
+            "subFontSize": 15
+        },
+        {
+            "id": 14,
+            "name": "Profile Shortcuts",
+            "template": "xeneon-profile-shortcuts",
+            "columns": [
+                1,
+                3
+            ],
+            "deviceId": "",
+            "headerText": "Profile Shortcuts",
+            "dataColor": "#38bdf8",
+            "textColor": "#e6e6e6",
+            "subTextColor": "#a1a1a1",
+            "fontSize": 20,
+            "subFontSize": 15
+        },
+        {
+            "id": 15,
+            "name": "Memory Usage",
+            "template": "xeneon-memory",
+            "columns": [
+                1,
+                3
+            ],
+            "headerText": "Memory Usage",
+            "dataColor": "#38bdf8",
+            "textColor": "#e6e6e6",
+            "subTextColor": "#a1a1a1",
+            "fontSize": 36,
+            "subFontSize": 15,
+            "showSwap": true
+        },
+        {
+            "id": 16,
+            "name": "Storage Overview",
+            "template": "xeneon-storage",
+            "columns": [
+                1,
+                3
+            ],
+            "headerText": "Storage Overview",
+            "dataColor": "#38bdf8",
+            "textColor": "#e6e6e6",
+            "subTextColor": "#a1a1a1",
+            "fontSize": 36,
+            "subFontSize": 15,
+            "mountPoint": "",
+            "storageSensor": "*",
+            "unit": "°C"
         }
     ]
 }

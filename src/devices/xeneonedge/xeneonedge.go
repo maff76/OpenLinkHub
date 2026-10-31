@@ -60,6 +60,7 @@ type Device struct {
 
 type Widget struct {
 	Id              int     `json:"id"`
+	HistoryMinutes  int     `json:"historyMinutes"`
 	Name            string  `json:"name"`
 	Template        string  `json:"template"`
 	Columns         []int   `json:"columns"`
@@ -89,6 +90,9 @@ type Widget struct {
 	DeviceId        string  `json:"deviceId"`
 	ChannelId       int     `json:"channelId"`
 	WeekStart       int     `json:"weekStart"`
+	ShowSwap        bool    `json:"showSwap"`
+	MountPoint      string  `json:"mountPoint"`
+	StorageSensor   string  `json:"storageSensor"`
 }
 
 var (
@@ -457,8 +461,10 @@ func (d *Device) ProcessSaveWidget(value Widget) uint8 {
 				return 0
 			}
 
-			widget.Left, widget.Top = value.Left, value.Top
-			widget.SubLeft, widget.SubTop = value.SubLeft, value.SubTop
+			widget.Left = value.Left
+			widget.Top = value.Top
+			widget.SubLeft = value.SubLeft
+			widget.SubTop = value.SubTop
 		}
 		break
 	case "xeneon-weather":
@@ -470,10 +476,14 @@ func (d *Device) ProcessSaveWidget(value Widget) uint8 {
 				return 0
 			}
 
-			widget.City, widget.Country = strings.TrimSpace(value.City), strings.TrimSpace(value.Country)
-			widget.Latitude, widget.Longitude = value.Latitude, value.Longitude
-			widget.AutoWeather, widget.HideForecast = value.AutoWeather, value.HideForecast
-			widget.RefreshInterval, widget.Unit = value.RefreshInterval, value.Unit
+			widget.City = strings.TrimSpace(value.City)
+			widget.Country = strings.TrimSpace(value.Country)
+			widget.Latitude = value.Latitude
+			widget.Longitude = value.Longitude
+			widget.AutoWeather = value.AutoWeather
+			widget.HideForecast = value.HideForecast
+			widget.RefreshInterval = value.RefreshInterval
+			widget.Unit = value.Unit
 		}
 		break
 	case "xeneon-media-player":
@@ -483,7 +493,8 @@ func (d *Device) ProcessSaveWidget(value Widget) uint8 {
 			}
 
 			widget.DataColor = value.DataColor
-			widget.HideArtwork, widget.HideControls = value.HideArtwork, value.HideControls
+			widget.HideArtwork = value.HideArtwork
+			widget.HideControls = value.HideControls
 		}
 		break
 	case "xeneon-battery-status":
@@ -492,7 +503,8 @@ func (d *Device) ProcessSaveWidget(value Widget) uint8 {
 				return 0
 			}
 
-			widget.DataColor, widget.BatteryDevice = value.DataColor, value.BatteryDevice
+			widget.DataColor = value.DataColor
+			widget.BatteryDevice = value.BatteryDevice
 		}
 		break
 	case "xeneon-calendar":
@@ -501,7 +513,74 @@ func (d *Device) ProcessSaveWidget(value Widget) uint8 {
 				return 0
 			}
 
-			widget.DataColor, widget.WeekStart = value.DataColor, value.WeekStart
+			widget.DataColor = value.DataColor
+			widget.WeekStart = value.WeekStart
+		}
+		break
+	case "xeneon-memory", "xeneon-storage":
+		{
+			if !colorPattern.MatchString(value.DataColor) || len(strings.TrimSpace(value.HeaderText)) == 0 || len(value.HeaderText) > 80 {
+				return 0
+			}
+
+			if current.Template == "xeneon-memory" {
+				widget.ShowSwap = value.ShowSwap
+			} else {
+				if len(value.MountPoint) > 4096 || (value.MountPoint != "" && !strings.HasPrefix(value.MountPoint, "/")) || len(value.StorageSensor) > 128 {
+					return 0
+				}
+				if value.Unit != "°C" && value.Unit != "°F" {
+					return 0
+				}
+
+				widget.MountPoint = value.MountPoint
+				widget.StorageSensor = value.StorageSensor
+				widget.Unit = value.Unit
+			}
+
+			widget.HeaderText = strings.TrimSpace(value.HeaderText)
+			widget.DataColor = value.DataColor
+		}
+		break
+	case "xeneon-temperature-history", "xeneon-cooling-overview", "xeneon-profile-shortcuts":
+		{
+			if !colorPattern.MatchString(value.DataColor) || len(strings.TrimSpace(value.HeaderText)) == 0 || len(value.HeaderText) > 80 || len(value.DeviceId) > 128 {
+				return 0
+			}
+
+			if current.Template != "xeneon-profile-shortcuts" {
+				if value.Unit != "°C" && value.Unit != "°F" {
+					return 0
+				}
+				if value.Max < 1 || value.Max > 50000 {
+					return 0
+				}
+
+				widget.Max = value.Max
+				widget.Unit = value.Unit
+			}
+
+			if current.Template == "xeneon-temperature-history" {
+				if value.Max > 1000 || value.HistoryMinutes < 1 || value.HistoryMinutes > 30 || value.ChannelId < 0 {
+					return 0
+				}
+
+				if value.Source != "cpu" && value.Source != "gpu" && value.Source != "device" {
+					return 0
+				}
+
+				if value.Source == "device" && value.DeviceId == "" {
+					return 0
+				}
+
+				widget.Source = value.Source
+				widget.ChannelId = value.ChannelId
+				widget.HistoryMinutes = value.HistoryMinutes
+			}
+
+			widget.DeviceId = value.DeviceId
+			widget.HeaderText = strings.TrimSpace(value.HeaderText)
+			widget.DataColor = value.DataColor
 		}
 		break
 	case "xeneon-device-temp", "xeneon-device-rpm":
@@ -520,9 +599,12 @@ func (d *Device) ProcessSaveWidget(value Widget) uint8 {
 				return 0
 			}
 
-			widget.DeviceId, widget.ChannelId = value.DeviceId, value.ChannelId
-			widget.DataColor, widget.Max = value.DataColor, value.Max
-			widget.HeaderText, widget.Unit = strings.TrimSpace(value.HeaderText), value.Unit
+			widget.DeviceId = value.DeviceId
+			widget.ChannelId = value.ChannelId
+			widget.DataColor = value.DataColor
+			widget.Max = value.Max
+			widget.HeaderText = strings.TrimSpace(value.HeaderText)
+			widget.Unit = value.Unit
 		}
 		break
 	case "xeneon-cpu-temp", "xeneon-gpu-temp", "xeneon-cpu-load", "xeneon-gpu-load":
@@ -540,8 +622,10 @@ func (d *Device) ProcessSaveWidget(value Widget) uint8 {
 				return 0
 			}
 
-			widget.DataColor, widget.Max = value.DataColor, value.Max
-			widget.HeaderText, widget.Unit = strings.TrimSpace(value.HeaderText), value.Unit
+			widget.DataColor = value.DataColor
+			widget.Max = value.Max
+			widget.HeaderText = strings.TrimSpace(value.HeaderText)
+			widget.Unit = value.Unit
 		}
 		break
 	default:

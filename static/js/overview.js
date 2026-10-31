@@ -2363,7 +2363,7 @@ $(document).ready(function () {
                     rgbProfileValue = "0;" + deviceProfile.SlipstreamRGBProfile;
                 }
             }
-            
+
             if (keyboardRgbProfile.find('option[value="' + rgbProfileValue + '"]').length > 0) {
                 keyboardRgbProfile.val(rgbProfileValue);
             }
@@ -4527,7 +4527,7 @@ $(document).ready(function () {
                                 $speedSlider.on("input", updateSpeedSlider);
                                 updateSpeedSlider();
                             }
-                            
+
                             modal.find('#btnSaveRgbOverrideLinkAdapter').on('click', function () {
                                 const pf = {};
                                 let startColorRgb = {}
@@ -5303,7 +5303,7 @@ $(document).ready(function () {
 
     const $colorToneBlueSlider = $("#colorToneBlueSlider");
     const $colorToneBlueSliderValue = $("#colorToneBlueSliderValue");
-    
+
     function updateSlider(obj, val) {
         const min = Number(obj.attr("min"));
         const max = Number(obj.attr("max"));
@@ -5440,7 +5440,11 @@ $(document).ready(function () {
                         let modalElement = '';
 
                         const data = response.data;
-                        if (!data) { toast.warning(i18n.t("txtInvalidWidget")); return; }
+                        if (!data) {
+                            toast.warning(i18n.t("txtInvalidWidget"));
+                            return;
+                        }
+
                         let fields = [];
                         switch (data.template) {
                             case 'xeneon-clock': {
@@ -5479,7 +5483,7 @@ $(document).ready(function () {
                                                         <label for="fontSize">
                                                             <input type="text" id="fontSize" autocomplete="off" value="">
                                                         </label>
-                                                    </div> 
+                                                    </div>
                                                 </div>
                                                 
                                                 <div class="settings-row rgb-editor">
@@ -5488,7 +5492,7 @@ $(document).ready(function () {
                                                         <label for="subFontSize">
                                                             <input type="text" id="subFontSize" autocomplete="off" value="">
                                                         </label>
-                                                    </div> 
+                                                    </div>
                                                 </div>
                                                 
                                                 <div class="settings-row rgb-editor">
@@ -5502,7 +5506,7 @@ $(document).ready(function () {
                                                         <label for="timePositionRight">
                                                             <input type="text" id="timePositionRight" autocomplete="off" value="">
                                                         </label>
-                                                    </div> 
+                                                    </div>
                                                 </div>
                                                 
                                                 <div class="settings-row rgb-editor">
@@ -5516,7 +5520,7 @@ $(document).ready(function () {
                                                         <label for="datePositionRight">
                                                             <input type="text" id="datePositionRight" autocomplete="off" value="">
                                                         </label>
-                                                    </div> 
+                                                    </div>
                                                 </div>
                                                 
                                             </div>
@@ -5582,6 +5586,48 @@ $(document).ready(function () {
                                 ];
                             }
                             break;
+                            case 'xeneon-memory':
+                            case 'xeneon-storage': {
+                                fields = [
+                                    ['headerText', 'txtXeneonHeader', 'text', data.name],
+                                    ['dataColor', 'txtXeneonAccentColor', 'color', '#38bdf8'],
+                                    ['textColor', 'txtTextColor', 'color', '#e6e6e6'],
+                                    ['subTextColor', 'txtXeneonSecondaryColor', 'color', '#a1a1a1'],
+                                    ['fontSize', 'txtXeneonValueSize', 'number', 36, 8, 200],
+                                    ['subFontSize', 'txtXeneonLabelSize', 'number', 15, 8, 100]
+                                ];
+                                if (data.template === 'xeneon-memory') {
+                                    fields.push(['showSwap', 'txtXeneonShowSwap', 'checkbox', true]);
+                                } else {
+                                    fields.push(['mountPoint', 'txtXeneonMountPoint', 'select', '', [['', i18n.t('txtXeneonAllFilesystems')]]]);
+                                    fields.push(['storageSensor', 'txtXeneonStorageSensor', 'select', '', [['', i18n.t('txtXeneonNoTemperature')], ['*', i18n.t('txtXeneonAllStorageSensors')]]]);
+                                    fields.push(['unit', 'txtXeneonUnit', 'select', '°C', [['°C', '°C'], ['°F', '°F']]]);
+                                }
+                            }
+                            break;
+                            case 'xeneon-temperature-history':
+                            case 'xeneon-cooling-overview':
+                            case 'xeneon-profile-shortcuts': {
+                                const history = data.template === 'xeneon-temperature-history';
+                                const profiles = data.template === 'xeneon-profile-shortcuts';
+                                fields = [
+                                    [history ? 'sensor' : 'deviceId', history ? 'txtSensor' : 'txtXeneonBatteryDevice', 'select', '', [['', i18n.t('txtXeneonSelectSensor')]]],
+                                    ['headerText', 'txtXeneonHeader', 'text', data.name],
+                                    ['dataColor', 'txtXeneonAccentColor', 'color', '#38bdf8'],
+                                    ['textColor', 'txtTextColor', 'color', '#e6e6e6'],
+                                    ['subTextColor', 'txtXeneonSecondaryColor', 'color', '#a1a1a1'],
+                                    ['fontSize', 'txtXeneonValueSize', 'number', history ? 48 : 24, 8, 200],
+                                    ['subFontSize', 'txtXeneonLabelSize', 'number', 15, 8, 100]
+                                ];
+                                if (!profiles) {
+                                    fields.push(['max', history ? 'txtXeneonMaximum' : 'txtXeneonMaxRPM', 'number', history ? 100 : 3000, 1, history ? 1000 : 50000]);
+                                    fields.push(['unit', 'txtXeneonUnit', 'select', '°C', [['°C', '°C'], ['°F', '°F']]]);
+                                }
+                                if (history) {
+                                    fields.push(['historyMinutes', 'txtXeneonHistoryMinutes', 'number', 5, 1, 30]);
+                                }
+                            }
+                            break;
                             case 'xeneon-device-temp':
                             case 'xeneon-device-rpm': {
                                 const temperature = data.template === 'xeneon-device-temp';
@@ -5641,51 +5687,252 @@ $(document).ready(function () {
                         modal.find('.modal-title').text(data.name);
 
                         fields.forEach(function (field) {
-                            const [name, label, type, fallback, min, max, step] = field;
+                            const name = field[0];
+                            const label = field[1];
+                            const type = field[2];
+                            const fallback = field[3];
+                            const min = field[4];
+                            const max = field[5];
+                            const step = field[6];
+
                             let value = data[name];
                             if (value == null || ((type === 'color' || type === 'select') && value === '') || (type === 'number' && value === 0 && min > 0)) {
                                 value = fallback;
                             }
-                            const row = $('<div>', {class: 'settings-row rgb-editor'});
-                            $('<span>', {class: 'settings-label text-ellipsis', text: i18n.t(label)}).appendTo(row);
-                            const input = $('<' + (type === 'select' ? 'select' : 'input') + '>', {id: name});
+
+                            const row = $('<div>', {
+                                class: 'settings-row rgb-editor'
+                            });
+
+                            $('<span>', {
+                                class: 'settings-label text-ellipsis',
+                                text: i18n.t(label)
+                            }).appendTo(row);
+
+                            const input = $('<' + (type === 'select' ? 'select' : 'input') + '>', {
+                                id: name
+                            });
+
                             if (type === 'select') {
                                 input.addClass('system-select auto-width max-width-300 compact');
-                                min.forEach(function (option) { $('<option>', {value: option[0], text: option[1]}).appendTo(input); });
+                                min.forEach(function (option) {
+                                    $('<option>', {
+                                        value: option[0],
+                                        text: option[1]
+                                    }).appendTo(input);
+                                });
                                 $('<label>').append(input.val(value)).appendTo(row);
                             } else if (type === 'checkbox') {
                                 input.attr('type', 'checkbox').prop('checked', !!value);
-                                $('<label>', {class: 'system-toggle compact'}).append(input).append('<span class="toggle-track"></span>').appendTo(row);
+                                $('<label>', {
+                                    class: 'system-toggle compact'
+                                }).append(input).append('<span class="toggle-track"></span>').appendTo(row);
                             } else {
-                                input.attr({type: type, autocomplete: 'off'}).val(value);
-                                if (type === 'number') input.attr({min: min, max: max, step: step || 1, required: true});
-                                if (type === 'text') input.attr('maxlength', name === 'headerText' ? 80 : name === 'batteryDevice' ? 128 : 100);
-                                $('<div>', {class: type === 'color' ? 'system-color' : 'system-input text-input compact'})
+                                input.attr({
+                                    type: type,
+                                    autocomplete: 'off'
+                                }).val(value);
+                                if (type === 'number') {
+                                    input.attr({
+                                        min: min,
+                                        max: max,
+                                        step: step || 1,
+                                        required: true
+                                    });
+                                }
+                                if (type === 'text') {
+                                    input.attr('maxlength', name === 'headerText' ? 80 : name === 'batteryDevice' ? 128 : 100);
+                                }
+                                $('<div>', {
+                                    class: type === 'color' ? 'system-color' : 'system-input text-input compact'
+                                })
                                     .append($('<label>').append(input)).appendTo(row);
                             }
                             modal.find('.settings-list').append(row);
                         });
+
+                        if (data.template === 'xeneon-storage') {
+                            const mountSelect = modal.find('#mountPoint');
+                            const sensorSelect = modal.find('#storageSensor');
+                            if (data.mountPoint) {
+                                $('<option>', {
+                                    value: data.mountPoint,
+                                    text: data.mountPoint
+                                }).appendTo(mountSelect);
+                                mountSelect.val(data.mountPoint);
+                            }
+
+                            if (data.storageSensor && data.storageSensor !== '*') {
+                                $('<option>', {
+                                    value: data.storageSensor,
+                                    text: data.storageSensor
+                                }).appendTo(sensorSelect);
+                                sensorSelect.val(data.storageSensor);
+                            }
+
+                            $.getJSON('/api/xeneon/storage', function (response) {
+                                if (response.status !== 1 || !response.data) {
+                                    return;
+                                }
+                                $.each(response.data, function (_, filesystem) {
+                                    const option = mountSelect.find('option').filter(function () {
+                                        return this.value === filesystem.MountPoint;
+                                    });
+
+                                    const label = filesystem.MountPoint + ' (' + filesystem.Device + ')';
+                                    if (option.length) {
+                                        option.text(label);
+                                    } else {
+                                        $('<option>', {
+                                            value: filesystem.MountPoint,
+                                            text: label
+                                        }).appendTo(mountSelect);
+                                    }
+                                });
+                            });
+
+                            $.getJSON('/api/storageTemp', function (response) {
+                                if (response.status !== 1 || !response.data) {
+                                    return;
+                                }
+
+                                $.each(response.data, function (_, sensor) {
+                                    const option = sensorSelect.find('option').filter(function () {
+                                        return this.value === sensor.Key;
+                                    });
+
+                                    const label = sensor.Model + ' / ' + sensor.Key;
+
+                                    if (option.length) {
+                                        option.text(label);
+                                    } else {
+                                        $('<option>', {
+                                            value: sensor.Key,
+                                            text: label
+                                        }).appendTo(sensorSelect);
+                                    }
+                                });
+                            });
+                        }
+
+                        if (data.template === 'xeneon-temperature-history') {
+                            const select = modal.find('#sensor').empty();
+                            [['cpu', i18n.t('txtXeneonCPU')], ['gpu', i18n.t('txtXeneonGPU')]].forEach(function (source) {
+                                $('<option>', {
+                                    value: JSON.stringify([source[0], '', 0]),
+                                    text: source[1]
+                                }).appendTo(select);
+                            });
+
+                            const selected = JSON.stringify([data.source || 'cpu', data.deviceId || '', data.channelId || 0]);
+                            if (data.source === 'device') {
+                                $('<option>', {
+                                    value: selected,
+                                    text: data.deviceId + ' / ' + data.channelId
+                                }).appendTo(select);
+                            }
+
+                            select.val(selected);
+
+                            $.getJSON('/api/xeneon/stats', function (response) {
+                                if (response.status !== 1 || !response.data) {
+                                    return;
+                                }
+                                $.each(response.data, function (serial, device) {
+                                    $.each(device.Devices || {}, function (channel, sensor) {
+                                        if (!sensor.TemperatureString) {
+                                            return;
+                                        }
+                                        const value = JSON.stringify(['device', serial, Number(channel)]);
+                                        const label = sensor.Device + ' / ' + serial + ' / ' + channel + (sensor.Label ? ' (' + sensor.Label + ')' : '');
+                                        const option = select.find('option').filter(function () {
+                                            return this.value === value;
+                                        });
+                                        if (option.length) {
+                                            option.text(label);
+                                        } else {
+                                            $('<option>', {
+                                                value: value,
+                                                text: label
+                                            }).appendTo(select);
+                                        }
+                                    });
+                                });
+                            });
+                        }
+
+                        if (data.template === 'xeneon-cooling-overview' || data.template === 'xeneon-profile-shortcuts') {
+                            const select = modal.find('#deviceId');
+                            if (data.deviceId) {
+                                $('<option>', {
+                                    value: data.deviceId,
+                                    text: data.deviceId
+                                }).appendTo(select);
+                                select.val(data.deviceId);
+                            }
+
+                            const profiles = data.template === 'xeneon-profile-shortcuts';
+
+                            $.getJSON(profiles ? '/api/devices/' : '/api/xeneon/stats', function (response) {
+                                $.each((profiles ? response.devices : response.data) || {}, function (serial, device) {
+                                    if (profiles && (!device.GetDevice || !device.GetDevice.userProfiles || !Object.keys(device.GetDevice.userProfiles).length)) {
+                                        return;
+                                    }
+                                    const sensors = Object.values(device.Devices || {});
+                                    const label = (device.Product || (sensors[0] && sensors[0].Device) || serial) + ' / ' + serial;
+                                    const option = select.find('option').filter(function () {
+                                        return this.value === serial;
+                                    });
+                                    if (option.length) {
+                                        option.text(label);
+                                    } else {
+                                        $('<option>', {
+                                            value: serial,
+                                            text: label
+                                        }).appendTo(select);
+                                    }
+                                });
+                            });
+                        }
 
                         if (data.template === 'xeneon-device-temp' || data.template === 'xeneon-device-rpm') {
                             const select = modal.find('#sensor');
                             const selected = data.deviceId ? JSON.stringify([data.deviceId, data.channelId]) : '';
 
                             if (selected) {
-                                $('<option>', {value: selected, text: data.deviceId + ' / ' + data.channelId}).appendTo(select);
+                                $('<option>', {
+                                    value: selected,
+                                    text: data.deviceId + ' / ' + data.channelId
+                                }).appendTo(select);
                                 select.val(selected);
                             }
 
                             $.getJSON('/api/xeneon/stats', function (response) {
-                                if (response.status !== 1 || !response.data) return;
+                                if (response.status !== 1 || !response.data) {
+                                    return;
+                                }
+
                                 $.each(response.data, function (serial, device) {
                                     $.each(device.Devices || {}, function (channel, sensor) {
                                         const reading = data.template === 'xeneon-device-temp' ? sensor.TemperatureString : sensor.Speed;
-                                        if (!reading) return;
+                                        if (!reading) {
+                                            return;
+                                        }
+
                                         const value = JSON.stringify([serial, Number(channel)]);
                                         const label = sensor.Device + ' / ' + serial + ' / ' + channel + (sensor.Label ? ' (' + sensor.Label + ')' : '') + ' — ' + reading;
-                                        const option = select.find('option').filter(function () { return this.value === value; });
-                                        if (option.length) option.text(label);
-                                        else $('<option>', {value: value, text: label}).appendTo(select);
+                                        const option = select.find('option').filter(function () {
+                                            return this.value === value;
+                                        });
+
+                                        if (option.length) {
+                                            option.text(label);
+                                        } else {
+                                            $('<option>', {
+                                                value: value,
+                                                text: label
+                                            }).appendTo(select);
+                                        }
                                     });
                                 });
                             });
@@ -5693,24 +5940,54 @@ $(document).ready(function () {
 
                         if (data.template === 'xeneon-battery-status') {
                             const select = modal.find('#batteryDevice');
+
                             if (data.batteryDevice) {
-                                $('<option>', {value: data.batteryDevice, text: data.batteryDevice}).appendTo(select);
+                                $('<option>', {
+                                    value: data.batteryDevice,
+                                    text: data.batteryDevice
+                                }).appendTo(select);
                                 select.val(data.batteryDevice);
                             }
 
                             $.getJSON('/api/systray', function (response) {
-                                if (response.status !== 1 || !response.data) return;
+                                if (response.status !== 1 || !response.data) {
+                                    return;
+                                }
+
                                 $.each(response.data.battery || {}, function (id, device) {
-                                    const option = select.find('option').filter(function () { return this.value === id; });
-                                    if (option.length) option.text(device.Device || id);
-                                    else $('<option>', {value: id, text: device.Device || id}).appendTo(select);
+                                    const option = select.find('option').filter(function () {
+                                        return this.value === id;
+                                    });
+
+                                    if (option.length) {
+                                        option.text(device.Device || id);
+                                    } else {
+                                        $('<option>', {
+                                            value: id,
+                                            text: device.Device || id
+                                        }).appendTo(select);
+                                    }
                                 });
                             });
                         }
-                        const clockFields = {textColor: 'textColor', subTextColor: 'subTextColor', fontSize: 'fontSize', subFontSize: 'subFontSize', timePositionLeft: 'left', timePositionRight: 'top', datePositionLeft: 'subLeft', datePositionRight: 'subTop'};
+
+                        const clockFields = {
+                            textColor: 'textColor',
+                            subTextColor: 'subTextColor',
+                            fontSize: 'fontSize',
+                            subFontSize: 'subFontSize',
+                            timePositionLeft: 'left',
+                            timePositionRight: 'top',
+                            datePositionLeft: 'subLeft',
+                            datePositionRight: 'subTop'
+                        };
+
                         if (data.template === 'xeneon-clock') {
-                            Object.entries(clockFields).forEach(function ([id, name]) { modal.find('#' + id).val(data[name]); });
+                            Object.entries(clockFields).forEach(function ([id, name]) {
+                                modal.find('#' + id).val(data[name]);
+                            });
                         }
+
                         modal.modal('toggle');
 
                         modal.on('hidden.bs.modal', function () {
@@ -5720,25 +5997,54 @@ $(document).ready(function () {
 
                         modal.on('shown.bs.modal', function (e) {
                             modal.find('#btnSaveWidget').on('click', function () {
-                                const widget = {id: data.id};
+                                const widget = {
+                                    id: data.id
+                                };
+
                                 let valid = true;
                                 fields.forEach(function (field) {
                                     const input = modal.find('#' + field[0]);
-                                    if (!input[0].checkValidity()) { input[0].reportValidity(); valid = false; }
-                                    widget[field[0]] = field[2] === 'checkbox' ? input.is(':checked') : field[2] === 'number' || field[0] === 'weekStart' ? Number(input.val()) : input.val();
+                                    if (!input[0].checkValidity()) {
+                                        input[0].reportValidity();
+                                        valid = false;
+                                    }
+                                    if (field[2] === 'checkbox') {
+                                        widget[field[0]] = input.is(':checked');
+                                    } else if (field[2] === 'number' || field[0] === 'weekStart') {
+                                        widget[field[0]] = Number(input.val());
+                                    } else {
+                                        widget[field[0]] = input.val();
+                                    }
                                 });
+
                                 if (data.template === 'xeneon-clock') {
                                     Object.entries(clockFields).forEach(function ([id, name]) {
                                         widget[name] = name.endsWith('Color') ? modal.find('#' + id).val() : Number(modal.find('#' + id).val());
                                     });
                                 }
+
                                 if (data.template === 'xeneon-device-temp' || data.template === 'xeneon-device-rpm') {
                                     const sensor = widget.sensor ? JSON.parse(widget.sensor) : ['', 0];
                                     widget.deviceId = sensor[0];
                                     widget.channelId = sensor[1];
                                     delete widget.sensor;
                                 }
-                                if (!valid) return;
+
+                                if (data.template === 'xeneon-temperature-history') {
+                                    if (!widget.sensor) {
+                                        return;
+                                    }
+                                    const sensor = JSON.parse(widget.sensor);
+                                    widget.source = sensor[0];
+                                    widget.deviceId = sensor[1];
+                                    widget.channelId = sensor[2];
+                                    delete widget.sensor;
+                                }
+
+                                if (!valid) {
+                                    return;
+                                }
+
                                 const button = $(this).prop('disabled', true);
 
                                 const pf = {};
@@ -5762,7 +6068,9 @@ $(document).ready(function () {
                                     error: function () {
                                         toast.warning(i18n.t('txtXeneonWidgetSaveFailed'));
                                     },
-                                    complete: function () { button.prop('disabled', false); }
+                                    complete: function () {
+                                        button.prop('disabled', false);
+                                    }
                                 });
                             });
                         })
