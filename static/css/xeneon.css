@@ -420,6 +420,12 @@ body.edge-dashboard {
 .album-left {
     margin-left: 10px;
 }
+.now-playing.no-artwork {
+    grid-template-columns: minmax(0, 1fr);
+}
+.now-playing.no-artwork .album-left {
+    margin-left: 0;
+}
 .track-title {
     font-size: 20px;
     color: var(--text-main);
